@@ -14,6 +14,9 @@ import {
   pdfFromFile,
   pdfFromUrl,
   pdfFromBase64,
+  runTools,
+  RunnableTool,
+  RunToolsResult,
   // Types
   ChatRequest,
   ChatResponse,
@@ -168,6 +171,28 @@ async function example() {
   const emb: EmbedResponse = await ollama.embed({ input: ['hello', 'world'] } as EmbedRequest);
   const vectors: number[][] = emb.embeddings;
   void vectors;
+
+  // ---- runTools (new in 1.1.0) -------------------------------------------
+  const tools: RunnableTool[] = [{
+    name: 'add',
+    description: 'add two numbers',
+    input_schema: {
+      type: 'object',
+      properties: { a: { type: 'number' }, b: { type: 'number' } },
+      required: ['a', 'b'],
+    },
+    run: async ({ a, b }: { a: number; b: number }) => a + b,
+  }];
+  const runRes: RunToolsResult = await runTools({
+    llm: groq,
+    messages: [{ role: 'user', content: 'add 2 and 3' }],
+    tools,
+    maxSteps: 5,
+  });
+  const finalText: string = runRes.text;
+  const stepCount: number = runRes.steps;
+  const executed = runRes.toolCalls;   // ExecutedToolCall[]
+  void finalText; void stepCount; void executed;
 
   // ---- misc types --------------------------------------------------------
   const retries: RetryOptions = { max: 5, baseMs: 500, maxMs: 30000 };

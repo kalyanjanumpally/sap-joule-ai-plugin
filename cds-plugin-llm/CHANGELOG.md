@@ -4,6 +4,22 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-07-29
+
+### Added
+
+- **`runTools()` — automatic multi-turn tool-use loop.** Wraps the chat → execute-tools → append-results → repeat cycle so consumers don't rewrite the boilerplate for every agent-style handler. Signature: `runTools({ llm, system, messages, tools: [{ name, description, input_schema, run }, ...], maxSteps, onStep })`. Returns `{ text, messages, usage, steps, toolCalls, model, stopReason }`. Handles:
+  - Multiple tool calls per turn
+  - Tool exceptions → surfaced as `tool_result` with `is_error: true` so the model can recover
+  - Unknown tool names → same treatment (no crash)
+  - `maxSteps` safety cap (default 10) with actionable error message on overrun
+  - Optional `onStep({ step, response })` callback per turn
+- TypeScript definitions: `RunnableTool`, `RunToolsOptions`, `RunToolsResult`, `ExecutedToolCall`.
+
+### Notes
+
+- Purely additive — no changes to `chat` / `stream` / `embed` behavior. Consumers on `^1.0` can bump to `^1.1` with zero code changes.
+
 ## [1.0.1] — 2026-07-29
 
 ### Changed

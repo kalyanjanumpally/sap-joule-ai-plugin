@@ -309,3 +309,70 @@ export function pdfFromUrl(url: string): DocumentBlock;
  * Wrap raw base64 PDF bytes into a plugin-shape document block. Anthropic-only.
  */
 export function pdfFromBase64(base64Data: string): DocumentBlock;
+
+// ---------------------------------------------------------------------------
+// Tool runner — automatic multi-turn agent loop (new in v1.1.0)
+// ---------------------------------------------------------------------------
+
+/** Tool passed to runTools — same as Tool but with a `run` function attached. */
+export interface RunnableTool extends Tool {
+  /** Called with the model's tool_use `input`. Return anything JSON-serializable. */
+  run(input: any): Promise<unknown> | unknown;
+}
+
+export interface RunToolsOptions {
+  llm: LLMService;
+  messages: Message[];
+  tools: RunnableTool[];
+  system?: string;
+  /** Safety cap; throws if the model keeps calling tools past this many turns. Default 10. */
+  maxSteps?: number;
+  /** Optional callback fired after every chat() call. */
+  onStep?: (info: { step: number; response: ChatResponse }) => void | Promise<void>;
+  /** Any other chat-request options (model, maxTokens, format, thinking, cache, retries) */
+  [key: string]: unknown;
+}
+
+export interface ExecutedToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+  /** JSON-stringified tool result (or the string message for errors) */
+  result: string;
+  /** True when the tool threw or the name didn't match any registered tool */
+  isError: boolean;
+}
+
+export interface RunToolsResult {
+  /** Final assistant text after the loop terminates */
+  text: string;
+  /** Full message history: input + every assistant/tool turn */
+  messages: Message[];
+  /** Aggregated token totals across every chat() call the runner made */
+  usage: Usage;
+  /** Number of chat() calls the runner made */
+  steps: number;
+  /** Every tool call executed, with input + result + isError */
+  toolCalls: ExecutedToolCall[];
+  model?: string;
+  stopReason?: string;
+}
+
+/**
+ * Automatic multi-turn tool-use loop. Handles the chat -> execute-tools ->
+ * append-results -> chat cycle until the model stops calling tools.
+ *
+ *   const result = await runTools({
+ *     llm,
+ *     messages: [{ role: 'user', content: 'Fetch PO 4500000123 and summarize' }],
+ *     tools: [{
+ *       name: 'get_purchase_order',
+ *       description: 'Fetch a PO',
+ *       input_schema: { type: 'object', properties: { purchaseOrderId: { type: 'string' } } },
+ *       run: async ({ purchaseOrderId }) => await SELECT.one.from('POs').where({ ID: purchaseOrderId }),
+ *     }],
+ *     maxSteps: 10,
+ *   });
+ *   console.log(result.text);  // final assistant answer
+ */
+export function runTools(options: RunToolsOptions): Promise<RunToolsResult>;

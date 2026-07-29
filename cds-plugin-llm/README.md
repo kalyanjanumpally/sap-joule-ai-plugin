@@ -191,6 +191,45 @@ if (turn1.toolCalls?.length) {
 
 Works across providers with matching `{ id, name, input }` shape. Individual model quality varies for multi-tool scenarios — llama-3.3-70b on Groq is solid for single-tool cases; Claude and qwen2.5 are more reliable for chained tool use.
 
+### Tool runner — automatic multi-turn loop (new in v1.1.0)
+
+For agent-style code that would otherwise write the "call → execute → feed back → repeat" loop by hand, `runTools()` wraps the pattern:
+
+```js
+const { runTools } = require('@saptarishi/cds-plugin-llm');
+
+const result = await runTools({
+  llm,
+  system: 'You help procurement approvers.',
+  messages: [{ role: 'user', content: 'Fetch PO 4500000123 and summarize it.' }],
+  tools: [{
+    name: 'get_purchase_order',
+    description: 'Fetch a PO by 10-digit ID',
+    input_schema: {
+      type: 'object',
+      properties: { purchaseOrderId: { type: 'string' } },
+      required: ['purchaseOrderId'],
+    },
+    run: async ({ purchaseOrderId }) =>
+      await SELECT.one.from('PurchaseOrders').where({ ID: purchaseOrderId }),
+  }],
+  maxSteps: 10,
+});
+
+result.text        // final assistant answer
+result.steps       // number of chat() calls made
+result.toolCalls   // [{ id, name, input, result, isError }, ...] — every call executed
+result.usage       // aggregated tokens across all turns
+```
+
+What it handles for you:
+- Executes every tool call in every turn (multiple in one turn all run)
+- Appends assistant + `tool` messages correctly (matches the format both Anthropic and OpenAI-compat expect)
+- Catches tool exceptions and surfaces them as `tool_result` with `is_error: true` so the model can recover
+- Rejects with a clear message when an unknown tool name is called
+- `maxSteps` safety cap (default 10) — throws if the model loops forever
+- Optional `onStep({ step, response })` callback to observe each turn
+
 ## Streaming (new in v0.6.0)
 
 Get tokens as they arrive from the model instead of waiting for the full response:
@@ -564,7 +603,9 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**0.8**: PDF content blocks (Anthropic native; other providers explicit-reject)~~ ✓ shipped in v0.8.0
 - ~~**0.9**: OpenAI-compat inline PDF (via `file` content-block) + GenAI Hub embeddings + response caching layer~~ ✓ shipped in v0.9.0
 - ~~**1.0**: API stability commitment~~ ✓ shipped in v1.0.0 (live verification of GenAI Hub open — see FAQ)
-- **1.1+**: per-user rate limiting hooks, custom middleware/interceptor pattern, HANA Cloud vector store integration, OpenAI Files API for URL PDFs
+- ~~**1.1**: `runTools()` — automatic multi-turn tool-use loop~~ ✓ shipped in v1.1.0
+- **1.2+**: per-user rate limiting hooks, custom middleware/interceptor pattern, OpenAI Files API for URL PDFs, HANA HNSW index config
+- **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License
 

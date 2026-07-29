@@ -2,6 +2,7 @@ const {
   imageFromFile, imageFromUrl, imageFromBase64,
   pdfFromFile, pdfFromUrl, pdfFromBase64,
 } = require('./util');
+const { runTools } = require('./toolRunner');
 
 module.exports = {
   LLMService: require('./LLMService'),
@@ -14,8 +15,10 @@ module.exports = {
   imageFromFile,
   imageFromUrl,
   imageFromBase64,
-  // PDF helpers (Anthropic-only today)
+  // PDF helpers (Anthropic-only + OpenAI-compat since 0.9.0)
   pdfFromFile,
   pdfFromUrl,
   pdfFromBase64,
+  // Tool runner — automatic multi-turn agent loop (new in 1.1.0)
+  runTools,
 };
