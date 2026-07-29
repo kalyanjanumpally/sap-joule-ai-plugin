@@ -43,8 +43,12 @@ async function mcp(ctx) {
   if (ctx.opts.http) {
     const port = ctx.opts.port ? parseInt(ctx.opts.port, 10) : 3333;
     const host = ctx.opts.host ?? '127.0.0.1';
-    const transport = await createHttpTransport({ server, port, host, logger });
-    ctx.stderr.write(`[mcp] ready (HTTP+SSE) — provider=${kind} model=${model}\n`);
+    const authToken = ctx.opts['auth-token'] ?? ctx.env.SAPTARISHI_LLM_MCP_TOKEN ?? null;
+    if (!authToken && host !== '127.0.0.1' && host !== 'localhost') {
+      ctx.stderr.write(`[mcp:warn] binding to ${host} with no --auth-token — anyone on the network can call your provider. Set --auth-token or SAPTARISHI_LLM_MCP_TOKEN.\n`);
+    }
+    const transport = await createHttpTransport({ server, port, host, logger, authToken });
+    ctx.stderr.write(`[mcp] ready (HTTP+SSE) — provider=${kind} model=${model}${authToken ? ' — auth: bearer token required' : ''}\n`);
     ctx.stderr.write(`[mcp] connect an MCP client to ${transport.url}/sse\n`);
     // Keep alive until SIGINT / SIGTERM
     await new Promise((resolve) => {
@@ -112,6 +116,9 @@ Transport:
   --http [--port 3333]     — HTTP+SSE server. GET /sse for the event stream,
         [--host 127.0.0.1]   POST /messages?sessionId=X for client messages.
                              Handy for deploying as a network service.
+        [--auth-token <t>]   Bearer token required on /sse + /messages
+                             (or set SAPTARISHI_LLM_MCP_TOKEN env var).
+                             /health stays public for load balancer probes.
 
 Provider selection + credentials: same env vars as other subcommands
 (SAPTARISHI_LLM_PROVIDER, ANTHROPIC_API_KEY, etc — see 'saptarishi-llm help').`;

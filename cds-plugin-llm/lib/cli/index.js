@@ -31,6 +31,7 @@ const GLOBAL_OPTS = {
   http:          { type: 'boolean' },
   port:          { type: 'string' },
   host:          { type: 'string' },
+  'auth-token':  { type: 'string' },
 };
 
 async function run(argv) {

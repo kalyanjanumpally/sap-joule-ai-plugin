@@ -827,6 +827,27 @@ Wire protocol (MCP 2024-11-05 SSE spec):
 
 Multi-session — N concurrent clients each get their own session and stream. Graceful shutdown on SIGINT/SIGTERM.
 
+#### Bearer-token auth (new in v1.11.0)
+
+Deploying `--http` to anything beyond `127.0.0.1` should require a credential. Set `--auth-token` (or `SAPTARISHI_LLM_MCP_TOKEN` env) and every `/sse` and `/messages` request must send `Authorization: Bearer <token>`:
+
+```bash
+saptarishi-llm mcp --http --host 0.0.0.0 --port 3333 \
+  --auth-token "$(openssl rand -hex 32)"
+```
+
+Behavior:
+- Missing / wrong token → `401 Unauthorized` with `WWW-Authenticate: Bearer realm="mcp"`.
+- `/health` stays **public** so load balancers can probe without credentials. Its response now includes `authRequired: <bool>` so clients know whether they need a token.
+- Constant-time comparison on the byte-by-byte match to avoid trivial timing side-channels.
+- Binding to a non-loopback host without a token prints a loud stderr warning — no hard failure (upstream proxies may legitimately terminate auth), but the intent is impossible to miss.
+
+Client-side example (curl):
+
+```bash
+curl -N -H 'Authorization: Bearer <token>' http://host:3333/sse
+```
+
 ## Response caching (new in v0.9.0)
 
 Opt-in per-instance LRU cache with TTL. Skips tool-use calls (side-effects) and streaming (partial responses). Hits return the same `ChatResponse` shape with `cached: true` set.
@@ -969,7 +990,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.8**: `PromptRegistry` + MCP resources + MCP prompts~~ ✓ shipped in v1.8.0
 - ~~**1.9**: `loadFromDir` prompt loader + `--prompts-dir` on MCP + scaffold SSE endpoint + MCP resource templates~~ ✓ shipped in v1.9.0
 - ~~**1.10**: MCP HTTP+SSE transport (`--http`) + hot-reload prompts (`--watch-prompts`)~~ ✓ shipped in v1.10.0
-- **1.11+**: OpenAI Files API for URL PDFs, CAP model registry (providers in `.cds` files), MCP auth (bearer token / OAuth2), MCP progress notifications on tools/call, per-session provider overrides
+- ~~**1.11**: MCP bearer-token auth (`--auth-token`)~~ ✓ shipped in v1.11.0
+- **1.12+**: OpenAI Files API for URL PDFs, MCP progress notifications on `tools/call`, per-session provider overrides, MCP OAuth2 (client-credentials), CAP model registry (providers in `.cds` files)
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

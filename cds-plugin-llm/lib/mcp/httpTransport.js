@@ -31,11 +31,47 @@ const crypto = require('node:crypto');
  * @param {string}   [params.host='127.0.0.1']
  * @param {Function} [params.logger]       (level, msg) => void
  */
-function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger = () => {} }) {
+function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger = () => {}, authToken = null }) {
   const sessions = new Map();
+
+  // Bearer-token auth. When authToken is set, /sse and /messages both require
+  // `Authorization: Bearer <token>`. /health stays public so load balancers /
+  // monitoring can probe without a credential. Constant-time comparison to
+  // avoid trivial timing side-channels — the check runs on every request.
+  const authorize = (req) => {
+    if (!authToken) return true;
+    const header = req.headers['authorization'];
+    if (!header) return false;
+    const m = header.match(/^Bearer\s+(.+)$/i);
+    if (!m) return false;
+    return safeEqual(m[1].trim(), authToken);
+  };
 
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+
+    // Health probe is public; skip auth check.
+    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        server: server.name,
+        version: server.version,
+        transport: 'http+sse',
+        sessions: sessions.size,
+        authRequired: !!authToken,
+      }));
+      return;
+    }
+
+    // Every other endpoint requires auth when a token is configured.
+    if (!authorize(req)) {
+      res.writeHead(401, {
+        'Content-Type': 'application/json',
+        'WWW-Authenticate': 'Bearer realm="mcp"',
+      });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/sse') {
       const sessionId = crypto.randomUUID();
@@ -94,18 +130,6 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
       return;
     }
 
-    // Health probe
-    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        server: server.name,
-        version: server.version,
-        transport: 'http+sse',
-        sessions: sessions.size,
-      }));
-      return;
-    }
-
     res.writeHead(404);
     res.end();
   });
@@ -128,6 +152,15 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
     });
     httpServer.on('error', reject);
   });
+}
+
+/** Constant-time-ish string comparison. Only useful if lengths match; otherwise short-circuit. */
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 module.exports = { createHttpTransport };

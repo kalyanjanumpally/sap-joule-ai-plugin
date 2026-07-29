@@ -43,7 +43,7 @@ function httpRequest({ method, path, port, body, headers = {} }) {
  * call (not any already-seen one) — critical for tests that expect a specific
  * sequence like endpoint -> reply.
  */
-function openSSE({ port, path = '/sse' }) {
+function openSSE({ port, path = '/sse', headers = {} }) {
   return new Promise((resolve, reject) => {
     const events = [];
     let cursor = 0;
@@ -51,7 +51,7 @@ function openSSE({ port, path = '/sse' }) {
     const waiters = [];
     const req = http.request({
       hostname: '127.0.0.1', port, path, method: 'GET',
-      headers: { 'Accept': 'text/event-stream' },
+      headers: { 'Accept': 'text/event-stream', ...headers },
     }, (res) => {
       if (res.statusCode !== 200) return reject(new Error(`GET ${path} -> ${res.statusCode}`));
       res.setEncoding('utf8');
@@ -228,5 +228,104 @@ test('httpTransport: 404 for unknown routes', async () => {
   try {
     const res = await httpRequest({ method: 'GET', path: '/nope', port: transport.port });
     assert.equal(res.status, 404);
+  } finally { await transport.close(); }
+});
+
+// ---- bearer token auth (1.11.0) ------------------------------------------
+
+test('httpTransport auth: /health remains public even with token set', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({ server, port: 0, authToken: 'sekret' });
+  try {
+    const res = await httpRequest({ method: 'GET', path: '/health', port: transport.port });
+    assert.equal(res.status, 200);
+    const parsed = JSON.parse(res.body);
+    assert.equal(parsed.authRequired, true);
+  } finally { await transport.close(); }
+});
+
+test('httpTransport auth: /sse rejected without token', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({ server, port: 0, authToken: 'sekret' });
+  try {
+    const res = await httpRequest({ method: 'GET', path: '/sse', port: transport.port });
+    assert.equal(res.status, 401);
+    assert.equal(res.headers['www-authenticate'], 'Bearer realm="mcp"');
+  } finally { await transport.close(); }
+});
+
+test('httpTransport auth: /sse rejected with wrong token', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({ server, port: 0, authToken: 'sekret' });
+  try {
+    const res = await httpRequest({
+      method: 'GET', path: '/sse', port: transport.port,
+      headers: { Authorization: 'Bearer nope' },
+    });
+    assert.equal(res.status, 401);
+  } finally { await transport.close(); }
+});
+
+test('httpTransport auth: /sse accepted with correct bearer token', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({ server, port: 0, authToken: 'sekret' });
+  try {
+    const sse = await openSSE({
+      port: transport.port,
+      path: '/sse',
+      headers: { Authorization: 'Bearer sekret' },
+    });
+    const first = await sse.nextEvent();
+    assert.equal(first.event, 'endpoint');
+    sse.close();
+  } finally { await transport.close(); }
+});
+
+test('httpTransport auth: /messages rejected without token', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({ server, port: 0, authToken: 'sekret' });
+  try {
+    const res = await httpRequest({
+      method: 'POST', path: '/messages?sessionId=x', port: transport.port,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    });
+    assert.equal(res.status, 401);
+  } finally { await transport.close(); }
+});
+
+test('httpTransport auth: round-trip with token works end-to-end', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({ server, port: 0, authToken: 'sekret' });
+  try {
+    const sse = await openSSE({
+      port: transport.port,
+      headers: { Authorization: 'Bearer sekret' },
+    });
+    const endpoint = await sse.nextEvent();
+
+    const postRes = await httpRequest({
+      method: 'POST', path: endpoint.data, port: transport.port,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' }),
+      headers: { Authorization: 'Bearer sekret' },
+    });
+    assert.equal(postRes.status, 202);
+
+    const reply = await sse.nextEvent();
+    const parsed = JSON.parse(reply.data);
+    assert.equal(parsed.id, 1);
+    assert.equal(parsed.result.serverInfo.name, 'http-test');
+    sse.close();
+  } finally { await transport.close(); }
+});
+
+test('httpTransport auth: constant-time comparison rejects length-mismatched tokens', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({ server, port: 0, authToken: 'exactly-16chars!' });
+  try {
+    const res = await httpRequest({
+      method: 'GET', path: '/sse', port: transport.port,
+      headers: { Authorization: 'Bearer short' },
+    });
+    assert.equal(res.status, 401);
   } finally { await transport.close(); }
 });
