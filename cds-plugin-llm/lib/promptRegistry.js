@@ -159,4 +159,65 @@ PromptRegistry.prototype.registerAll = function (prompts) {
   return this;
 };
 
+/**
+ * Load every `*.mjs` and `*.js` file in a directory (non-recursive) and
+ * register each exported template. Convention:
+ *   - default export is a template               -> registered
+ *   - default export is an array of templates    -> all registered
+ *   - named exports that look like templates     -> registered
+ * A "template" is any object with `name` and `render` fields.
+ *
+ * Returns a Promise resolving to { loaded, registered } counts. Rejects if
+ * the directory doesn't exist (a common misconfiguration worth surfacing
+ * loudly).
+ */
+PromptRegistry.prototype.loadFromDir = async function (dirPath) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const url = require('node:url');
+
+  const abs = path.resolve(dirPath);
+  if (!fs.existsSync(abs)) {
+    throw new Error(`prompts directory does not exist: ${abs}`);
+  }
+  const stat = fs.statSync(abs);
+  if (!stat.isDirectory()) {
+    throw new Error(`prompts path is not a directory: ${abs}`);
+  }
+
+  const files = fs.readdirSync(abs)
+    .filter(f => f.endsWith('.mjs') || f.endsWith('.js'))
+    .sort();
+
+  let loaded = 0;
+  let registered = 0;
+  for (const file of files) {
+    const filePath = path.join(abs, file);
+    const mod = await import(url.pathToFileURL(filePath).href);
+    loaded++;
+
+    const candidates = [];
+    if (mod.default) {
+      if (Array.isArray(mod.default)) candidates.push(...mod.default);
+      else candidates.push(mod.default);
+    }
+    for (const [key, value] of Object.entries(mod)) {
+      if (key === 'default') continue;
+      if (looksLikeTemplate(value)) candidates.push(value);
+    }
+
+    for (const c of candidates) {
+      if (!looksLikeTemplate(c)) continue;
+      this.register(c);
+      registered++;
+    }
+  }
+
+  return { loaded, registered };
+};
+
+function looksLikeTemplate(v) {
+  return v && typeof v === 'object' && typeof v.name === 'string' && typeof v.render === 'function';
+}
+
 module.exports = { PromptRegistry, builtInPrompts };

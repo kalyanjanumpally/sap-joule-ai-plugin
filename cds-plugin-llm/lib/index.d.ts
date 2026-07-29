@@ -536,6 +536,11 @@ export class PromptRegistry {
   constructor();
   register(prompt: PromptTemplate): this;
   registerAll(prompts: PromptTemplate[]): this;
+  /**
+   * Load every `*.mjs` and `*.js` file in `dirPath` (non-recursive) and
+   * register the exported templates. Returns { loaded, registered } counts.
+   */
+  loadFromDir(dirPath: string): Promise<{ loaded: number; registered: number }>;
   list(): { name: string; description: string; arguments: PromptArgument[] }[];
   has(name: string): boolean;
   get(name: string): PromptTemplate | null;

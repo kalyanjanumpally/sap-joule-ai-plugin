@@ -1,5 +1,5 @@
 const { MCPServer } = require('../../mcp/server');
-const { buildTools, buildResources } = require('../../mcp/tools');
+const { buildTools, buildResources, buildResourceTemplates } = require('../../mcp/tools');
 const { PromptRegistry, builtInPrompts } = require('../../promptRegistry');
 
 async function mcp(ctx) {
@@ -11,12 +11,19 @@ async function mcp(ctx) {
 
   const prompts = new PromptRegistry().registerAll(builtInPrompts());
 
+  const dir = ctx.opts['prompts-dir'] ?? ctx.env.SAPTARISHI_LLM_PROMPTS_DIR;
+  if (dir) {
+    const { loaded, registered } = await prompts.loadFromDir(dir);
+    ctx.stderr.write(`[mcp] loaded ${registered} prompt template(s) from ${loaded} file(s) in ${dir}\n`);
+  }
+
   const pkg = require('../../../package.json');
   const server = new MCPServer({
     name: pkg.name,
     version: pkg.version,
     tools: buildTools({ provider, providerKind: kind, providerModel: model }),
     resources: buildResources({ provider, providerKind: kind, providerModel: model }),
+    resourceTemplates: buildResourceTemplates({ prompts }),
     prompts,
     logger: (level, msg) => ctx.stderr.write(`[mcp:${level}] ${msg}\n`),
   });
@@ -67,6 +74,10 @@ Prompts registered (invokable via prompts/get):
   classify                 — text + labels -> single label
   translate                — text + target language
   procurement_risk_scorer  — SAP-flavored risk analysis
+
+Load extra prompts from a directory:
+  --prompts-dir <path>     — .mjs/.js files exporting templates
+                             (or set SAPTARISHI_LLM_PROMPTS_DIR env var)
 
 Provider selection + credentials: same env vars as other subcommands
 (SAPTARISHI_LLM_PROVIDER, ANTHROPIC_API_KEY, etc — see 'saptarishi-llm help').`;

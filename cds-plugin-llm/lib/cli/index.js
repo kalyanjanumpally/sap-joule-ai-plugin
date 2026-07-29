@@ -26,6 +26,7 @@ const GLOBAL_OPTS = {
   version:     { type: 'boolean' },
   force:       { type: 'boolean' },
   'dry-run':   { type: 'boolean' },
+  'prompts-dir': { type: 'string' },
 };
 
 async function run(argv) {

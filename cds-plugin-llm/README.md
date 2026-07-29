@@ -685,6 +685,13 @@ Uses a hand-rolled MCP implementation (2024-11-05 spec) over stdio JSON-RPC 2.0 
 
 **Prompts registered** (invokable via `prompts/get`) — see [Prompt-template registry](#prompt-template-registry-new-in-v180) below for the full built-in list.
 
+**Resource templates** (new in v1.9.0; parametrized URIs discoverable via `resources/templates/list`):
+
+| URI template | What clients can read |
+|---|---|
+| `provider://{kind}` | Default model for a specific provider kind (`provider://groq` → `{ kind: 'groq', defaultModel: 'llama-3.3-70b-versatile' }`). |
+| `prompt://{name}` | Metadata (arguments, description) for a registered prompt template. To render, use `prompts/get`. |
+
 ### Scaffold a fresh CAP project (new in v1.6.0)
 
 `init` creates a fully-wired CAP app in seconds — no manual `package.json` editing, no CDS boilerplate:
@@ -711,9 +718,18 @@ joule-demo/
 ├── srv/
 │   ├── ai-service.cds    # service AIService { chat(prompt), summarize(text) }
 │   └── ai-service.js     # handlers using cds.connect.to('llm')
+│                         # + SSE streaming endpoint at POST /stream/chat
 ├── .env.example          # provider-specific env vars
 ├── .gitignore            # excludes .env, node_modules/, gen/
 └── README.md             # how to run
+```
+
+**Streaming out of the box (v1.9.0+):** the generated `srv/ai-service.js` registers `POST /stream/chat` inline, streaming tokens as they arrive:
+
+```bash
+curl -N -X POST http://localhost:4004/stream/chat \
+  -H 'content-type: application/json' \
+  -d '{"prompt":"write a haiku about SAP CAP"}'
 ```
 
 Flags:
@@ -760,6 +776,30 @@ Built-ins (`builtInPrompts()`):
 | `procurement_risk_scorer` | SAP-flavored risk analyst prompt (`text`). |
 
 Templates auto-appear as MCP prompts when you run `saptarishi-llm mcp`. Claude Desktop shows them as slash-commands the user can pick.
+
+### Load templates from a folder (new in v1.9.0)
+
+Instead of registering templates inline, drop `*.mjs` or `*.js` files into a directory and load them at boot:
+
+```
+prompts/
+├── invoice_dispute.mjs        # export default { name, render, ... }
+├── kpi_extractor.mjs          # export default { ... }
+└── shared.mjs                 # export const foo = ...; export const bar = ...
+```
+
+```js
+await registry.loadFromDir('./prompts');
+```
+
+Or expose the whole folder via MCP without writing any code:
+
+```bash
+saptarishi-llm mcp --prompts-dir ./prompts
+# or: SAPTARISHI_LLM_PROMPTS_DIR=./prompts saptarishi-llm mcp
+```
+
+Three export conventions handled in one scan: `export default <template>`, `export default [<t1>, <t2>]`, or named exports.
 
 ## Response caching (new in v0.9.0)
 
@@ -901,7 +941,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.6**: `saptarishi-llm init` CAP-app scaffolder~~ ✓ shipped in v1.6.0
 - ~~**1.7**: `saptarishi-llm mcp` server (MCP over stdio)~~ ✓ shipped in v1.7.0
 - ~~**1.8**: `PromptRegistry` + MCP resources + MCP prompts~~ ✓ shipped in v1.8.0
-- **1.9+**: OpenAI Files API for URL PDFs, HANA IVF-Flat index, streaming SSE endpoint in the scaffold, prompt loading from `.mjs` files, MCP resource templates (parametrized URIs)
+- ~~**1.9**: `loadFromDir` prompt loader + `--prompts-dir` on MCP + scaffold SSE endpoint + MCP resource templates~~ ✓ shipped in v1.9.0
+- **1.10+**: OpenAI Files API for URL PDFs, hot-reload prompts folder (watch mode), MCP HTTP transport (SSE), CAP model registry (define providers in `.cds` files)
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

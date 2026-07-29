@@ -14,8 +14,14 @@ cds watch
 CAP loads `.env` automatically. Once `cds watch` is up on `http://localhost:4004`, exercise the service:
 
 ```bash
+# OData: request/response chat + summarize
 curl 'http://localhost:4004/ai/chat(prompt='"'"'hello'"'"')'
 curl 'http://localhost:4004/ai/summarize(text='"'"'Long text here...'"'"')'
+
+# SSE: streaming chat (tokens arrive as they are generated)
+curl -N -X POST http://localhost:4004/stream/chat \
+  -H 'content-type: application/json' \
+  -d '{"prompt":"write a haiku about SAP CAP"}'
 ```
 
 ## Structure

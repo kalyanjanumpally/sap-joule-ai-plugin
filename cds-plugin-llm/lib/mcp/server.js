@@ -30,16 +30,18 @@ const ERROR_CODES = {
 };
 
 class MCPServer {
-  constructor({ name, version, tools = [], resources = [], prompts = null, logger }) {
+  constructor({ name, version, tools = [], resources = [], resourceTemplates = [], prompts = null, logger }) {
     if (!name) throw new Error('MCPServer requires a name');
     if (!version) throw new Error('MCPServer requires a version');
     this.name = name;
     this.version = version;
     this.tools = new Map();
     this.resources = new Map();
+    this.resourceTemplates = [];  // parametrized URIs (e.g. 'prompt://{name}')
     this.prompts = prompts; // PromptRegistry-like: has list()/get()/render() or null
     for (const t of tools) this.registerTool(t);
     for (const r of resources) this.registerResource(r);
+    for (const rt of resourceTemplates) this.registerResourceTemplate(rt);
     this.log = logger ?? (() => {});
     this.initialized = false;
   }
@@ -56,6 +58,38 @@ class MCPServer {
     if (typeof resource.read !== 'function') throw new Error(`resource ${resource.uri}: read must be a function`);
     if (this.resources.has(resource.uri)) throw new Error(`resource ${resource.uri}: already registered`);
     this.resources.set(resource.uri, resource);
+  }
+
+  registerResourceTemplate(template) {
+    if (!template?.uriTemplate) throw new Error('resourceTemplate.uriTemplate is required');
+    if (typeof template.read !== 'function') throw new Error(`resourceTemplate ${template.uriTemplate}: read must be a function`);
+    const paramNames = extractTemplateParams(template.uriTemplate);
+    if (paramNames.length === 0) {
+      throw new Error(`resourceTemplate ${template.uriTemplate}: no {param} placeholders found — register as a plain resource instead`);
+    }
+    const regex = templateToRegex(template.uriTemplate, paramNames);
+    this.resourceTemplates.push({
+      uriTemplate: template.uriTemplate,
+      name: template.name ?? template.uriTemplate,
+      description: template.description ?? '',
+      mimeType: template.mimeType ?? 'text/plain',
+      read: template.read,
+      _paramNames: paramNames,
+      _regex: regex,
+    });
+  }
+
+  _matchTemplate(uri) {
+    for (const t of this.resourceTemplates) {
+      const match = uri.match(t._regex);
+      if (!match) continue;
+      const params = {};
+      for (let i = 0; i < t._paramNames.length; i++) {
+        params[t._paramNames[i]] = decodeURIComponent(match[i + 1]);
+      }
+      return { template: t, params };
+    }
+    return null;
   }
 
   /**
@@ -91,7 +125,7 @@ class MCPServer {
           serverInfo: { name: this.name, version: this.version },
           capabilities: {
             tools: {},
-            ...(this.resources.size > 0 ? { resources: {} } : {}),
+            ...(this.resources.size > 0 || this.resourceTemplates.length > 0 ? { resources: {} } : {}),
             ...(this.prompts ? { prompts: {} } : {}),
           },
         };
@@ -141,19 +175,39 @@ class MCPServer {
           })),
         };
 
+      case 'resources/templates/list':
+        return {
+          resourceTemplates: this.resourceTemplates.map(t => ({
+            uriTemplate: t.uriTemplate,
+            name: t.name,
+            description: t.description,
+            mimeType: t.mimeType,
+          })),
+        };
+
       case 'resources/read': {
         const uri = params?.uri;
+        // Exact match first (static resources)
         const resource = this.resources.get(uri);
-        if (!resource) {
-          const err = new Error(`unknown resource: ${uri}`);
-          err.code = ERROR_CODES.INVALID_PARAMS;
-          throw err;
+        if (resource) {
+          const value = await resource.read();
+          const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+          return {
+            contents: [{ uri, mimeType: resource.mimeType ?? 'text/plain', text }],
+          };
         }
-        const value = await resource.read();
-        const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-        return {
-          contents: [{ uri, mimeType: resource.mimeType ?? 'text/plain', text }],
-        };
+        // Fall through to templated resources
+        const matched = this._matchTemplate(uri);
+        if (matched) {
+          const value = await matched.template.read(matched.params);
+          const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+          return {
+            contents: [{ uri, mimeType: matched.template.mimeType, text }],
+          };
+        }
+        const err = new Error(`unknown resource: ${uri}`);
+        err.code = ERROR_CODES.INVALID_PARAMS;
+        throw err;
       }
 
       case 'prompts/list':
@@ -245,6 +299,25 @@ class MCPServer {
 function stringify(value) {
   if (typeof value === 'string') return value;
   return JSON.stringify(value, null, 2);
+}
+
+// RFC 6570 Level 1 style: replace {name} with a capturing group.
+function extractTemplateParams(tpl) {
+  const names = [];
+  const re = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
+  let m;
+  while ((m = re.exec(tpl)) !== null) names.push(m[1]);
+  return names;
+}
+
+function templateToRegex(tpl, paramNames) {
+  // Escape regex meta chars in the literal portions, then substitute
+  // {param} with a lazy match up to the next literal.
+  let escaped = tpl.replace(/[.*+?^${}()|[\]\\]/g, s => (s === '{' || s === '}' ? s : '\\' + s));
+  for (const n of paramNames) {
+    escaped = escaped.replace(`{${n}}`, '([^/?#]+)');
+  }
+  return new RegExp('^' + escaped + '$');
 }
 
 module.exports = { MCPServer, PROTOCOL_VERSION, ERROR_CODES };

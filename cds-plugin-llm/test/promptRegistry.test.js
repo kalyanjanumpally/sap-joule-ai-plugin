@@ -1,5 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
 const { PromptRegistry, builtInPrompts } = require('../lib/promptRegistry');
 
 test('PromptRegistry: rejects invalid registration', () => {
@@ -131,4 +134,105 @@ test('builtInPrompts: procurement_risk_scorer is SAP-flavored', () => {
   const r = new PromptRegistry().registerAll(builtInPrompts());
   const req = r.render('procurement_risk_scorer', { text: 'PO 4500000123' });
   assert.match(req.system, /SAP procurement risk analyst/);
+});
+
+// ---- loadFromDir (1.9.0) --------------------------------------------------
+
+function tmpPromptsDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'sllm-prompts-'));
+}
+
+test('loadFromDir: rejects missing directory', async () => {
+  const r = new PromptRegistry();
+  await assert.rejects(() => r.loadFromDir('/nonexistent/path/xyz-42'), /does not exist/);
+});
+
+test('loadFromDir: rejects when path is a file, not a directory', async () => {
+  const dir = tmpPromptsDir();
+  const f = path.join(dir, 'not-a-dir.mjs');
+  fs.writeFileSync(f, 'export default {}');
+  try {
+    const r = new PromptRegistry();
+    await assert.rejects(() => r.loadFromDir(f), /not a directory/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('loadFromDir: default export template gets registered', async () => {
+  const dir = tmpPromptsDir();
+  fs.writeFileSync(path.join(dir, 'greet.mjs'), `
+    export default {
+      name: 'greet_from_file',
+      description: 'file-based prompt',
+      arguments: [{ name: 'who', required: true }],
+      render: ({ who }) => ({ messages: [{ role: 'user', content: 'hello ' + who }] }),
+    };
+  `);
+  try {
+    const r = new PromptRegistry();
+    const stats = await r.loadFromDir(dir);
+    assert.equal(stats.loaded, 1);
+    assert.equal(stats.registered, 1);
+    assert.ok(r.has('greet_from_file'));
+    const rendered = r.render('greet_from_file', { who: 'world' });
+    assert.equal(rendered.messages[0].content, 'hello world');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('loadFromDir: default export array registers each element', async () => {
+  const dir = tmpPromptsDir();
+  fs.writeFileSync(path.join(dir, 'bundle.mjs'), `
+    export default [
+      { name: 'a1', render: () => ({ messages: [{ role: 'user', content: 'a' }] }) },
+      { name: 'a2', render: () => ({ messages: [{ role: 'user', content: 'b' }] }) },
+    ];
+  `);
+  try {
+    const r = new PromptRegistry();
+    const stats = await r.loadFromDir(dir);
+    assert.equal(stats.registered, 2);
+    assert.ok(r.has('a1'));
+    assert.ok(r.has('a2'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('loadFromDir: named exports that look like templates get registered', async () => {
+  const dir = tmpPromptsDir();
+  fs.writeFileSync(path.join(dir, 'named.mjs'), `
+    export const foo = { name: 'named_foo', render: () => ({ messages: [] }) };
+    export const bar = { name: 'named_bar', render: () => ({ messages: [] }) };
+    export const notTemplate = 42;                // ignored: not a template
+    export const alsoNot = { name: 'x' };         // ignored: no render()
+  `);
+  try {
+    const r = new PromptRegistry();
+    const stats = await r.loadFromDir(dir);
+    assert.equal(stats.registered, 2);
+    assert.ok(r.has('named_foo'));
+    assert.ok(r.has('named_bar'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('loadFromDir: ignores non-.mjs/.js files', async () => {
+  const dir = tmpPromptsDir();
+  fs.writeFileSync(path.join(dir, 'ignore.txt'), 'not code');
+  fs.writeFileSync(path.join(dir, 'README.md'), '# nope');
+  try {
+    const r = new PromptRegistry();
+    const stats = await r.loadFromDir(dir);
+    assert.equal(stats.loaded, 0);
+    assert.equal(stats.registered, 0);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('loadFromDir: sorted file order is stable', async () => {
+  const dir = tmpPromptsDir();
+  fs.writeFileSync(path.join(dir, 'b.mjs'), `export default { name: 'from_b', render: () => ({ messages: [] }) };`);
+  fs.writeFileSync(path.join(dir, 'a.mjs'), `export default { name: 'from_a', render: () => ({ messages: [] }) };`);
+  try {
+    const r = new PromptRegistry();
+    await r.loadFromDir(dir);
+    const names = r.list().map(p => p.name);
+    // a.mjs sorts first, so from_a registers first, then from_b
+    assert.deepEqual(names, ['from_a', 'from_b']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

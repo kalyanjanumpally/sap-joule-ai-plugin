@@ -123,9 +123,16 @@ test('init: default anthropic scaffold creates all files with correct content', 
     assert.match(svcJs, /cds\.connect\.to\('llm'\)/);
     assert.match(svcJs, /this\.on\('chat'/);
     assert.match(svcJs, /this\.on\('summarize'/);
+    // SSE endpoint (new in 1.9.0)
+    assert.match(svcJs, /cds\.app\.post\('\/stream\/chat'/);
+    assert.match(svcJs, /text\/event-stream/);
+    assert.match(svcJs, /for await \(const chunk of llm\.stream/);
 
     const envEx = fs.readFileSync(path.join(dir, '.env.example'), 'utf8');
     assert.match(envEx, /ANTHROPIC_API_KEY=/);
+
+    const readme = fs.readFileSync(path.join(dir, 'README.md'), 'utf8');
+    assert.match(readme, /\/stream\/chat/);
 
     const gitignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
     assert.match(gitignore, /^\.env$/m);

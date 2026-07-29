@@ -155,4 +155,41 @@ function buildResources({ provider, providerKind, providerModel, cacheStats }) {
   return resources;
 }
 
-module.exports = { buildTools, buildResources };
+/**
+ * Build parametrized resource templates. Clients discover these via
+ * `resources/templates/list`, substitute variables, and call `resources/read`
+ * with the concrete URI.
+ */
+function buildResourceTemplates({ prompts }) {
+  const templates = [];
+  templates.push({
+    uriTemplate: 'provider://{kind}',
+    name: 'Provider defaults',
+    description: 'Default model + credential env vars for a specific provider kind.',
+    mimeType: 'application/json',
+    read: ({ kind }) => {
+      if (!PROVIDER_KINDS.includes(kind)) {
+        throw new Error(`unknown provider kind: ${kind}. supported: ${PROVIDER_KINDS.join(', ')}`);
+      }
+      return { kind, defaultModel: PROVIDER_DEFAULTS[kind].model };
+    },
+  });
+  if (prompts) {
+    templates.push({
+      uriTemplate: 'prompt://{name}',
+      name: 'Prompt template metadata',
+      description: 'Metadata (description + argument list) for a registered prompt template. To render, use prompts/get.',
+      mimeType: 'application/json',
+      read: ({ name }) => {
+        if (!prompts.has(name)) {
+          throw new Error(`unknown prompt: ${name}`);
+        }
+        const p = prompts.get(name);
+        return { name: p.name, description: p.description, arguments: p.arguments };
+      },
+    });
+  }
+  return templates;
+}
+
+module.exports = { buildTools, buildResources, buildResourceTemplates };

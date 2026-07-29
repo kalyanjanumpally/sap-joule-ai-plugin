@@ -5,7 +5,7 @@ const { spawn } = require('node:child_process');
 const { PassThrough } = require('node:stream');
 
 const { MCPServer, PROTOCOL_VERSION, ERROR_CODES } = require('../lib/mcp/server');
-const { buildTools, buildResources } = require('../lib/mcp/tools');
+const { buildTools, buildResources, buildResourceTemplates } = require('../lib/mcp/tools');
 const { PromptRegistry, builtInPrompts } = require('../lib/promptRegistry');
 
 // ---- MCPServer.handleMessage: protocol correctness ------------------------
@@ -396,6 +396,121 @@ test('buildResources: returns active-provider + supported-providers by default',
   assert.equal(supported.supported.length, 5);
 });
 
+// ---- resource templates (1.9.0) -------------------------------------------
+
+test('MCPServer: registerResourceTemplate rejects invalid templates', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  assert.throws(() => s.registerResourceTemplate({ read: async () => 'x' }), /uriTemplate is required/);
+  assert.throws(() => s.registerResourceTemplate({ uriTemplate: 'foo://bar' }), /read must be a function/);
+  assert.throws(() => s.registerResourceTemplate({
+    uriTemplate: 'foo://static', read: async () => 'x',
+  }), /no \{param\} placeholders/);
+});
+
+test('MCPServer: resources/templates/list returns registered templates', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resourceTemplates: [{
+      uriTemplate: 'user://{id}',
+      name: 'User by id',
+      description: 'Read a user',
+      mimeType: 'application/json',
+      read: () => ({}),
+    }],
+  });
+  const reply = await s.handleMessage({ jsonrpc: '2.0', id: 1, method: 'resources/templates/list' });
+  assert.equal(reply.result.resourceTemplates.length, 1);
+  assert.equal(reply.result.resourceTemplates[0].uriTemplate, 'user://{id}');
+  assert.equal(reply.result.resourceTemplates[0].name, 'User by id');
+});
+
+test('MCPServer: resources/read matches URI against a template', async () => {
+  let captured = null;
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resourceTemplates: [{
+      uriTemplate: 'user://{id}',
+      mimeType: 'application/json',
+      read: (params) => { captured = params; return { id: params.id, name: 'Alice' }; },
+    }],
+  });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'resources/read',
+    params: { uri: 'user://42' },
+  });
+  assert.deepEqual(captured, { id: '42' });
+  const parsed = JSON.parse(reply.result.contents[0].text);
+  assert.equal(parsed.id, '42');
+  assert.equal(parsed.name, 'Alice');
+});
+
+test('MCPServer: resources/read prefers static resource over matching template', async () => {
+  let templateCalled = false;
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resources: [{ uri: 'user://special', read: async () => 'STATIC' }],
+    resourceTemplates: [{
+      uriTemplate: 'user://{id}',
+      read: () => { templateCalled = true; return 'TEMPLATE'; },
+    }],
+  });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'resources/read',
+    params: { uri: 'user://special' },
+  });
+  assert.equal(reply.result.contents[0].text, 'STATIC');
+  assert.equal(templateCalled, false);
+});
+
+test('MCPServer: initialize advertises resources when only templates registered', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resourceTemplates: [{ uriTemplate: 'a://{b}', read: () => 'x' }],
+  });
+  const reply = await s.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+  assert.ok(reply.result.capabilities.resources);
+});
+
+test('MCPServer: template with multiple params captures all of them', async () => {
+  let captured = null;
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resourceTemplates: [{
+      uriTemplate: 'org://{orgId}/repo/{repoName}',
+      read: (params) => { captured = params; return params; },
+    }],
+  });
+  await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'resources/read',
+    params: { uri: 'org://acme/repo/hello-world' },
+  });
+  assert.deepEqual(captured, { orgId: 'acme', repoName: 'hello-world' });
+});
+
+test('buildResourceTemplates: exposes provider://{kind} always', () => {
+  const templates = buildResourceTemplates({ prompts: null });
+  const p = templates.find(t => t.uriTemplate === 'provider://{kind}');
+  assert.ok(p);
+  assert.deepEqual(p.read({ kind: 'groq' }), { kind: 'groq', defaultModel: 'llama-3.3-70b-versatile' });
+});
+
+test('buildResourceTemplates: provider template rejects unknown kinds', () => {
+  const templates = buildResourceTemplates({ prompts: null });
+  const p = templates.find(t => t.uriTemplate === 'provider://{kind}');
+  assert.throws(() => p.read({ kind: 'bogus' }), /unknown provider kind/);
+});
+
+test('buildResourceTemplates: includes prompt://{name} when prompts registry present', () => {
+  const { PromptRegistry, builtInPrompts: bip } = require('../lib/promptRegistry');
+  const prompts = new PromptRegistry().registerAll(bip());
+  const templates = buildResourceTemplates({ prompts });
+  const p = templates.find(t => t.uriTemplate === 'prompt://{name}');
+  assert.ok(p);
+  const meta = p.read({ name: 'summarize' });
+  assert.equal(meta.name, 'summarize');
+  assert.ok(meta.arguments.length >= 1);
+});
+
 test('buildResources: includes cache-stats resource when cacheStats supplied', async () => {
   const resources = buildResources({
     provider: { middleware: [], defaultMaxTokens: 1024 },
@@ -417,6 +532,57 @@ test('buildTools list_providers: includes activeProvider + all 5 kinds', async (
 });
 
 // ---- end-to-end via saptarishi-llm mcp subprocess -------------------------
+
+test('CLI mcp: --prompts-dir loads custom templates that appear in prompts/list', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(require('node:path').join(os.tmpdir(), 'sllm-mcp-'));
+  const tplPath = require('node:path').join(dir, 'custom.mjs');
+  fs.writeFileSync(tplPath, `
+    export default {
+      name: 'my_custom_from_disk',
+      description: 'loaded via --prompts-dir',
+      arguments: [{ name: 'x', required: true }],
+      render: ({ x }) => ({ messages: [{ role: 'user', content: 'custom: ' + x }] }),
+    };
+  `);
+  const bin = path.resolve(__dirname, '..', 'bin', 'saptarishi-llm.js');
+  const child = spawn(process.execPath, [bin, 'mcp', '--provider', 'ollama', '--prompts-dir', dir], {
+    env: { ...process.env, OLLAMA_URL: 'http://127.0.0.1:0' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  const readOne = () => new Promise((resolve, reject) => {
+    let buf = '';
+    const onData = (chunk) => {
+      buf += chunk.toString('utf8');
+      const idx = buf.indexOf('\n');
+      if (idx !== -1) {
+        child.stdout.off('data', onData);
+        resolve(buf.slice(0, idx));
+      }
+    };
+    child.stdout.on('data', onData);
+    child.on('error', reject);
+    setTimeout(() => { child.stdout.off('data', onData); reject(new Error('timeout')); }, 5000);
+  });
+
+  try {
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' }) + '\n');
+    await readOne();
+
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'prompts/list' }) + '\n');
+    const line = await readOne();
+    const reply = JSON.parse(line);
+    const names = reply.result.prompts.map(p => p.name);
+    assert.ok(names.includes('my_custom_from_disk'), `expected custom prompt loaded; got: ${names.join(', ')}`);
+    assert.ok(names.includes('summarize'), 'built-ins should still be present');
+  } finally {
+    child.stdin.end();
+    child.kill();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('CLI mcp: subprocess handshake works over stdio', async () => {
   const bin = path.resolve(__dirname, '..', 'bin', 'saptarishi-llm.js');
@@ -496,6 +662,24 @@ test('CLI mcp: subprocess handshake works over stdio', async () => {
     const pgLine = await readOne();
     const pg = JSON.parse(pgLine);
     assert.match(pg.result.description, /Summarize/);
+
+    // resources/templates/list should include provider:// and prompt://
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'resources/templates/list' }) + '\n');
+    const rtLine = await readOne();
+    const rt = JSON.parse(rtLine);
+    const tplUris = rt.result.resourceTemplates.map(t => t.uriTemplate).sort();
+    assert.deepEqual(tplUris, ['prompt://{name}', 'provider://{kind}']);
+
+    // resources/read against a template URI (provider://ollama)
+    child.stdin.write(JSON.stringify({
+      jsonrpc: '2.0', id: 8, method: 'resources/read',
+      params: { uri: 'provider://ollama' },
+    }) + '\n');
+    const rrLine = await readOne();
+    const rr = JSON.parse(rrLine);
+    const payload2 = JSON.parse(rr.result.contents[0].text);
+    assert.equal(payload2.kind, 'ollama');
+    assert.equal(payload2.defaultModel, 'qwen2.5:14b');
   } finally {
     child.stdin.end();
     child.kill();
