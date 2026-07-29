@@ -127,6 +127,46 @@ test('HanaVectorStore: delete issues DELETE WHERE id = ?', async () => {
   assert.equal(del.params[0], 'zzz');
 });
 
+test('HanaVectorStore.upsertMany: single chunk uses multi-row MERGE with UNION ALL', async () => {
+  state.executed = [];
+  const store = makeStore();
+  await store.init();
+  await store.upsertMany([
+    { id: 'a', text: 'one', metadata: { i: 1 } },
+    { id: 'b', text: 'two', metadata: { i: 2 } },
+    { id: 'c', text: 'three' },
+  ]);
+  const merges = state.executed.filter(x => /MERGE INTO/i.test(x.sql));
+  assert.equal(merges.length, 1, 'expected exactly one MERGE for 3 rows within chunk size');
+  const sql = merges[0].sql;
+  const unionAllCount = (sql.match(/UNION ALL/g) || []).length;
+  assert.equal(unionAllCount, 2, 'expected 2 UNION ALL joins for 3 rows');
+  assert.equal(merges[0].params.length, 12); // 4 params per row * 3 rows
+  assert.equal(merges[0].params[0], 'a');
+  assert.equal(merges[0].params[4], 'b');
+  assert.equal(merges[0].params[8], 'c');
+  assert.equal(merges[0].params[11], null); // c has no metadata
+});
+
+test('HanaVectorStore.upsertMany: chunks large batches at upsertChunkSize', async () => {
+  state.executed = [];
+  const store = new HanaVectorStore({
+    embed: fakeEmbedder,
+    dimension: 4,
+    table: 'BIG',
+    upsertChunkSize: 10,
+    connection: { host: 'x', port: 443, user: 'u', password: 'p' },
+  });
+  await store.init();
+  const items = Array.from({ length: 25 }, (_, i) => ({ id: `id-${i}`, text: `t-${i}` }));
+  await store.upsertMany(items);
+  const merges = state.executed.filter(x => /MERGE INTO/i.test(x.sql));
+  assert.equal(merges.length, 3, 'expected 3 chunks (10 + 10 + 5)');
+  assert.equal(merges[0].params.length, 40); // 4 * 10
+  assert.equal(merges[1].params.length, 40);
+  assert.equal(merges[2].params.length, 20); // 4 * 5
+});
+
 test('HanaVectorStore: dropTable issues DROP TABLE', async () => {
   state.executed = [];
   const store = makeStore();

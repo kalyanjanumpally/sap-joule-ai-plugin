@@ -21,4 +21,7 @@ module.exports = {
   pdfFromBase64,
   // Tool runner — automatic multi-turn agent loop (new in 1.1.0)
   runTools,
+  // Built-in middleware helpers (new in 1.3.0)
+  rateLimit: require('./middleware/rateLimit').rateLimit,
+  otel: require('./middleware/otel').otel,
 };

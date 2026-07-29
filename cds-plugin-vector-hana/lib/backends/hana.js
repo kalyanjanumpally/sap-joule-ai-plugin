@@ -69,13 +69,38 @@ class HanaVectorStore extends VectorStore {
   }
 
   async _upsert({ id, text, vector, metadata }) {
-    // HANA doesn't have native UPSERT — use MERGE INTO. TO_REAL_VECTOR converts
-    // a JSON array string into the native vector representation.
-    const sql = `
-      MERGE INTO "${this.table}" AS T
-      USING (SELECT ? AS "${this.idColumn}", ? AS "${this.textColumn}",
+    await this._exec(
+      this._mergeSql(1),
+      [id, text, JSON.stringify(vector), metadata ? JSON.stringify(metadata) : null],
+    );
+    return { id };
+  }
+
+  async _upsertMany(records) {
+    // Batch in chunks — MERGE INTO accepts multi-row USING via UNION ALL of
+    // DUMMY selects. Chunk size caps parameter count and query text size.
+    const chunkSize = this.options.upsertChunkSize ?? 100;
+    for (let start = 0; start < records.length; start += chunkSize) {
+      const chunk = records.slice(start, start + chunkSize);
+      const params = [];
+      for (const r of chunk) {
+        params.push(r.id, r.text, JSON.stringify(r.vector), r.metadata ? JSON.stringify(r.metadata) : null);
+      }
+      await this._exec(this._mergeSql(chunk.length), params);
+    }
+    return records.map(r => ({ id: r.id }));
+  }
+
+  _mergeSql(rowCount) {
+    // HANA has no native UPSERT — MERGE INTO with USING is the idiomatic path.
+    // TO_REAL_VECTOR converts a JSON array string into the native vector type.
+    const oneRow = `SELECT ? AS "${this.idColumn}", ? AS "${this.textColumn}",
                     TO_REAL_VECTOR(?) AS "${this.embeddingColumn}",
-                    ? AS "${this.metadataColumn}" FROM DUMMY) AS S
+                    ? AS "${this.metadataColumn}" FROM DUMMY`;
+    const using = Array.from({ length: rowCount }, () => oneRow).join(' UNION ALL ');
+    return `
+      MERGE INTO "${this.table}" AS T
+      USING (${using}) AS S
       ON T."${this.idColumn}" = S."${this.idColumn}"
       WHEN MATCHED THEN UPDATE SET
         "${this.textColumn}" = S."${this.textColumn}",
@@ -86,8 +111,6 @@ class HanaVectorStore extends VectorStore {
         S."${this.embeddingColumn}", S."${this.metadataColumn}"
       )
     `;
-    await this._exec(sql, [id, text, JSON.stringify(vector), metadata ? JSON.stringify(metadata) : null]);
-    return { id };
   }
 
   async _search({ queryVector, topK, filter }) {

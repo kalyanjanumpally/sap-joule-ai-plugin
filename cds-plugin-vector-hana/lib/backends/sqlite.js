@@ -45,16 +45,33 @@ class SqliteVectorStore extends VectorStore {
   }
 
   async _upsert({ id, text, vector, metadata }) {
-    const stmt = this.db.prepare(`
-      INSERT INTO "${this.table}" ("${this.idColumn}", "${this.textColumn}", "${this.embeddingColumn}", "${this.metadataColumn}")
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT("${this.idColumn}") DO UPDATE SET
-        "${this.textColumn}" = excluded."${this.textColumn}",
-        "${this.embeddingColumn}" = excluded."${this.embeddingColumn}",
-        "${this.metadataColumn}" = excluded."${this.metadataColumn}"
-    `);
-    stmt.run(id, text, JSON.stringify(vector), metadata ? JSON.stringify(metadata) : null);
+    this._upsertStmt().run(id, text, JSON.stringify(vector), metadata ? JSON.stringify(metadata) : null);
     return { id };
+  }
+
+  async _upsertMany(records) {
+    const stmt = this._upsertStmt();
+    const runBatch = this.db.transaction((rows) => {
+      for (const r of rows) {
+        stmt.run(r.id, r.text, JSON.stringify(r.vector), r.metadata ? JSON.stringify(r.metadata) : null);
+      }
+    });
+    runBatch(records);
+    return records.map(r => ({ id: r.id }));
+  }
+
+  _upsertStmt() {
+    if (!this._cachedUpsertStmt) {
+      this._cachedUpsertStmt = this.db.prepare(`
+        INSERT INTO "${this.table}" ("${this.idColumn}", "${this.textColumn}", "${this.embeddingColumn}", "${this.metadataColumn}")
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT("${this.idColumn}") DO UPDATE SET
+          "${this.textColumn}" = excluded."${this.textColumn}",
+          "${this.embeddingColumn}" = excluded."${this.embeddingColumn}",
+          "${this.metadataColumn}" = excluded."${this.metadataColumn}"
+      `);
+    }
+    return this._cachedUpsertStmt;
   }
 
   async _search({ queryVector, topK, filter }) {

@@ -19,6 +19,11 @@ import {
   RunToolsResult,
   Middleware,
   MiddlewareContext,
+  rateLimit,
+  RateLimitOptions,
+  otel,
+  OtelOptions,
+  OtelTracerLike,
   // Types
   ChatRequest,
   ChatResponse,
@@ -182,6 +187,25 @@ async function example() {
     return res;
   };
   groq.use(logger).use(async (ctx, next) => next());
+
+  // ---- built-in middleware (1.3.0) ---------------------------------------
+  const rlOpts: RateLimitOptions = {
+    capacity: 30,
+    refillPerSecond: 0.5,
+    keyFn: (ctx) => (ctx.meta.user as string) ?? 'anon',
+    mode: 'wait',
+  };
+  const rl: Middleware = rateLimit(rlOpts);
+  groq.use(rl);
+
+  const fakeTracer: OtelTracerLike = {
+    startSpan: (_name: string) => ({
+      setAttribute: () => {}, end: () => {},
+      recordException: () => {}, setStatus: () => {},
+    }),
+  };
+  const otelOpts: OtelOptions = { tracer: fakeTracer, spanNamePrefix: 'ai.', systemAttribute: 'groq' };
+  groq.use(otel(otelOpts));
 
   // ---- runTools (new in 1.1.0) -------------------------------------------
   const tools: RunnableTool[] = [{

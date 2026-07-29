@@ -527,6 +527,48 @@ Notes:
 - Errors propagate up the chain.
 - For streams, `next()` returns an async iterable. To observe/transform chunks, wrap it into a new async generator.
 
+### Built-in middleware (new in v1.3.0)
+
+Two production-oriented middlewares ship in the box: rate limiting and OpenTelemetry tracing.
+
+#### `rateLimit` — token-bucket limiter
+
+```js
+const { rateLimit } = require('@saptarishi/cds-plugin-llm');
+
+const llm = await cds.connect.to('llm');
+
+// Global: 60 requests burst, refill at 1/s
+llm.use(rateLimit({ capacity: 60, refillPerSecond: 1 }));
+
+// Per-user: keyed off ctx.meta.user (populate this from an earlier middleware
+// that inspects your CAP request)
+llm.use(rateLimit({
+  capacity: 10,
+  refillPerSecond: 0.2,
+  keyFn: (ctx) => ctx.meta.user ?? 'anon',
+  mode: 'wait',   // 'throw' (default) or 'wait' — pause instead of erroring
+}));
+```
+
+When `mode: 'throw'` and the bucket is empty, the middleware throws an `Error` with `code: 'RATE_LIMITED'` and `retryAfterMs` so you can surface a proper 429 to your caller. Buckets are in-process — for multi-instance CF apps that need a shared counter, back with Redis via your own middleware.
+
+#### `otel` — OpenTelemetry spans
+
+```js
+const { trace } = require('@opentelemetry/api');
+const { otel } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(otel({
+  tracer: trace.getTracer('cap-app'),
+  systemAttribute: 'anthropic',   // sets gen_ai.system on every span
+}));
+```
+
+Emits one span per `chat` / `stream` / `embed` call. Attributes follow the emerging GenAI semantic conventions where possible: `gen_ai.system`, `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens` / `output_tokens`, `gen_ai.response.stop_reason`. Plus a few plugin-specific ones: `llm.cached`, `llm.tool_calls.count`, `llm.stream.chunks`, `llm.embed.count`. Duck-typed against `@opentelemetry/api` — no hard dependency, works with any object exposing `startSpan()`.
+
+Stream spans stay open through the whole iterator (span ends on the `done` chunk, on early break, or on error — never leaks).
+
 ## Response caching (new in v0.9.0)
 
 Opt-in per-instance LRU cache with TTL. Skips tool-use calls (side-effects) and streaming (partial responses). Hits return the same `ChatResponse` shape with `cached: true` set.
@@ -661,7 +703,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.0**: API stability commitment~~ ✓ shipped in v1.0.0 (live verification of GenAI Hub open — see FAQ)
 - ~~**1.1**: `runTools()` — automatic multi-turn tool-use loop~~ ✓ shipped in v1.1.0
 - ~~**1.2**: middleware / interceptor pattern~~ ✓ shipped in v1.2.0
-- **1.3+**: per-user rate limiting middleware (build on 1.2's hook system), OpenAI Files API for URL PDFs, batch upsertMany for vector store, HANA HNSW index config, CLI
+- ~~**1.3**: built-in `rateLimit` + `otel` middlewares; vector store `upsertMany`~~ ✓ shipped in v1.3.0 (llm) / v0.2.0 (vector-hana)
+- **1.4+**: OpenAI Files API for URL PDFs, HANA HNSW index config, CLI, Redis-backed rate-limit middleware
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

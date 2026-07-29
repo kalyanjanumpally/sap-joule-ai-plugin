@@ -62,6 +62,47 @@ class VectorStore {
     return this._upsert({ id, text, vector, metadata: metadata ?? null });
   }
 
+  /**
+   * Batch upsert. Embeds all `text` values in a single embed() call (providers
+   * that accept `input: string[]` return N vectors in one round-trip) and
+   * persists them via the backend's `_upsertMany` — backends override this
+   * to use a transaction (SQLite) or batched MERGE (HANA).
+   *
+   *   await store.upsertMany([
+   *     { id: 'doc1', text: '...', metadata: { category: 'legal' } },
+   *     { id: 'doc2', text: '...', metadata: { category: 'finance' } },
+   *   ]);
+   */
+  async upsertMany(items) {
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error('upsertMany() requires a non-empty array of { id, text, metadata } items');
+    }
+    for (const [i, item] of items.entries()) {
+      if (!item?.id) throw new Error(`upsertMany() item[${i}] missing { id }`);
+      if (typeof item.text !== 'string' || item.text.length === 0) {
+        throw new Error(`upsertMany() item[${i}] requires { text: non-empty string }`);
+      }
+    }
+    const texts = items.map(it => it.text);
+    const { embeddings } = await this.embed.embed({ input: texts });
+    if (!Array.isArray(embeddings) || embeddings.length !== items.length) {
+      throw new Error(
+        `Embedding provider returned ${embeddings?.length} vectors for ${items.length} inputs. ` +
+        'Check that the provider supports batched embed() with string[] input.'
+      );
+    }
+    const records = items.map((it, i) => {
+      const vec = embeddings[i];
+      if (!Array.isArray(vec) || vec.length !== this.dimension) {
+        throw new Error(
+          `Embedding dimension mismatch on item[${i}] (id=${it.id}): expected ${this.dimension}, got ${vec?.length}.`
+        );
+      }
+      return { id: it.id, text: it.text, vector: vec, metadata: it.metadata ?? null };
+    });
+    return this._upsertMany(records);
+  }
+
   async search({ text, topK = 10, filter } = {}) {
     if (typeof text !== 'string' || text.length === 0) {
       throw new Error('search() requires { text: non-empty string }');
@@ -82,6 +123,13 @@ class VectorStore {
   async _connect() { throw new Error(`${this.constructor.name} must implement _connect()`); }
   async _createTableIfMissing() { throw new Error(`${this.constructor.name} must implement _createTableIfMissing()`); }
   async _upsert() { throw new Error(`${this.constructor.name} must implement _upsert()`); }
+
+  // Default: sequential upsert. Backends should override for a real batch path.
+  async _upsertMany(records) {
+    const results = [];
+    for (const r of records) results.push(await this._upsert(r));
+    return results;
+  }
   async _search() { throw new Error(`${this.constructor.name} must implement _search()`); }
   async _delete() { throw new Error(`${this.constructor.name} must implement _delete()`); }
 

@@ -46,6 +46,12 @@ export class VectorStore {
   readonly dimension: number;
   init(): Promise<void>;
   upsert(p: UpsertParams): Promise<{ id: string }>;
+  /**
+   * Batch upsert. Embeds all `text` values in a single embed() call and
+   * persists via the backend's batched path (SQLite: prepared-stmt transaction;
+   * HANA: multi-row MERGE INTO, chunked at `upsertChunkSize` — default 100).
+   */
+  upsertMany(items: UpsertParams[]): Promise<{ id: string }[]>;
   search<M = Record<string, unknown>>(p: SearchParams): Promise<SearchHit<M>[]>;
   delete(p: { id: string }): Promise<unknown>;
   dropTable(): Promise<void>;
@@ -69,6 +75,8 @@ export interface HanaConnection {
 }
 export interface HanaVectorStoreOptions extends VectorStoreOptions {
   connection: HanaConnection;
+  /** Max rows per multi-row MERGE INTO in upsertMany. Default: 100. */
+  upsertChunkSize?: number;
 }
 export class HanaVectorStore extends VectorStore {
   constructor(options: HanaVectorStoreOptions);

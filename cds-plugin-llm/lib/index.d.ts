@@ -408,3 +408,62 @@ export interface RunToolsResult {
  *   console.log(result.text);  // final assistant answer
  */
 export function runTools(options: RunToolsOptions): Promise<RunToolsResult>;
+
+// ---------------------------------------------------------------------------
+// Built-in middleware helpers (new in v1.3.0)
+// ---------------------------------------------------------------------------
+
+export interface RateLimitOptions {
+  /** Burst allowance — max tokens the bucket can hold. */
+  capacity: number;
+  /** Steady-state refill rate. */
+  refillPerSecond: number;
+  /**
+   * Derives a bucket key from the request context. Buckets are per-key,
+   * so different keys have independent limits. Default: always 'global'.
+   */
+  keyFn?: (ctx: MiddlewareContext) => string;
+  /**
+   * 'throw' (default) throws an error with `code: 'RATE_LIMITED'` and
+   * `retryAfterMs` when the bucket is empty. 'wait' pauses the request
+   * until a token is available.
+   */
+  mode?: 'throw' | 'wait';
+}
+
+/**
+ * Token-bucket rate-limit middleware. In-process only — for multi-instance
+ * apps, back with Redis via your own middleware.
+ *
+ *   llm.use(rateLimit({ capacity: 60, refillPerSecond: 1 }));
+ */
+export function rateLimit(options: RateLimitOptions): Middleware;
+
+/** Minimal duck-typed OpenTelemetry span used by the otel middleware. */
+export interface OtelSpanLike {
+  setAttribute?(key: string, value: unknown): void;
+  recordException?(err: unknown): void;
+  setStatus?(status: { code: number; message?: string }): void;
+  end?(): void;
+}
+
+/** Minimal duck-typed OpenTelemetry tracer used by the otel middleware. */
+export interface OtelTracerLike {
+  startSpan(name: string): OtelSpanLike;
+}
+
+export interface OtelOptions {
+  /** OTel tracer (e.g. `trace.getTracer('cap-app')`). */
+  tracer: OtelTracerLike;
+  /** Span name prefix. Default: 'llm.'. Resulting spans: 'llm.chat', 'llm.stream', 'llm.embed'. */
+  spanNamePrefix?: string;
+  /** Value for the `gen_ai.system` attribute (e.g. 'anthropic', 'ollama'). */
+  systemAttribute?: string;
+}
+
+/**
+ * OpenTelemetry middleware. Duck-typed against @opentelemetry/api so no
+ * hard dependency. Span attributes follow the GenAI semantic conventions
+ * where possible (`gen_ai.system`, `gen_ai.usage.*`, etc.).
+ */
+export function otel(options: OtelOptions): Middleware;

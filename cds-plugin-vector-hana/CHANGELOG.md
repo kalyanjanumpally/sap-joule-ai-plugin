@@ -4,6 +4,20 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-07-29
+
+### Added
+
+- **`upsertMany(items)` batch API.** Embeds all `text` values in a single `embed()` round-trip (providers that support `input: string[]` return N vectors at once) and persists via a backend-specific batched path.
+  - **SQLite backend**: prepared-statement inside a `db.transaction()` — atomic and fast.
+  - **HANA backend**: multi-row `MERGE INTO` via `UNION ALL` of `DUMMY` SELECTs. Chunked at `upsertChunkSize` (default 100) to cap query text size / parameter count.
+- New tests (19 total): SQLite batch insert / update / validation / provider-count mismatch; HANA multi-row MERGE SQL shape + chunking behavior.
+- TS defs: `upsertMany` on `VectorStore`, `upsertChunkSize` on `HanaVectorStoreOptions`.
+
+### Notes
+
+- Additive — existing `upsert()` unchanged. Consumers on `^0.1` can bump to `^0.2` with zero code changes.
+
 ## [0.1.0] — 2026-07-29
 
 Initial release.
