@@ -185,7 +185,7 @@ test('init: app name is derived from directory basename, lowercased', async () =
 test('init: generated package.json is valid JSON for every provider', async () => {
   const parent = tmpDir();
   try {
-    for (const provider of ['anthropic', 'ollama', 'groq', 'openai-compatible', 'genai-hub']) {
+    for (const provider of ['anthropic', 'ollama', 'groq', 'openai-compatible', 'azure-openai', 'genai-hub']) {
       const dir = path.join(parent, `app-${provider}`);
       const ctx = makeCtx({ positionals: [dir], opts: { provider } });
       const code = await initCmd(ctx);

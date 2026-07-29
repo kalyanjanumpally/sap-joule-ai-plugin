@@ -301,6 +301,19 @@ export class OpenAICompatibleLLMService extends LLMService {
 
 export class GroqLLMService extends OpenAICompatibleLLMService {}
 
+/**
+ * Azure OpenAI provider. Same request/response shapes as OpenAI, but URL
+ * scheme is per-deployment and auth is `api-key` header (not Bearer).
+ * Configure via `credentials.{endpoint, apiKey, deployment, embeddingDeployment?, apiVersion?}`.
+ * @since 1.15.0
+ */
+export class AzureOpenAILLMService extends OpenAICompatibleLLMService {
+  endpoint: string;
+  deployment: string;
+  embeddingDeployment: string;
+  apiVersion: string;
+}
+
 export class GenAIHubLLMService extends OpenAICompatibleLLMService {
   aiCoreUrl: string;
   tokenUrl: string;

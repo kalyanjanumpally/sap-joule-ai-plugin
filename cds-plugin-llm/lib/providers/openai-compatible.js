@@ -47,6 +47,14 @@ class OpenAICompatibleLLMService extends LLMService {
   }
 
   /**
+   * Hook: return the URL for POST /embeddings. Subclasses may override for
+   * path variations (e.g. Azure OpenAI's per-deployment URL scheme).
+   */
+  _embedEndpoint() {
+    return `${this.baseUrl}/embeddings`;
+  }
+
+  /**
    * Hook: return request headers. Async so subclasses can fetch OAuth tokens.
    * Subclasses override to add resource-group headers, replace Bearer auth, etc.
    */
@@ -316,7 +324,7 @@ OpenAICompatibleLLMService.prototype._stream = async function* _stream(
  */
 OpenAICompatibleLLMService.prototype._embed = async function _embed({ model, input }) {
   const body = { model, input };
-  const res = await fetch(`${this.baseUrl}/embeddings`, {
+  const res = await fetch(this._embedEndpoint(), {
     method: 'POST',
     headers: await this._headers(),
     body: JSON.stringify(body),

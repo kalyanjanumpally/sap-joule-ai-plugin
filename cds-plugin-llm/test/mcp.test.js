@@ -393,7 +393,7 @@ test('buildResources: returns active-provider + supported-providers by default',
   assert.equal(active.defaultMaxTokens, 512);
 
   const supported = await resources[1].read();
-  assert.equal(supported.supported.length, 5);
+  assert.equal(supported.supported.length, 6);
 });
 
 // ---- list-changed notifications (1.13.0) ----------------------------------
@@ -704,13 +704,13 @@ test('buildResources: includes cache-stats resource when cacheStats supplied', a
   assert.deepEqual(await cache.read(), { hits: 5, misses: 2, size: 7 });
 });
 
-test('buildTools list_providers: includes activeProvider + all 5 kinds', async () => {
+test('buildTools list_providers: includes activeProvider + all provider kinds', async () => {
   const tools = buildTools({ provider: stubProvider(), providerKind: 'groq', providerModel: 'llama-3.3-70b-versatile' });
   const t = tools.find(t => t.name === 'list_providers');
   const res = await t.handler({});
   assert.equal(res.activeProvider, 'groq');
   assert.equal(res.activeModel, 'llama-3.3-70b-versatile');
-  assert.equal(res.supported.length, 5);
+  assert.equal(res.supported.length, 6);
 });
 
 // ---- end-to-end via saptarishi-llm mcp subprocess -------------------------
@@ -819,7 +819,7 @@ test('CLI mcp: subprocess handshake works over stdio', async () => {
     assert.equal(lp.result.isError, false);
     const payload = JSON.parse(lp.result.content[0].text);
     assert.equal(payload.activeProvider, 'ollama');
-    assert.equal(payload.supported.length, 5);
+    assert.equal(payload.supported.length, 6);
 
     // resources/list should include the two config:// resources
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'resources/list' }) + '\n');

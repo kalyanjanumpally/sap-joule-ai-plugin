@@ -27,6 +27,7 @@ function envVarsFor(kind) {
     case 'ollama':             return ['OLLAMA_URL (optional, default http://localhost:11434)'];
     case 'groq':               return ['GROQ_API_KEY'];
     case 'openai-compatible':  return ['OPENAI_API_KEY', 'OPENAI_BASE_URL (optional)'];
+    case 'azure-openai':       return ['AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_DEPLOYMENT', 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT (optional)', 'AZURE_OPENAI_API_VERSION (optional)'];
     case 'genai-hub':          return ['AICORE_URL', 'AICORE_TOKEN_URL', 'AICORE_CLIENT_ID', 'AICORE_CLIENT_SECRET', 'AICORE_DEPLOYMENT_ID', 'AICORE_RESOURCE_GROUP (optional)'];
     default: return [];
   }

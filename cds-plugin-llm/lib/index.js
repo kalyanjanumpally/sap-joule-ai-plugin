@@ -10,6 +10,7 @@ module.exports = {
   OllamaLLMService: require('./providers/ollama'),
   GenAIHubLLMService: require('./providers/genai-hub'),
   OpenAICompatibleLLMService: require('./providers/openai-compatible'),
+  AzureOpenAILLMService: require('./providers/azure-openai'),
   GroqLLMService: require('./providers/groq'),
   // Vision helpers
   imageFromFile,

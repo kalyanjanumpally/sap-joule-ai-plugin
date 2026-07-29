@@ -4,6 +4,42 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] — 2026-07-29
+
+### Added
+
+- **Azure OpenAI provider** (`llm-azure-openai`). Same chat/embed shapes as OpenAI, but per-deployment URL scheme and `api-key` header (not Bearer). Real enterprise value for SAP shops that already run Azure OpenAI under their existing Microsoft procurement + governance stack.
+
+  ```json
+  { "cds": { "requires": { "llm": {
+      "kind": "llm-azure-openai",
+      "credentials": {
+        "endpoint": "https://my-aoai.openai.azure.com",
+        "apiKey":   "${AZURE_OPENAI_API_KEY}",
+        "deployment": "my-gpt4o",
+        "embeddingDeployment": "my-text-embedding-3-small",
+        "apiVersion": "2024-10-21"
+      }
+  } } } }
+  ```
+
+  - **URL scheme**: `<endpoint>/openai/deployments/<deployment>/chat/completions?api-version=<v>` for chat, `<endpoint>/openai/deployments/<embeddingDeployment>/embeddings?api-version=<v>` for embeddings.
+  - **Separate embedding deployment** — Azure typically pins each model to its own deployment; supply `embeddingDeployment` to route `/embeddings` calls to a different deployment than chat. Defaults to `deployment` when not set.
+  - **Default `apiVersion`**: `2024-10-21`. Override for `-preview` API versions.
+  - Endpoint URLs auto-normalize (trailing slash stripped).
+  - Reuses the existing OpenAI-compatible request/response translation — vision, PDF (base64 + file_id), tool use, structured output, streaming, retries, and response caching all work unchanged.
+- **`_embedEndpoint()` hook** added to `OpenAICompatibleLLMService` — subclasses (Azure, GenAI Hub, future ones) can now override embeddings URL construction alongside the existing `_endpoint()` hook.
+- **CLI + scaffolder support**: `saptarishi-llm --provider azure-openai` and `saptarishi-llm init foo --provider azure-openai`. Env vars: `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`, plus optional `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` and `AZURE_OPENAI_API_VERSION`.
+- MCP `list_providers` tool + `config://supported-providers` resource now include Azure.
+- 12 new tests (279 total):
+  - `azure-openai.test.js` (12): missing-credentials error message, embeddingDeployment defaults to deployment, default apiVersion, trailing-slash normalization, `_endpoint` + `_embedEndpoint` URL construction, `api-key` header (not Bearer), chat POSTs to per-deployment URL, embed POSTs to per-embedding-deployment URL, custom apiVersion applied to both endpoints, CLI `providerFactory` builds AzureOpenAILLMService, missing env vars listed
+- TS defs: `AzureOpenAILLMService` extends `OpenAICompatibleLLMService`.
+
+### Notes
+
+- Additive — `^1.14` consumers bump to `^1.15` with zero code changes; the new provider is opt-in via configuration.
+- Zero new dependencies.
+
 ## [1.14.0] — 2026-07-29
 
 ### Added

@@ -7,6 +7,13 @@ const PROVIDER_ENV_VARS = {
   ollama:             ['OLLAMA_URL=http://localhost:11434'],
   groq:               ['GROQ_API_KEY=gsk-your-key-here'],
   'openai-compatible': ['OPENAI_API_KEY=sk-your-key-here', 'OPENAI_BASE_URL=https://api.openai.com/v1'],
+  'azure-openai': [
+    'AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com',
+    'AZURE_OPENAI_API_KEY=<from Azure Portal -> Keys and Endpoint>',
+    'AZURE_OPENAI_DEPLOYMENT=<your deployment name>',
+    'AZURE_OPENAI_EMBEDDING_DEPLOYMENT=<optional; separate deployment for embeddings>',
+    'AZURE_OPENAI_API_VERSION=2024-10-21',
+  ],
   'genai-hub': [
     'AICORE_URL=https://api.ai.<region>.hana.ondemand.com',
     'AICORE_TOKEN_URL=https://<tenant>.authentication.<region>.hana.ondemand.com/oauth/token',
@@ -31,6 +38,15 @@ function llmConfigFor(kind, model) {
       break;
     case 'openai-compatible':
       base.credentials = { apiKey: '${OPENAI_API_KEY}', baseUrl: '${OPENAI_BASE_URL}' };
+      break;
+    case 'azure-openai':
+      base.credentials = {
+        endpoint: '${AZURE_OPENAI_ENDPOINT}',
+        apiKey: '${AZURE_OPENAI_API_KEY}',
+        deployment: '${AZURE_OPENAI_DEPLOYMENT}',
+        embeddingDeployment: '${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}',
+        apiVersion: '${AZURE_OPENAI_API_VERSION}',
+      };
       break;
     case 'genai-hub':
       base.credentials = {

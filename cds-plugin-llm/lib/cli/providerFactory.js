@@ -1,10 +1,11 @@
-const PROVIDER_KINDS = ['anthropic', 'ollama', 'groq', 'openai-compatible', 'genai-hub'];
+const PROVIDER_KINDS = ['anthropic', 'ollama', 'groq', 'openai-compatible', 'azure-openai', 'genai-hub'];
 
 const PROVIDER_DEFAULTS = {
   anthropic:          { model: 'claude-opus-4-7', envKey: 'ANTHROPIC_API_KEY' },
   ollama:             { model: 'qwen2.5:14b',     envBaseUrl: 'OLLAMA_URL', defaultBaseUrl: 'http://localhost:11434' },
   groq:               { model: 'llama-3.3-70b-versatile', envKey: 'GROQ_API_KEY' },
   'openai-compatible': { model: 'gpt-4o', envKey: 'OPENAI_API_KEY', envBaseUrl: 'OPENAI_BASE_URL' },
+  'azure-openai':     { model: '(deployment-pinned)' },
   'genai-hub':        { model: 'gpt-4o' },
 };
 
@@ -54,6 +55,24 @@ async function buildProvider({ opts, env }) {
     providerOpts.credentials.baseUrl = baseUrl;
     const OpenAICompatibleLLMService = require('../providers/openai-compatible');
     return { provider: makeProvider(OpenAICompatibleLLMService, providerOpts), kind, model };
+  }
+
+  if (kind === 'azure-openai') {
+    const missing = ['AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_DEPLOYMENT']
+      .filter(k => !env[k]);
+    if (missing.length > 0) throw new Error(`missing env vars: ${missing.join(', ')}`);
+    providerOpts.credentials = {
+      endpoint: env.AZURE_OPENAI_ENDPOINT,
+      apiKey: env.AZURE_OPENAI_API_KEY,
+      deployment: env.AZURE_OPENAI_DEPLOYMENT,
+      embeddingDeployment: env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
+      apiVersion: env.AZURE_OPENAI_API_VERSION,
+    };
+    const AzureOpenAILLMService = require('../providers/azure-openai');
+    // For Azure, the deployment pins the model — display it as the model
+    // in `verify` and `providers` output.
+    const displayModel = env.AZURE_OPENAI_DEPLOYMENT;
+    return { provider: makeProvider(AzureOpenAILLMService, providerOpts), kind, model: displayModel };
   }
 
   if (kind === 'genai-hub') {

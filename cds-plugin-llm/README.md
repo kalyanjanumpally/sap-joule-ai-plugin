@@ -86,6 +86,7 @@ Set the appropriate env var (see `.env.example`):
 | `llm-ollama` | Local Ollama daemon | Free | Working |
 | `llm-groq` | Groq's hosted Llama/Mixtral/Qwen (sub-second inference) | Generous free tier | Working |
 | `llm-openai-compatible` | Any endpoint speaking OpenAI's `/chat/completions` (OpenAI, Together, Fireworks, DeepSeek direct, LM Studio, LocalAI...) | Varies | Working |
+| `llm-azure-openai` | Azure OpenAI Service (per-deployment URL + `api-key` header) | Paid via Azure subscription | Working (mock-verified end-to-end) |
 | `llm-genai-hub` | SAP AI Core / Generative AI Hub | Paid (extended plan) | Spec-compliant · mock-verified end-to-end · live verify open (community help welcome) |
 
 ## Stability
@@ -1035,7 +1036,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.12**: MCP progress notifications on `tools/call`~~ ✓ shipped in v1.12.0
 - ~~**1.13**: MCP list-changed notifications (broadcasts on hot-reload)~~ ✓ shipped in v1.13.0
 - ~~**1.14**: OpenAI Files API for URL PDFs (`uploadPdfFromUrl`)~~ ✓ shipped in v1.14.0
-- **1.15+**: per-session provider overrides, MCP OAuth2 (client-credentials), CAP model registry (providers in `.cds` files), Azure OpenAI Files API path
+- ~~**1.15**: Azure OpenAI provider~~ ✓ shipped in v1.15.0
+- **1.16+**: per-session provider overrides, MCP OAuth2 (client-credentials), CAP model registry (providers in `.cds` files), Bedrock + Vertex provider paths
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License
