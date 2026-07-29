@@ -9,6 +9,7 @@ const COMMANDS = {
   verify: require('./commands/verify'),
   providers: require('./commands/providers'),
   init: require('./commands/init'),
+  mcp: require('./commands/mcp'),
   help: async () => { printHelp(); return 0; },
 };
 
@@ -93,6 +94,7 @@ commands:
   verify      Sanity-check provider config (connect + tiny chat)
   providers   List supported provider kinds
   init        Scaffold a CAP app pre-wired to this plugin
+  mcp         Expose the configured provider as an MCP server (stdio)
   help        Show this help
 
 common options:
@@ -120,6 +122,7 @@ examples:
   saptarishi-llm embed -p "purchase order for steel coils" --json
   saptarishi-llm verify --provider anthropic
   saptarishi-llm init joule-demo --provider groq
+  saptarishi-llm mcp                    # register in Claude Desktop config
 `);
 }
 

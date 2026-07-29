@@ -642,6 +642,40 @@ saptarishi-llm embed -p "one\n---\ntwo\n---\nthree"      # 3 vectors from 1 call
 saptarishi-llm verify --provider genai-hub --json
 ```
 
+### Expose as an MCP server (new in v1.7.0)
+
+`saptarishi-llm mcp` runs a Model Context Protocol server over stdio that exposes the configured provider as tools any MCP client can call. Register it in Claude Desktop, Cursor, Zed, or any other MCP-capable client and those clients gain a `chat` / `embed` / `verify` / `list_providers` tool backed by **your** provider config — with all its middleware, caching, rate limits, and OTel tracing.
+
+The point: one MCP server = "the sanctioned way to call an LLM at MyCompany". Centralized credentials, centralized policy, developer productivity everywhere.
+
+Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+```jsonc
+{
+  "mcpServers": {
+    "saptarishi-llm": {
+      "command": "npx",
+      "args": ["-y", "@saptarishi/cds-plugin-llm", "mcp"],
+      "env": {
+        "SAPTARISHI_LLM_PROVIDER": "groq",
+        "GROQ_API_KEY": "gsk-..."
+      }
+    }
+  }
+}
+```
+
+Tools exposed:
+
+| Tool | Purpose |
+|------|---------|
+| `chat` | Send a prompt, return text. `{ prompt, system?, maxTokens? }` |
+| `embed` | Embed input(s) into vectors. `{ input: string \| string[] }` |
+| `verify` | Tiny probe against the provider. Returns `{ ok, latencyMs, model, text }`. |
+| `list_providers` | Enumerate every supported provider kind with default models. |
+
+Uses a hand-rolled MCP implementation (2024-11-05 spec) over stdio JSON-RPC 2.0 — **zero new dependencies**. Protocol: `initialize`, `tools/list`, `tools/call`, `ping`, notifications. Tool errors surface as `result.isError: true` per spec so the model can recover, not as JSON-RPC errors.
+
 ### Scaffold a fresh CAP project (new in v1.6.0)
 
 `init` creates a fully-wired CAP app in seconds — no manual `package.json` editing, no CDS boilerplate:
@@ -817,7 +851,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.4**: `redisRateLimit` middleware; HANA HNSW index config~~ ✓ shipped in v1.4.0 (llm) / v0.3.0 (vector-hana)
 - ~~**1.5**: `saptarishi-llm` CLI~~ ✓ shipped in v1.5.0
 - ~~**1.6**: `saptarishi-llm init` CAP-app scaffolder~~ ✓ shipped in v1.6.0
-- **1.7+**: OpenAI Files API for URL PDFs, HANA IVF-Flat index option, per-provider prompt-template registry, streaming SSE endpoint in the scaffold, MCP server exposing the plugin
+- ~~**1.7**: `saptarishi-llm mcp` server (MCP over stdio)~~ ✓ shipped in v1.7.0
+- **1.8+**: OpenAI Files API for URL PDFs, HANA IVF-Flat index, prompt-template registry, streaming SSE endpoint in the scaffold, MCP resources + prompts (in addition to tools)
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License
