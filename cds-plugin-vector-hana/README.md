@@ -83,6 +83,51 @@ await store.init();
 
 **On BTP with a HANA service binding:** extract `credentials` from the binding and pass as `connection` directly — same shape.
 
+### HNSW vector index (new in v0.3.0)
+
+For production-scale corpora (tens of thousands of rows and up), exhaustive `COSINE_SIMILARITY` scans over every row will eventually become the bottleneck. Pass an `index` option and `init()` creates an HNSW graph index for approximate-nearest-neighbor search:
+
+```js
+const store = new HanaVectorStore({
+  embed,
+  dimension: 1536,
+  table: 'SUPPLIER_CONTRACTS',
+  connection: { /* ... */ },
+  index: {
+    type: 'hnsw',
+    similarity: 'cosine',                       // or 'l2'
+    // name: 'MY_IDX',                          // defaults to '<table>_<column>_HNSW_IDX'
+    buildParameters: { ef_construction: 200, M: 64 },
+  },
+});
+await store.init();
+```
+
+Emits:
+
+```sql
+CREATE HNSW VECTOR INDEX "SUPPLIER_CONTRACTS_embedding_HNSW_IDX"
+  ON "SUPPLIER_CONTRACTS" ("embedding")
+  SIMILARITY FUNCTION COSINE_SIMILARITY
+  BUILD PARAMETERS ('ef_construction=200,M=64')
+```
+
+Requires HANA Cloud QRC 2/2024 or later (when HNSW GA'd). Search queries are unchanged — HANA transparently uses the index when `COSINE_SIMILARITY` is in the `ORDER BY`.
+
+### Batch upsert (new in v0.2.0)
+
+For loading many rows at once — one embed call for the whole batch, one round-trip to persist:
+
+```js
+await store.upsertMany([
+  { id: 'contract-1', text: '...', metadata: { region: 'EMEA' } },
+  { id: 'contract-2', text: '...', metadata: { region: 'APAC' } },
+  // ...
+]);
+```
+
+SQLite backend runs a prepared statement inside a transaction. HANA backend uses a multi-row `MERGE INTO` (`UNION ALL` of DUMMY selects), chunked at `upsertChunkSize` (default 100).
+
 ## What the SQL actually does (HANA backend)
 
 ```sql

@@ -167,6 +167,72 @@ test('HanaVectorStore.upsertMany: chunks large batches at upsertChunkSize', asyn
   assert.equal(merges[2].params.length, 20); // 4 * 5
 });
 
+test('HanaVectorStore: rejects invalid index.type', () => {
+  assert.throws(
+    () => new HanaVectorStore({
+      embed: fakeEmbedder, dimension: 4, table: 'X',
+      connection: { host: 'x', port: 443, user: 'u', password: 'p' },
+      index: { type: 'ivf', similarity: 'cosine' },
+    }),
+    /index\.type must be 'hnsw'/,
+  );
+});
+
+test('HanaVectorStore: rejects invalid index.similarity', () => {
+  assert.throws(
+    () => new HanaVectorStore({
+      embed: fakeEmbedder, dimension: 4, table: 'X',
+      connection: { host: 'x', port: 443, user: 'u', password: 'p' },
+      index: { type: 'hnsw', similarity: 'jaccard' },
+    }),
+    /index\.similarity must be/,
+  );
+});
+
+test('HanaVectorStore: init creates HNSW index with default similarity=cosine', async () => {
+  state.executed = [];
+  const store = new HanaVectorStore({
+    embed: fakeEmbedder, dimension: 4, table: 'CONTRACTS',
+    connection: { host: 'x', port: 443, user: 'u', password: 'p' },
+    index: { type: 'hnsw' },
+  });
+  await store.init();
+  const idx = state.executed.find(x => /CREATE HNSW VECTOR INDEX/i.test(x.sql));
+  assert.ok(idx, 'HNSW index CREATE was not issued');
+  assert.match(idx.sql, /"CONTRACTS_embedding_HNSW_IDX"/);
+  assert.match(idx.sql, /ON "CONTRACTS" \("embedding"\)/);
+  assert.match(idx.sql, /SIMILARITY FUNCTION COSINE_SIMILARITY/);
+  assert.doesNotMatch(idx.sql, /BUILD PARAMETERS/);
+});
+
+test('HanaVectorStore: HNSW index honors similarity=l2 + buildParameters + custom name', async () => {
+  state.executed = [];
+  const store = new HanaVectorStore({
+    embed: fakeEmbedder, dimension: 4, table: 'DOCS',
+    connection: { host: 'x', port: 443, user: 'u', password: 'p' },
+    index: {
+      type: 'hnsw',
+      similarity: 'l2',
+      name: 'MY_CUSTOM_IDX',
+      buildParameters: { ef_construction: 200, M: 64 },
+    },
+  });
+  await store.init();
+  const idx = state.executed.find(x => /CREATE HNSW VECTOR INDEX/i.test(x.sql));
+  assert.ok(idx);
+  assert.match(idx.sql, /"MY_CUSTOM_IDX"/);
+  assert.match(idx.sql, /SIMILARITY FUNCTION L2DISTANCE/);
+  assert.match(idx.sql, /BUILD PARAMETERS \('ef_construction=200,M=64'\)/);
+});
+
+test('HanaVectorStore: no index option => no HNSW CREATE issued', async () => {
+  state.executed = [];
+  const store = makeStore();
+  await store.init();
+  const idx = state.executed.find(x => /CREATE HNSW/i.test(x.sql));
+  assert.equal(idx, undefined);
+});
+
 test('HanaVectorStore: dropTable issues DROP TABLE', async () => {
   state.executed = [];
   const store = makeStore();

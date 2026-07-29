@@ -28,6 +28,17 @@ class HanaVectorStore extends VectorStore {
   constructor(options = {}) {
     super(options);
     this.connection = options.connection ?? {};
+    // { type: 'hnsw', similarity: 'cosine' | 'l2', name?, buildParameters? }
+    this.index = options.index ?? null;
+    if (this.index) {
+      if (this.index.type !== 'hnsw') {
+        throw new Error(`HanaVectorStore: index.type must be 'hnsw' (got ${this.index.type})`);
+      }
+      const sim = this.index.similarity ?? 'cosine';
+      if (sim !== 'cosine' && sim !== 'l2') {
+        throw new Error(`HanaVectorStore: index.similarity must be 'cosine' or 'l2' (got ${sim})`);
+      }
+    }
   }
 
   async _connect() {
@@ -65,6 +76,23 @@ class HanaVectorStore extends VectorStore {
         "${this.metadataColumn}"  NCLOB
       )
     `;
+    await this._exec(sql);
+    if (this.index) await this._createHnswIndex();
+  }
+
+  async _createHnswIndex() {
+    const sim = this.index.similarity ?? 'cosine';
+    const simFn = sim === 'cosine' ? 'COSINE_SIMILARITY' : 'L2DISTANCE';
+    const idxName = this.index.name ?? `${this.table}_${this.embeddingColumn}_HNSW_IDX`;
+    // HANA HNSW vector index (HANA Cloud QRC 2/2024+). BUILD PARAMETERS accept
+    // a comma-separated string: e.g. 'ef_construction=200,M=64'.
+    const buildParams = this.index.buildParameters
+      ? Object.entries(this.index.buildParameters).map(([k, v]) => `${k}=${v}`).join(',')
+      : '';
+    const withClause = buildParams ? ` BUILD PARAMETERS ('${buildParams}')` : '';
+    const sql = `CREATE HNSW VECTOR INDEX "${idxName}" ` +
+                `ON "${this.table}" ("${this.embeddingColumn}") ` +
+                `SIMILARITY FUNCTION ${simFn}${withClause}`;
     await this._exec(sql);
   }
 

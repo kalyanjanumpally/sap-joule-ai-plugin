@@ -24,4 +24,6 @@ module.exports = {
   // Built-in middleware helpers (new in 1.3.0)
   rateLimit: require('./middleware/rateLimit').rateLimit,
   otel: require('./middleware/otel').otel,
+  // Redis-backed rate limit (new in 1.4.0)
+  redisRateLimit: require('./middleware/redisRateLimit').redisRateLimit,
 };

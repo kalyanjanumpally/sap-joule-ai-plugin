@@ -24,6 +24,9 @@ import {
   otel,
   OtelOptions,
   OtelTracerLike,
+  redisRateLimit,
+  RedisRateLimitOptions,
+  RedisClientLike,
   // Types
   ChatRequest,
   ChatResponse,
@@ -206,6 +209,17 @@ async function example() {
   };
   const otelOpts: OtelOptions = { tracer: fakeTracer, spanNamePrefix: 'ai.', systemAttribute: 'groq' };
   groq.use(otel(otelOpts));
+
+  const fakeRedis: RedisClientLike = { async eval() { return [1, 0]; } };
+  const rrlOpts: RedisRateLimitOptions = {
+    redis: fakeRedis,
+    capacity: 30,
+    refillPerSecond: 0.5,
+    keyFn: (ctx) => (ctx.meta.user as string) ?? 'anon',
+    keyPrefix: 'app:',
+    mode: 'throw',
+  };
+  groq.use(redisRateLimit(rrlOpts));
 
   // ---- runTools (new in 1.1.0) -------------------------------------------
   const tools: RunnableTool[] = [{

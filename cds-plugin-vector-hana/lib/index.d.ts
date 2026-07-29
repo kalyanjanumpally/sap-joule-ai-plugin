@@ -73,10 +73,30 @@ export interface HanaConnection {
   password: string;
   [key: string]: unknown;
 }
+/**
+ * Vector index config for the HANA backend. Creates an HNSW vector index at
+ * table-creation time — required for scaling beyond a few thousand rows.
+ * Requires HANA Cloud QRC 2/2024 or later.
+ */
+export interface HnswIndexOptions {
+  type: 'hnsw';
+  /** 'cosine' (default) uses COSINE_SIMILARITY; 'l2' uses L2DISTANCE. */
+  similarity?: 'cosine' | 'l2';
+  /** Explicit index name. Default: '<table>_<embeddingColumn>_HNSW_IDX'. */
+  name?: string;
+  /**
+   * HANA HNSW BUILD PARAMETERS. Common keys: `ef_construction`, `M`.
+   * Serialized as `k1=v1,k2=v2` inside `BUILD PARAMETERS (...)`.
+   */
+  buildParameters?: Record<string, string | number>;
+}
+
 export interface HanaVectorStoreOptions extends VectorStoreOptions {
   connection: HanaConnection;
   /** Max rows per multi-row MERGE INTO in upsertMany. Default: 100. */
   upsertChunkSize?: number;
+  /** Create an HNSW vector index at init() time. Required for production scale. */
+  index?: HnswIndexOptions;
 }
 export class HanaVectorStore extends VectorStore {
   constructor(options: HanaVectorStoreOptions);

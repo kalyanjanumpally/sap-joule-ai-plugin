@@ -4,6 +4,21 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-07-29
+
+### Added
+
+- **`index` option on `HanaVectorStore` — creates an HNSW vector index at table-creation time.** Required for scaling beyond a few thousand rows: HANA's HNSW graph index enables approximate-nearest-neighbor (ANN) search that stays fast even on millions of vectors, versus the exhaustive scan of vanilla `COSINE_SIMILARITY`. Requires HANA Cloud QRC 2/2024 or later.
+  - `index.type` — must be `'hnsw'`
+  - `index.similarity` — `'cosine'` (default, `COSINE_SIMILARITY`) or `'l2'` (`L2DISTANCE`)
+  - `index.name` — explicit index name (default: `'<table>_<embeddingColumn>_HNSW_IDX'`)
+  - `index.buildParameters` — dict serialized into HANA's `BUILD PARAMETERS ('k=v,...')` clause (common keys: `ef_construction`, `M`)
+- 5 new tests (24 total) verifying: default naming + `COSINE_SIMILARITY`, custom `L2DISTANCE` + name + build params, no-op when `index` is unset, constructor validation of `type`/`similarity`.
+
+### Notes
+
+- Additive — existing tables and existing `HanaVectorStore` constructions without `index` behave exactly as in 0.2.0.
+
 ## [0.2.0] — 2026-07-29
 
 ### Added

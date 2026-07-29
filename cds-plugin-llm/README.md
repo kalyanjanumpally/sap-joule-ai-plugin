@@ -569,6 +569,26 @@ Emits one span per `chat` / `stream` / `embed` call. Attributes follow the emerg
 
 Stream spans stay open through the whole iterator (span ends on the `done` chunk, on early break, or on error — never leaks).
 
+#### `redisRateLimit` — shared bucket across CF instances (new in v1.4.0)
+
+The in-process `rateLimit` is fine for single-instance apps. For multi-instance CF deployments where a shared quota must be enforced globally, back the bucket with Redis.
+
+```js
+const Redis = require('ioredis');
+const { redisRateLimit } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(redisRateLimit({
+  redis: new Redis(process.env.REDIS_URL),
+  capacity: 60,
+  refillPerSecond: 1,
+  keyFn: (ctx) => ctx.meta.user ?? 'anon',
+  keyPrefix: 'ratelimit:llm:',   // default 'saptarishi:llm:rl:'
+  mode: 'throw',                  // 'throw' | 'wait'
+}));
+```
+
+Uses an atomic Lua `EVAL` so two instances checking the bucket at the same time cannot both succeed when only one token is left. Duck-typed client — any object with an `eval(script, numKeys, ...args)` promise API satisfies (works with `ioredis` and `node-redis` v4+ out of the box). On BTP, bind a Redis service to your CF app and pull the URL from `VCAP_SERVICES`.
+
 ## Response caching (new in v0.9.0)
 
 Opt-in per-instance LRU cache with TTL. Skips tool-use calls (side-effects) and streaming (partial responses). Hits return the same `ChatResponse` shape with `cached: true` set.
@@ -704,7 +724,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.1**: `runTools()` — automatic multi-turn tool-use loop~~ ✓ shipped in v1.1.0
 - ~~**1.2**: middleware / interceptor pattern~~ ✓ shipped in v1.2.0
 - ~~**1.3**: built-in `rateLimit` + `otel` middlewares; vector store `upsertMany`~~ ✓ shipped in v1.3.0 (llm) / v0.2.0 (vector-hana)
-- **1.4+**: OpenAI Files API for URL PDFs, HANA HNSW index config, CLI, Redis-backed rate-limit middleware
+- ~~**1.4**: `redisRateLimit` middleware; HANA HNSW index config~~ ✓ shipped in v1.4.0 (llm) / v0.3.0 (vector-hana)
+- **1.5+**: OpenAI Files API for URL PDFs, CLI, HANA IVF-Flat index option, per-provider prompt-template registry
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

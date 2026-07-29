@@ -467,3 +467,34 @@ export interface OtelOptions {
  * where possible (`gen_ai.system`, `gen_ai.usage.*`, etc.).
  */
 export function otel(options: OtelOptions): Middleware;
+
+/**
+ * Minimal duck-typed Redis client. `ioredis` and `node-redis` (v4+ with
+ * `.eval` promise API) both satisfy this shape.
+ */
+export interface RedisClientLike {
+  eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
+}
+
+export interface RedisRateLimitOptions {
+  /** Redis client (ioredis or node-redis v4+). */
+  redis: RedisClientLike;
+  /** Burst allowance — max tokens the bucket can hold. */
+  capacity: number;
+  /** Steady-state refill rate. */
+  refillPerSecond: number;
+  /** Bucket key derivation. Default: always 'global'. */
+  keyFn?: (ctx: MiddlewareContext) => string;
+  /** Redis key prefix. Default: 'saptarishi:llm:rl:'. */
+  keyPrefix?: string;
+  /** 'throw' (default) or 'wait'. Same semantics as `rateLimit`. */
+  mode?: 'throw' | 'wait';
+}
+
+/**
+ * Redis-backed token-bucket rate-limit middleware. Uses an atomic Lua
+ * EVAL so concurrent CF instances cannot race. Safe for multi-instance
+ * deployments — the bucket is shared across every process pointed at
+ * the same Redis. See `rateLimit` for the in-process variant.
+ */
+export function redisRateLimit(options: RedisRateLimitOptions): Middleware;
