@@ -52,6 +52,8 @@ Optional peer dep for the Anthropic path: `@anthropic-ai/sdk` (installed automat
 
 **TypeScript:** full type definitions ship in the package (`lib/index.d.ts`). No `@types/*` package needed.
 
+**CLI:** a `saptarishi-llm` executable ships with the package. Use it via `npx` without installing globally, or install once with `npm i -g @saptarishi/cds-plugin-llm`. See the [CLI section](#cli-new-in-v150).
+
 ## Configure
 
 Add to your CAP app's `package.json` under `cds.requires`:
@@ -589,6 +591,57 @@ llm.use(redisRateLimit({
 
 Uses an atomic Lua `EVAL` so two instances checking the bucket at the same time cannot both succeed when only one token is left. Duck-typed client — any object with an `eval(script, numKeys, ...args)` promise API satisfies (works with `ioredis` and `node-redis` v4+ out of the box). On BTP, bind a Redis service to your CF app and pull the URL from `VCAP_SERVICES`.
 
+## CLI (new in v1.5.0)
+
+A `saptarishi-llm` executable ships with the package. Handy for provider health checks in CI, quick prompt experiments from the shell, or pipelining embeddings into a downstream tool.
+
+```bash
+npx @saptarishi/cds-plugin-llm --help
+
+# or install globally
+npm install -g @saptarishi/cds-plugin-llm
+saptarishi-llm --help
+```
+
+### Commands
+
+```bash
+saptarishi-llm chat -p "explain SAP CAP in one sentence"
+saptarishi-llm stream -p "write a haiku about procurement"
+saptarishi-llm embed -p "purchase order for steel coils" --json
+saptarishi-llm verify --provider anthropic
+saptarishi-llm providers
+```
+
+### Provider selection
+
+`--provider <kind>` or `SAPTARISHI_LLM_PROVIDER` env var. Same five kinds as the CAP plugin: `anthropic`, `ollama`, `groq`, `openai-compatible`, `genai-hub`.
+
+Credentials come from env vars (never CLI flags — avoids leaking secrets into shell history):
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... saptarishi-llm chat -p "hello"
+OLLAMA_URL=http://192.168.5.13:11434 saptarishi-llm chat --provider ollama -p "hello"
+GROQ_API_KEY=gsk-... saptarishi-llm verify --provider groq
+```
+
+### Input sources
+
+Prompt can come from `--prompt` / `-p`, `--file` / `-f`, stdin, or a positional arg. Multiple sources concatenate with a blank line between them.
+
+```bash
+echo "summarize this" | saptarishi-llm chat -f contract.pdf.txt
+saptarishi-llm embed -p "one\n---\ntwo\n---\nthree"      # 3 vectors from 1 call
+```
+
+### CI health checks
+
+`verify` connects, runs a tiny probe, reports latency, and exits `0` on success / `1` on unexpected reply / `1` on error. Drop it in a nightly workflow to catch expired credentials or endpoint outages before your CAP app does.
+
+```bash
+saptarishi-llm verify --provider genai-hub --json
+```
+
 ## Response caching (new in v0.9.0)
 
 Opt-in per-instance LRU cache with TTL. Skips tool-use calls (side-effects) and streaming (partial responses). Hits return the same `ChatResponse` shape with `cached: true` set.
@@ -725,7 +778,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.2**: middleware / interceptor pattern~~ ✓ shipped in v1.2.0
 - ~~**1.3**: built-in `rateLimit` + `otel` middlewares; vector store `upsertMany`~~ ✓ shipped in v1.3.0 (llm) / v0.2.0 (vector-hana)
 - ~~**1.4**: `redisRateLimit` middleware; HANA HNSW index config~~ ✓ shipped in v1.4.0 (llm) / v0.3.0 (vector-hana)
-- **1.5+**: OpenAI Files API for URL PDFs, CLI, HANA IVF-Flat index option, per-provider prompt-template registry
+- ~~**1.5**: `saptarishi-llm` CLI~~ ✓ shipped in v1.5.0
+- **1.6+**: OpenAI Files API for URL PDFs, HANA IVF-Flat index option, per-provider prompt-template registry, CAP-app scaffolder (`saptarishi-llm init`)
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License
