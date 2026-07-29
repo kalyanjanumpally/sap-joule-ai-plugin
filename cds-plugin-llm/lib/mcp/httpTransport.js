@@ -116,8 +116,19 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
         res.writeHead(202);
         res.end();
         // Process and push reply on the SSE stream — asynchronously so the
-        // POST response isn't blocked on tool execution.
-        const reply = await server.handleMessage(msg);
+        // POST response isn't blocked on tool execution. sendNotification
+        // wired to this session's SSE stream so tool handlers can emit
+        // progress notifications back to the correct client.
+        const transportCtx = {
+          sendNotification: (notif) => {
+            try { session.res.write(`data: ${JSON.stringify(notif)}\n\n`); }
+            catch (err) {
+              logger('warn', `session ${sessionId.slice(0, 8)} notification write failed: ${err.message}`);
+              sessions.delete(sessionId);
+            }
+          },
+        };
+        const reply = await server.handleMessage(msg, transportCtx);
         if (reply) {
           try {
             session.res.write(`data: ${JSON.stringify(reply)}\n\n`);

@@ -95,18 +95,22 @@ class MCPServer {
   /**
    * Handle a single JSON-RPC message and return the reply (or null for
    * notifications). Exposed for testing — the run() loop wires this to stdio.
+   *
+   * `transportCtx.sendNotification(msg)` — optional. When supplied, tool
+   * handlers can send `notifications/progress` back to the client mid-call
+   * (MCP 2024-11-05 progress spec). The transport binds this to the specific
+   * connection/session so notifications reach the right client.
    */
-  async handleMessage(msg) {
+  async handleMessage(msg, transportCtx = {}) {
     if (!msg || typeof msg !== 'object') {
       return this._errorReply(null, ERROR_CODES.INVALID_REQUEST, 'invalid message');
     }
     if (msg.jsonrpc !== JSONRPC_VERSION) {
       return this._errorReply(msg.id ?? null, ERROR_CODES.INVALID_REQUEST, 'jsonrpc must be "2.0"');
     }
-    // Notifications have no id — no response.
     const isNotification = msg.id === undefined || msg.id === null;
     try {
-      const result = await this._dispatch(msg.method, msg.params ?? {});
+      const result = await this._dispatch(msg.method, msg.params ?? {}, transportCtx);
       if (isNotification) return null;
       return { jsonrpc: JSONRPC_VERSION, id: msg.id, result };
     } catch (err) {
@@ -116,7 +120,7 @@ class MCPServer {
     }
   }
 
-  async _dispatch(method, params) {
+  async _dispatch(method, params, transportCtx = {}) {
     switch (method) {
       case 'initialize':
         this.initialized = true;
@@ -153,8 +157,26 @@ class MCPServer {
           err.code = ERROR_CODES.METHOD_NOT_FOUND;
           throw err;
         }
+        // Build progress reporter — no-op unless the client sent a
+        // `_meta.progressToken` AND the transport supplied a notification
+        // sink. Progress spec: 2024-11-05.
+        const progressToken = params._meta?.progressToken;
+        const canSendProgress = progressToken != null && typeof transportCtx.sendNotification === 'function';
+        const reportProgress = canSendProgress
+          ? (progress, total) => {
+              const notif = {
+                jsonrpc: JSONRPC_VERSION,
+                method: 'notifications/progress',
+                params: { progressToken, progress },
+              };
+              if (typeof total === 'number') notif.params.total = total;
+              try { transportCtx.sendNotification(notif); }
+              catch (err) { this.log('warn', `progress notification failed: ${err.message}`); }
+            }
+          : () => {};
+        const handlerCtx = { reportProgress, progressToken: progressToken ?? null };
         try {
-          const value = await tool.handler(args ?? {});
+          const value = await tool.handler(args ?? {}, handlerCtx);
           return { content: [{ type: 'text', text: stringify(value) }], isError: false };
         } catch (toolErr) {
           this.log('error', `tool ${name} failed: ${toolErr?.message}`);
@@ -285,7 +307,12 @@ class MCPServer {
               stdout.write(JSON.stringify(this._errorReply(null, ERROR_CODES.PARSE_ERROR, 'parse error')) + '\n');
               return;
             }
-            const reply = await this.handleMessage(msg);
+            // Wire sendNotification so tools can push progress upstream
+            // on the same stdout stream.
+            const transportCtx = {
+              sendNotification: (notif) => stdout.write(JSON.stringify(notif) + '\n'),
+            };
+            const reply = await this.handleMessage(msg, transportCtx);
             if (reply) stdout.write(JSON.stringify(reply) + '\n');
           });
         }

@@ -318,6 +318,51 @@ test('httpTransport auth: round-trip with token works end-to-end', async () => {
   } finally { await transport.close(); }
 });
 
+test('httpTransport: progress notifications delivered to session SSE stream', async () => {
+  const server = new MCPServer({
+    name: 'progress-test', version: '1.0.0',
+    tools: [{
+      name: 'slow',
+      description: 'reports progress',
+      inputSchema: { type: 'object' },
+      handler: async (args, ctx) => {
+        ctx.reportProgress(1, 3);
+        ctx.reportProgress(2, 3);
+        ctx.reportProgress(3, 3);
+        return 'complete';
+      },
+    }],
+  });
+  const transport = await createHttpTransport({ server, port: 0 });
+  try {
+    const sse = await openSSE({ port: transport.port });
+    const endpoint = await sse.nextEvent();
+
+    await httpRequest({
+      method: 'POST', path: endpoint.data, port: transport.port,
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'tools/call',
+        params: { name: 'slow', arguments: {}, _meta: { progressToken: 'p1' } },
+      }),
+    });
+
+    // Expect 3 notifications then 1 reply
+    const events = [];
+    for (let i = 0; i < 4; i++) events.push(await sse.nextEvent());
+    const progressEvents = events.slice(0, 3).map(e => JSON.parse(e.data));
+    for (const p of progressEvents) {
+      assert.equal(p.method, 'notifications/progress');
+      assert.equal(p.params.progressToken, 'p1');
+      assert.equal(p.params.total, 3);
+    }
+    assert.deepEqual(progressEvents.map(p => p.params.progress), [1, 2, 3]);
+    const reply = JSON.parse(events[3].data);
+    assert.equal(reply.id, 1);
+    assert.equal(reply.result.isError, false);
+    sse.close();
+  } finally { await transport.close(); }
+});
+
 test('httpTransport auth: constant-time comparison rejects length-mismatched tokens', async () => {
   const server = makeServer();
   const transport = await createHttpTransport({ server, port: 0, authToken: 'exactly-16chars!' });

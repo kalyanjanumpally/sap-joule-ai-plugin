@@ -396,6 +396,107 @@ test('buildResources: returns active-provider + supported-providers by default',
   assert.equal(supported.supported.length, 5);
 });
 
+// ---- progress notifications (1.12.0) --------------------------------------
+
+test('MCPServer: tool handler receives ctx with reportProgress no-op when no token', async () => {
+  let capturedCtx = null;
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    tools: [{
+      name: 'p', description: '', inputSchema: { type: 'object' },
+      handler: async (args, ctx) => { capturedCtx = ctx; ctx.reportProgress(5, 10); return 'ok'; },
+    }],
+  });
+  // No progressToken, no transport sink -> reportProgress is a no-op (no throw)
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'p', arguments: {} },
+  });
+  assert.equal(reply.result.isError, false);
+  assert.equal(capturedCtx.progressToken, null);
+  assert.equal(typeof capturedCtx.reportProgress, 'function');
+});
+
+test('MCPServer: tool with _meta.progressToken emits notifications via transportCtx', async () => {
+  const notifs = [];
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    tools: [{
+      name: 'p', description: '', inputSchema: { type: 'object' },
+      handler: async (args, ctx) => {
+        ctx.reportProgress(1, 3);
+        ctx.reportProgress(2, 3);
+        ctx.reportProgress(3, 3);
+        return 'done';
+      },
+    }],
+  });
+  await s.handleMessage(
+    { jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'p', arguments: {}, _meta: { progressToken: 'tok-42' } } },
+    { sendNotification: (n) => notifs.push(n) },
+  );
+  assert.equal(notifs.length, 3);
+  for (const n of notifs) {
+    assert.equal(n.jsonrpc, '2.0');
+    assert.equal(n.method, 'notifications/progress');
+    assert.equal(n.params.progressToken, 'tok-42');
+    assert.equal(n.params.total, 3);
+  }
+  assert.deepEqual(notifs.map(n => n.params.progress), [1, 2, 3]);
+});
+
+test('MCPServer: progressToken without transport sink still no-ops (does not throw)', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    tools: [{
+      name: 'p', description: '', inputSchema: { type: 'object' },
+      handler: async (args, ctx) => { ctx.reportProgress(1); return 'ok'; },
+    }],
+  });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'p', _meta: { progressToken: 'x' } },
+  });
+  assert.equal(reply.result.isError, false);
+});
+
+test('MCPServer: reportProgress supports omitting total', async () => {
+  const notifs = [];
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    tools: [{
+      name: 'p', description: '', inputSchema: { type: 'object' },
+      handler: async (args, ctx) => { ctx.reportProgress(7); return 'ok'; },
+    }],
+  });
+  await s.handleMessage(
+    { jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'p', arguments: {}, _meta: { progressToken: 't' } } },
+    { sendNotification: (n) => notifs.push(n) },
+  );
+  assert.equal(notifs.length, 1);
+  assert.equal(notifs[0].params.progress, 7);
+  assert.equal(notifs[0].params.total, undefined);
+});
+
+test('MCPServer: existing tools still work without ctx (backwards compat)', async () => {
+  // Old-style handler that ignores the ctx argument
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    tools: [{
+      name: 'p', description: '', inputSchema: { type: 'object' },
+      handler: async ({ x }) => ({ result: x * 2 }),
+    }],
+  });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'p', arguments: { x: 5 } },
+  });
+  assert.equal(reply.result.isError, false);
+  assert.equal(JSON.parse(reply.result.content[0].text).result, 10);
+});
+
 // ---- resource templates (1.9.0) -------------------------------------------
 
 test('MCPServer: registerResourceTemplate rejects invalid templates', () => {

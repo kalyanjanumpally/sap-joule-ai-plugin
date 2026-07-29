@@ -4,6 +4,35 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] — 2026-07-29
+
+### Added
+
+- **MCP progress notifications on `tools/call`.** Tool handlers grow an optional second argument — a `ctx` object with `reportProgress(current, total?)`. When a client sends a `tools/call` with `_meta.progressToken`, calls to `reportProgress` become server-sent `notifications/progress` messages carrying that token. Perfect for long-running tools (batch embeds, multi-step agents, streaming chains) that would otherwise leave the client hanging silently.
+  - Wire format (MCP 2024-11-05):
+
+    ```json
+    { "jsonrpc": "2.0", "method": "notifications/progress",
+      "params": { "progressToken": "<from client>", "progress": 3, "total": 10 } }
+    ```
+
+  - Delivered on **both transports**: stdio writes the notification to stdout on the same stream as replies; HTTP+SSE pushes it on the requesting session's SSE stream.
+  - `total` is optional — omit for indeterminate progress.
+  - Existing tools that ignore the second `ctx` argument keep working — the API is 100% backwards-compatible.
+- `handleMessage(msg, transportCtx?)` — new optional second arg exposing `sendNotification(msg)`. Transports wire it to the appropriate connection. Public for third-party transport authors.
+
+- 6 new tests (244 total):
+  - `ctx.reportProgress` no-ops safely when the client didn't send a `progressToken`
+  - Multiple progress calls emit multiple notifications with correct token
+  - `progressToken` without a transport sink is silently ignored (no throw)
+  - `reportProgress(n)` (no `total`) omits the `total` field
+  - Existing single-arg tool handlers keep working
+  - End-to-end over HTTP+SSE: client posts `tools/call` with `_meta.progressToken`, receives 3 notifications interleaved with the final reply on the session's SSE stream
+
+### Notes
+
+- Additive — `^1.11` consumers can bump to `^1.12` with zero code changes. Tool handlers keep their existing signature; the second `ctx` argument is opt-in.
+
 ## [1.11.0] — 2026-07-29
 
 ### Added

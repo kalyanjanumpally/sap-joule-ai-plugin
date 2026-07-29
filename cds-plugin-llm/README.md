@@ -848,6 +848,28 @@ Client-side example (curl):
 curl -N -H 'Authorization: Bearer <token>' http://host:3333/sse
 ```
 
+#### Progress notifications (new in v1.12.0)
+
+Long-running tools can push `notifications/progress` back to the client instead of leaving them hanging silently. Tool handlers grow an optional second argument — a `ctx` object with `reportProgress(current, total?)`:
+
+```js
+server.registerTool({
+  name: 'batch_summarize',
+  description: 'Summarize N documents',
+  inputSchema: { type: 'object', properties: { docs: { type: 'array', items: { type: 'string' } } } },
+  handler: async ({ docs }, ctx) => {
+    const summaries = [];
+    for (let i = 0; i < docs.length; i++) {
+      summaries.push(await llm.chat({ /* ... */ }));
+      ctx.reportProgress(i + 1, docs.length);
+    }
+    return summaries;
+  },
+});
+```
+
+When the client calls this tool with `_meta.progressToken: 'x'`, each `reportProgress(...)` becomes a server-pushed notification carrying that token. Delivered on **both** transports — stdio writes to the same stdout; HTTP+SSE pushes on the requesting session's SSE stream. Existing tools that ignore the second arg keep working (backwards-compatible).
+
 ## Response caching (new in v0.9.0)
 
 Opt-in per-instance LRU cache with TTL. Skips tool-use calls (side-effects) and streaming (partial responses). Hits return the same `ChatResponse` shape with `cached: true` set.
@@ -991,7 +1013,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.9**: `loadFromDir` prompt loader + `--prompts-dir` on MCP + scaffold SSE endpoint + MCP resource templates~~ ✓ shipped in v1.9.0
 - ~~**1.10**: MCP HTTP+SSE transport (`--http`) + hot-reload prompts (`--watch-prompts`)~~ ✓ shipped in v1.10.0
 - ~~**1.11**: MCP bearer-token auth (`--auth-token`)~~ ✓ shipped in v1.11.0
-- **1.12+**: OpenAI Files API for URL PDFs, MCP progress notifications on `tools/call`, per-session provider overrides, MCP OAuth2 (client-credentials), CAP model registry (providers in `.cds` files)
+- ~~**1.12**: MCP progress notifications on `tools/call`~~ ✓ shipped in v1.12.0
+- **1.13+**: OpenAI Files API for URL PDFs, per-session provider overrides, MCP OAuth2 (client-credentials), CAP model registry (providers in `.cds` files), MCP prompts hot-reload alongside prompts hot-reload
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License
