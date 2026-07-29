@@ -1014,7 +1014,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.10**: MCP HTTP+SSE transport (`--http`) + hot-reload prompts (`--watch-prompts`)~~ ✓ shipped in v1.10.0
 - ~~**1.11**: MCP bearer-token auth (`--auth-token`)~~ ✓ shipped in v1.11.0
 - ~~**1.12**: MCP progress notifications on `tools/call`~~ ✓ shipped in v1.12.0
-- **1.13+**: OpenAI Files API for URL PDFs, per-session provider overrides, MCP OAuth2 (client-credentials), CAP model registry (providers in `.cds` files), MCP prompts hot-reload alongside prompts hot-reload
+- ~~**1.13**: MCP list-changed notifications (broadcasts on hot-reload)~~ ✓ shipped in v1.13.0
+- **1.14+**: OpenAI Files API for URL PDFs, per-session provider overrides, MCP OAuth2 (client-credentials), CAP model registry (providers in `.cds` files)
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

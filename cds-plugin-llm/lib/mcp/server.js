@@ -44,6 +44,42 @@ class MCPServer {
     for (const rt of resourceTemplates) this.registerResourceTemplate(rt);
     this.log = logger ?? (() => {});
     this.initialized = false;
+    // Transport-registered notification sinks. Each active connection adds
+    // one sink here; broadcast helpers (`notifyListChanged`) fan out across
+    // all of them so hot-reloads reach every connected client.
+    this._subscribers = new Set();
+  }
+
+  /**
+   * Transport-facing: register a notification sink for the lifetime of a
+   * connection. Returns an unsubscribe function. The transport MUST call the
+   * returned function when the connection closes, otherwise the sink leaks.
+   */
+  addSubscriber(sendNotification) {
+    if (typeof sendNotification !== 'function') {
+      throw new Error('addSubscriber requires a function');
+    }
+    this._subscribers.add(sendNotification);
+    return () => { this._subscribers.delete(sendNotification); };
+  }
+
+  /**
+   * Broadcast a MCP list-changed notification to every connected client.
+   * kind = 'prompts' | 'resources' | 'tools'. Silent no-op when there are
+   * no subscribers.
+   */
+  notifyListChanged(kind) {
+    if (!['prompts', 'resources', 'tools'].includes(kind)) {
+      throw new Error(`notifyListChanged: unknown kind '${kind}'`);
+    }
+    const notif = {
+      jsonrpc: JSONRPC_VERSION,
+      method: `notifications/${kind}/list_changed`,
+    };
+    for (const send of this._subscribers) {
+      try { send(notif); }
+      catch (err) { this.log('warn', `list_changed notify failed: ${err.message}`); }
+    }
   }
 
   registerTool(tool) {
@@ -128,9 +164,10 @@ class MCPServer {
           protocolVersion: PROTOCOL_VERSION,
           serverInfo: { name: this.name, version: this.version },
           capabilities: {
-            tools: {},
-            ...(this.resources.size > 0 || this.resourceTemplates.length > 0 ? { resources: {} } : {}),
-            ...(this.prompts ? { prompts: {} } : {}),
+            tools: { listChanged: true },
+            ...(this.resources.size > 0 || this.resourceTemplates.length > 0
+              ? { resources: { listChanged: true } } : {}),
+            ...(this.prompts ? { prompts: { listChanged: true } } : {}),
           },
         };
 
@@ -287,10 +324,12 @@ class MCPServer {
    */
   async run({ stdin, stdout }) {
     let buffer = '';
-    // Serialize message processing so replies stay in order and 'end'
-    // waits for pending work before resolving.
     let queue = Promise.resolve();
     const enqueue = (fn) => { queue = queue.then(fn).catch(() => {}); return queue; };
+    // Register a subscriber so broadcast notifications (list_changed etc)
+    // reach this stdio client while the connection is live.
+    const send = (notif) => stdout.write(JSON.stringify(notif) + '\n');
+    const unsubscribe = this.addSubscriber(send);
     return new Promise((resolve, reject) => {
       stdin.setEncoding?.('utf8');
       stdin.on('data', (chunk) => {
@@ -317,8 +356,8 @@ class MCPServer {
           });
         }
       });
-      stdin.on('end', () => { queue.then(resolve); });
-      stdin.on('error', reject);
+      stdin.on('end', () => { queue.then(() => { unsubscribe(); resolve(); }); });
+      stdin.on('error', (err) => { unsubscribe(); reject(err); });
     });
   }
 }

@@ -318,6 +318,41 @@ test('httpTransport auth: round-trip with token works end-to-end', async () => {
   } finally { await transport.close(); }
 });
 
+test('httpTransport: notifyListChanged broadcasts to every connected session', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({ server, port: 0 });
+  try {
+    const sse1 = await openSSE({ port: transport.port });
+    await sse1.nextEvent(); // consume endpoint
+    const sse2 = await openSSE({ port: transport.port });
+    await sse2.nextEvent(); // consume endpoint
+
+    server.notifyListChanged('prompts');
+
+    const [n1, n2] = await Promise.all([sse1.nextEvent(), sse2.nextEvent()]);
+    const p1 = JSON.parse(n1.data);
+    const p2 = JSON.parse(n2.data);
+    assert.equal(p1.method, 'notifications/prompts/list_changed');
+    assert.equal(p2.method, 'notifications/prompts/list_changed');
+    sse1.close();
+    sse2.close();
+  } finally { await transport.close(); }
+});
+
+test('httpTransport: subscriber unregistered when session closes', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({ server, port: 0 });
+  try {
+    const sse = await openSSE({ port: transport.port });
+    await sse.nextEvent();
+
+    assert.equal(server._subscribers.size, 1);
+    sse.close();
+    await new Promise(res => setTimeout(res, 100));
+    assert.equal(server._subscribers.size, 0);
+  } finally { await transport.close(); }
+});
+
 test('httpTransport: progress notifications delivered to session SSE stream', async () => {
   const server = new MCPServer({
     name: 'progress-test', version: '1.0.0',

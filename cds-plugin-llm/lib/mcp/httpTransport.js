@@ -82,12 +82,19 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
         'X-Accel-Buffering': 'no',
       });
       res.write(`event: endpoint\ndata: /messages?sessionId=${sessionId}\n\n`);
-      // Best-effort flush for Express-style compression proxies
       res.flushHeaders?.();
-      sessions.set(sessionId, { res, connectedAt: Date.now() });
+      // Broadcast notifications (list_changed etc) go to every session.
+      const send = (notif) => {
+        try { res.write(`data: ${JSON.stringify(notif)}\n\n`); }
+        catch (err) { logger('warn', `session ${sessionId.slice(0, 8)} broadcast failed: ${err.message}`); }
+      };
+      const unsubscribe = server.addSubscriber(send);
+      sessions.set(sessionId, { res, connectedAt: Date.now(), unsubscribe });
       logger('info', `session ${sessionId.slice(0, 8)} opened (${sessions.size} active)`);
 
       req.on('close', () => {
+        const s = sessions.get(sessionId);
+        if (s?.unsubscribe) s.unsubscribe();
         sessions.delete(sessionId);
         logger('info', `session ${sessionId.slice(0, 8)} closed (${sessions.size} active)`);
       });
@@ -155,7 +162,10 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
         url: bindUrl,
         port: actualPort,
         close: () => new Promise(res => {
-          for (const s of sessions.values()) { try { s.res.end(); } catch {} }
+          for (const s of sessions.values()) {
+            try { s.unsubscribe?.(); } catch {}
+            try { s.res.end(); } catch {}
+          }
           sessions.clear();
           httpServer.close(res);
         }),

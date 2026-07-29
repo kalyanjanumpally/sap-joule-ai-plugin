@@ -396,6 +396,87 @@ test('buildResources: returns active-provider + supported-providers by default',
   assert.equal(supported.supported.length, 5);
 });
 
+// ---- list-changed notifications (1.13.0) ----------------------------------
+
+test('MCPServer: addSubscriber requires a function', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  assert.throws(() => s.addSubscriber('not-a-fn'), /requires a function/);
+});
+
+test('MCPServer: notifyListChanged validates kind', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  assert.throws(() => s.notifyListChanged('bogus'), /unknown kind/);
+});
+
+test('MCPServer: notifyListChanged is a silent no-op with no subscribers', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  s.notifyListChanged('prompts'); // must not throw
+  s.notifyListChanged('resources');
+  s.notifyListChanged('tools');
+});
+
+test('MCPServer: addSubscriber returns unsubscribe function', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const received = [];
+  const unsub = s.addSubscriber((n) => received.push(n));
+  s.notifyListChanged('prompts');
+  assert.equal(received.length, 1);
+  unsub();
+  s.notifyListChanged('prompts');
+  assert.equal(received.length, 1); // no more after unsubscribe
+});
+
+test('MCPServer: notifyListChanged broadcasts to every subscriber', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const rx1 = []; const rx2 = []; const rx3 = [];
+  s.addSubscriber((n) => rx1.push(n));
+  s.addSubscriber((n) => rx2.push(n));
+  s.addSubscriber((n) => rx3.push(n));
+  s.notifyListChanged('prompts');
+  assert.equal(rx1.length, 1);
+  assert.equal(rx2.length, 1);
+  assert.equal(rx3.length, 1);
+  assert.equal(rx1[0].method, 'notifications/prompts/list_changed');
+  assert.equal(rx1[0].jsonrpc, '2.0');
+  assert.equal(rx1[0].id, undefined); // notifications have no id
+});
+
+test('MCPServer: notifyListChanged emits correct method for each kind', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const rx = [];
+  s.addSubscriber((n) => rx.push(n));
+  s.notifyListChanged('prompts');
+  s.notifyListChanged('resources');
+  s.notifyListChanged('tools');
+  assert.deepEqual(rx.map(n => n.method), [
+    'notifications/prompts/list_changed',
+    'notifications/resources/list_changed',
+    'notifications/tools/list_changed',
+  ]);
+});
+
+test('MCPServer: subscriber that throws does not break broadcast to others', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const rx = [];
+  s.addSubscriber(() => { throw new Error('boom'); });
+  s.addSubscriber((n) => rx.push(n));
+  s.notifyListChanged('prompts'); // must not throw
+  assert.equal(rx.length, 1);
+});
+
+test('MCPServer: initialize advertises listChanged: true on all present capabilities', async () => {
+  const { PromptRegistry: PR, builtInPrompts: bip } = require('../lib/promptRegistry');
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resources: [{ uri: 'test://a', read: async () => 'ok' }],
+    prompts: new PR().registerAll(bip()),
+  });
+  const reply = await s.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+  assert.deepEqual(reply.result.capabilities.tools, { listChanged: true });
+  assert.deepEqual(reply.result.capabilities.resources, { listChanged: true });
+  assert.deepEqual(reply.result.capabilities.prompts, { listChanged: true });
+});
+
 // ---- progress notifications (1.12.0) --------------------------------------
 
 test('MCPServer: tool handler receives ctx with reportProgress no-op when no token', async () => {

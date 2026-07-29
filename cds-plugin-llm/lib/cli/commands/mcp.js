@@ -11,22 +11,13 @@ async function mcp(ctx) {
   await provider.init();
 
   const prompts = new PromptRegistry().registerAll(builtInPrompts());
-
   const dir = ctx.opts['prompts-dir'] ?? ctx.env.SAPTARISHI_LLM_PROMPTS_DIR;
   if (dir) {
     const { loaded, registered } = await prompts.loadFromDir(dir);
     ctx.stderr.write(`[mcp] loaded ${registered} prompt template(s) from ${loaded} file(s) in ${dir}\n`);
-    if (ctx.opts['watch-prompts']) {
-      prompts.watchDir(dir, {
-        onReload: ({ loaded: l, registered: r, error }) => {
-          if (error) ctx.stderr.write(`[mcp:warn] hot-reload failed: ${error.message}\n`);
-          else ctx.stderr.write(`[mcp] hot-reloaded ${r} prompt(s) from ${l} file(s)\n`);
-        },
-      });
-      ctx.stderr.write(`[mcp] watching ${dir} for changes\n`);
-    }
   }
 
+  const logger = (level, msg) => ctx.stderr.write(`[mcp:${level}] ${msg}\n`);
   const pkg = require('../../../package.json');
   const server = new MCPServer({
     name: pkg.name,
@@ -35,10 +26,25 @@ async function mcp(ctx) {
     resources: buildResources({ provider, providerKind: kind, providerModel: model }),
     resourceTemplates: buildResourceTemplates({ prompts }),
     prompts,
-    logger: (level, msg) => ctx.stderr.write(`[mcp:${level}] ${msg}\n`),
+    logger,
   });
 
-  const logger = (level, msg) => ctx.stderr.write(`[mcp:${level}] ${msg}\n`);
+  // Hot-reload watch happens AFTER server construction so we can broadcast
+  // notifications/prompts/list_changed to every connected client on reload.
+  if (dir && ctx.opts['watch-prompts']) {
+    prompts.watchDir(dir, {
+      onReload: ({ loaded: l, registered: r, error }) => {
+        if (error) {
+          ctx.stderr.write(`[mcp:warn] hot-reload failed: ${error.message}\n`);
+          return;
+        }
+        ctx.stderr.write(`[mcp] hot-reloaded ${r} prompt(s) from ${l} file(s)\n`);
+        try { server.notifyListChanged('prompts'); }
+        catch (e) { ctx.stderr.write(`[mcp:warn] list_changed notify failed: ${e.message}\n`); }
+      },
+    });
+    ctx.stderr.write(`[mcp] watching ${dir} for changes\n`);
+  }
 
   if (ctx.opts.http) {
     const port = ctx.opts.port ? parseInt(ctx.opts.port, 10) : 3333;
