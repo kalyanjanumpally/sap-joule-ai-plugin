@@ -674,7 +674,16 @@ Tools exposed:
 | `verify` | Tiny probe against the provider. Returns `{ ok, latencyMs, model, text }`. |
 | `list_providers` | Enumerate every supported provider kind with default models. |
 
-Uses a hand-rolled MCP implementation (2024-11-05 spec) over stdio JSON-RPC 2.0 — **zero new dependencies**. Protocol: `initialize`, `tools/list`, `tools/call`, `ping`, notifications. Tool errors surface as `result.isError: true` per spec so the model can recover, not as JSON-RPC errors.
+Uses a hand-rolled MCP implementation (2024-11-05 spec) over stdio JSON-RPC 2.0 — **zero new dependencies**. Full protocol coverage: `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`, `ping`, notifications. Tool errors surface as `result.isError: true` per spec so the model can recover, not as JSON-RPC errors.
+
+**Resources exposed** (readable via `resources/read`):
+
+| URI | Description |
+|-----|-------------|
+| `config://active-provider` | Current provider kind + model + middleware count. |
+| `config://supported-providers` | Every provider kind + default model. |
+
+**Prompts registered** (invokable via `prompts/get`) — see [Prompt-template registry](#prompt-template-registry-new-in-v180) below for the full built-in list.
 
 ### Scaffold a fresh CAP project (new in v1.6.0)
 
@@ -712,6 +721,45 @@ Flags:
 - `--model <id>` — override the default model for the chosen provider
 - `--force` — overwrite a non-empty target directory
 - `--dry-run` — print the file list without writing anything
+
+## Prompt-template registry (new in v1.8.0)
+
+Register named prompt templates once, invoke them by name from any CAP handler, and automatically expose them over MCP so external clients (Claude Desktop, Cursor, Zed) can invoke them too. Same registry, three surfaces.
+
+```js
+const { PromptRegistry, builtInPrompts } = require('@saptarishi/cds-plugin-llm');
+
+const prompts = new PromptRegistry()
+  .registerAll(builtInPrompts())                    // 5 built-ins
+  .register({                                       // your own
+    name: 'invoice_dispute_response',
+    description: 'Draft a courteous response to an invoice dispute.',
+    arguments: [
+      { name: 'dispute', required: true, description: 'The dispute text' },
+      { name: 'tone',    required: false, description: 'formal | friendly' },
+    ],
+    render: ({ dispute, tone = 'formal' }) => ({
+      system: `You are AP support. Reply in a ${tone} tone. Never admit liability.`,
+      messages: [{ role: 'user', content: dispute }],
+    }),
+  });
+
+// From a CAP handler:
+const req = prompts.render('invoice_dispute_response', { dispute });
+const res = await llm.chat({ ...req, maxTokens: 512 });
+```
+
+Built-ins (`builtInPrompts()`):
+
+| Name | Purpose |
+|------|---------|
+| `summarize` | Condense text to N sentences (`text`, `sentences?`). |
+| `extract_json` | Extract structured JSON against a schema (`text`, `schema`). |
+| `classify` | Assign one label from a set (`text`, `labels`). |
+| `translate` | Translate to a target language (`text`, `targetLanguage`). |
+| `procurement_risk_scorer` | SAP-flavored risk analyst prompt (`text`). |
+
+Templates auto-appear as MCP prompts when you run `saptarishi-llm mcp`. Claude Desktop shows them as slash-commands the user can pick.
 
 ## Response caching (new in v0.9.0)
 
@@ -852,7 +900,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.5**: `saptarishi-llm` CLI~~ ✓ shipped in v1.5.0
 - ~~**1.6**: `saptarishi-llm init` CAP-app scaffolder~~ ✓ shipped in v1.6.0
 - ~~**1.7**: `saptarishi-llm mcp` server (MCP over stdio)~~ ✓ shipped in v1.7.0
-- **1.8+**: OpenAI Files API for URL PDFs, HANA IVF-Flat index, prompt-template registry, streaming SSE endpoint in the scaffold, MCP resources + prompts (in addition to tools)
+- ~~**1.8**: `PromptRegistry` + MCP resources + MCP prompts~~ ✓ shipped in v1.8.0
+- **1.9+**: OpenAI Files API for URL PDFs, HANA IVF-Flat index, streaming SSE endpoint in the scaffold, prompt loading from `.mjs` files, MCP resource templates (parametrized URIs)
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

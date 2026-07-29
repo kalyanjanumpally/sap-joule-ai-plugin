@@ -27,6 +27,11 @@ import {
   redisRateLimit,
   RedisRateLimitOptions,
   RedisClientLike,
+  PromptRegistry,
+  PromptTemplate,
+  PromptArgument,
+  RenderedPrompt,
+  builtInPrompts,
   // Types
   ChatRequest,
   ChatResponse,
@@ -220,6 +225,24 @@ async function example() {
     mode: 'throw',
   };
   groq.use(redisRateLimit(rrlOpts));
+
+  // ---- prompt registry (1.8.0) -------------------------------------------
+  const registry = new PromptRegistry();
+  const promptArg: PromptArgument = { name: 'x', description: 'x', required: true };
+  const tpl: PromptTemplate = {
+    name: 'my_prompt',
+    description: 'a demo',
+    arguments: [promptArg],
+    render: (vars: Record<string, any>): RenderedPrompt => ({
+      system: 'be terse',
+      messages: [{ role: 'user', content: String(vars.x) }],
+    }),
+  };
+  registry.register(tpl).registerAll(builtInPrompts());
+  const listed = registry.list();
+  const has: boolean = registry.has('my_prompt');
+  const rendered: RenderedPrompt = registry.render('my_prompt', { x: 'hi' });
+  void listed; void has; void rendered;
 
   // ---- runTools (new in 1.1.0) -------------------------------------------
   const tools: RunnableTool[] = [{

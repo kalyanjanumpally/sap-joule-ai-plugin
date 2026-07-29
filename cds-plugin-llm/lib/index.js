@@ -26,4 +26,7 @@ module.exports = {
   otel: require('./middleware/otel').otel,
   // Redis-backed rate limit (new in 1.4.0)
   redisRateLimit: require('./middleware/redisRateLimit').redisRateLimit,
+  // Prompt-template registry (new in 1.8.0)
+  PromptRegistry: require('./promptRegistry').PromptRegistry,
+  builtInPrompts: require('./promptRegistry').builtInPrompts,
 };

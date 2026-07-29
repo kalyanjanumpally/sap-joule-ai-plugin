@@ -107,4 +107,52 @@ function buildTools({ provider, providerKind, providerModel }) {
   ];
 }
 
-module.exports = { buildTools };
+/**
+ * Build the resource set — read-only introspection endpoints. Clients can
+ * attach these to a conversation as context ("here is your active provider
+ * config...") without invoking a tool.
+ */
+function buildResources({ provider, providerKind, providerModel, cacheStats }) {
+  const resources = [
+    {
+      uri: 'config://active-provider',
+      name: 'Active provider configuration',
+      description: 'Which provider + model the server is currently backed by, and its middleware count.',
+      mimeType: 'application/json',
+      read: async () => ({
+        provider: providerKind,
+        model: providerModel,
+        middleware: {
+          count: Array.isArray(provider.middleware) ? provider.middleware.length : 0,
+        },
+        defaultMaxTokens: provider.defaultMaxTokens,
+      }),
+    },
+    {
+      uri: 'config://supported-providers',
+      name: 'Supported provider kinds',
+      description: 'All provider kinds the plugin can be configured with, plus their default models.',
+      mimeType: 'application/json',
+      read: async () => ({
+        supported: PROVIDER_KINDS.map(k => ({
+          kind: k,
+          defaultModel: PROVIDER_DEFAULTS[k].model,
+        })),
+      }),
+    },
+  ];
+
+  if (cacheStats) {
+    resources.push({
+      uri: 'usage://cache-stats',
+      name: 'Response cache stats',
+      description: 'Hits, misses, and current size of the LLM response cache (if enabled).',
+      mimeType: 'application/json',
+      read: async () => cacheStats(),
+    });
+  }
+
+  return resources;
+}
+
+module.exports = { buildTools, buildResources };

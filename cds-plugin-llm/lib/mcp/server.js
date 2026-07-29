@@ -30,13 +30,16 @@ const ERROR_CODES = {
 };
 
 class MCPServer {
-  constructor({ name, version, tools = [], logger }) {
+  constructor({ name, version, tools = [], resources = [], prompts = null, logger }) {
     if (!name) throw new Error('MCPServer requires a name');
     if (!version) throw new Error('MCPServer requires a version');
     this.name = name;
     this.version = version;
     this.tools = new Map();
+    this.resources = new Map();
+    this.prompts = prompts; // PromptRegistry-like: has list()/get()/render() or null
     for (const t of tools) this.registerTool(t);
+    for (const r of resources) this.registerResource(r);
     this.log = logger ?? (() => {});
     this.initialized = false;
   }
@@ -46,6 +49,13 @@ class MCPServer {
     if (typeof tool.handler !== 'function') throw new Error(`tool ${tool.name}: handler is required`);
     if (this.tools.has(tool.name)) throw new Error(`tool ${tool.name}: already registered`);
     this.tools.set(tool.name, tool);
+  }
+
+  registerResource(resource) {
+    if (!resource?.uri) throw new Error('resource.uri is required');
+    if (typeof resource.read !== 'function') throw new Error(`resource ${resource.uri}: read must be a function`);
+    if (this.resources.has(resource.uri)) throw new Error(`resource ${resource.uri}: already registered`);
+    this.resources.set(resource.uri, resource);
   }
 
   /**
@@ -79,7 +89,11 @@ class MCPServer {
         return {
           protocolVersion: PROTOCOL_VERSION,
           serverInfo: { name: this.name, version: this.version },
-          capabilities: { tools: {} },
+          capabilities: {
+            tools: {},
+            ...(this.resources.size > 0 ? { resources: {} } : {}),
+            ...(this.prompts ? { prompts: {} } : {}),
+          },
         };
 
       case 'notifications/initialized':
@@ -115,6 +129,68 @@ class MCPServer {
             isError: true,
           };
         }
+      }
+
+      case 'resources/list':
+        return {
+          resources: Array.from(this.resources.values()).map(r => ({
+            uri: r.uri,
+            name: r.name ?? r.uri,
+            description: r.description ?? '',
+            mimeType: r.mimeType ?? 'text/plain',
+          })),
+        };
+
+      case 'resources/read': {
+        const uri = params?.uri;
+        const resource = this.resources.get(uri);
+        if (!resource) {
+          const err = new Error(`unknown resource: ${uri}`);
+          err.code = ERROR_CODES.INVALID_PARAMS;
+          throw err;
+        }
+        const value = await resource.read();
+        const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        return {
+          contents: [{ uri, mimeType: resource.mimeType ?? 'text/plain', text }],
+        };
+      }
+
+      case 'prompts/list':
+        if (!this.prompts) return { prompts: [] };
+        return { prompts: this.prompts.list() };
+
+      case 'prompts/get': {
+        if (!this.prompts) {
+          const err = new Error('no prompt registry configured');
+          err.code = ERROR_CODES.INVALID_PARAMS;
+          throw err;
+        }
+        const name = params?.name;
+        const args = params?.arguments ?? {};
+        if (!this.prompts.has(name)) {
+          const err = new Error(`unknown prompt: ${name}`);
+          err.code = ERROR_CODES.INVALID_PARAMS;
+          throw err;
+        }
+        const rendered = this.prompts.render(name, args);
+        // MCP prompts/get returns { description, messages: [...] } where
+        // messages are { role, content: {type: 'text', text: '...'} }.
+        // Translate the plugin's ChatRequest shape into that.
+        const promptDef = this.prompts.get(name);
+        const messages = [];
+        if (rendered.system) {
+          messages.push({ role: 'user', content: { type: 'text', text: `[system]\n${rendered.system}` } });
+        }
+        for (const m of rendered.messages) {
+          const text = typeof m.content === 'string'
+            ? m.content
+            : Array.isArray(m.content)
+              ? m.content.map(c => c.text ?? '').filter(Boolean).join('\n')
+              : String(m.content);
+          messages.push({ role: m.role, content: { type: 'text', text } });
+        }
+        return { description: promptDef.description, messages };
       }
 
       default: {

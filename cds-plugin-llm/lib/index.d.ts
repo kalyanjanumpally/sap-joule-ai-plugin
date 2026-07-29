@@ -498,3 +498,49 @@ export interface RedisRateLimitOptions {
  * the same Redis. See `rateLimit` for the in-process variant.
  */
 export function redisRateLimit(options: RedisRateLimitOptions): Middleware;
+
+// ---------------------------------------------------------------------------
+// Prompt-template registry (new in v1.8.0)
+// ---------------------------------------------------------------------------
+
+export interface PromptArgument {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+/**
+ * Return value of a prompt template's `render(vars)`. This is a partial
+ * ChatRequest — callers merge in per-call options (maxTokens, tools, etc)
+ * before dispatching.
+ */
+export interface RenderedPrompt {
+  messages: Message[];
+  system?: string;
+  format?: JsonSchema;
+  [key: string]: unknown;
+}
+
+export interface PromptTemplate {
+  name: string;
+  description?: string;
+  arguments?: PromptArgument[];
+  render: (vars: Record<string, any>) => RenderedPrompt;
+}
+
+/**
+ * Named prompt-template registry. Register templates once, invoke by name
+ * from CAP handlers or expose over MCP via `saptarishi-llm mcp`.
+ */
+export class PromptRegistry {
+  constructor();
+  register(prompt: PromptTemplate): this;
+  registerAll(prompts: PromptTemplate[]): this;
+  list(): { name: string; description: string; arguments: PromptArgument[] }[];
+  has(name: string): boolean;
+  get(name: string): PromptTemplate | null;
+  render(name: string, vars?: Record<string, any>): RenderedPrompt;
+}
+
+/** Bundle of general-purpose prompt templates ready to `registerAll(...)`. */
+export function builtInPrompts(): PromptTemplate[];

@@ -4,6 +4,38 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] — 2026-07-29
+
+### Added
+
+- **`PromptRegistry` — named prompt-template registry.** Register templates once; invoke by name from CAP handlers or expose over MCP. Templates declare their arguments (with `required` flag), then `render(vars)` returns a partial `ChatRequest` (system, messages, format) that callers merge into their per-call options.
+
+  ```js
+  const { PromptRegistry, builtInPrompts } = require('@saptarishi/cds-plugin-llm');
+  const prompts = new PromptRegistry().registerAll(builtInPrompts());
+
+  const req = prompts.render('extract_json', { text: '...', schema: {...} });
+  const res = await llm.chat({ ...req, maxTokens: 512 });
+  ```
+
+  Ships 5 general-purpose built-ins: `summarize`, `extract_json`, `classify`, `translate`, `procurement_risk_scorer` (SAP-flavored for demos).
+
+- **MCP: `prompts/list` + `prompts/get` support.** `saptarishi-llm mcp` now advertises the `prompts` capability and exposes every registered template (built-ins by default). Clients like Claude Desktop show them as "commands" the user can select.
+
+- **MCP: `resources/list` + `resources/read` support.** Two config resources exposed by default:
+  - `config://active-provider` — current provider + model + middleware count
+  - `config://supported-providers` — every provider kind + default model
+  Optional `usage://cache-stats` when a `cacheStats` fn is passed.
+
+- Capability advertisement is now dynamic: `resources: {}` only appears in `initialize` when at least one resource is registered; `prompts: {}` only when a registry is attached.
+
+- 26 new tests (200 total): PromptRegistry (16), MCP prompts + resources handlers (10 in-process + end-to-end subprocess coverage of `resources/list`, `prompts/list`, `prompts/get`).
+- TS defs: `PromptRegistry`, `PromptTemplate`, `PromptArgument`, `RenderedPrompt`, `builtInPrompts`.
+
+### Notes
+
+- Additive — no changes to CAP-plugin runtime behavior or existing MCP methods. `^1.7` consumers can bump to `^1.8` with zero code changes.
+
 ## [1.7.0] — 2026-07-29
 
 ### Added

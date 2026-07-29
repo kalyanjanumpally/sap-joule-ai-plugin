@@ -1,5 +1,6 @@
 const { MCPServer } = require('../../mcp/server');
-const { buildTools } = require('../../mcp/tools');
+const { buildTools, buildResources } = require('../../mcp/tools');
+const { PromptRegistry, builtInPrompts } = require('../../promptRegistry');
 
 async function mcp(ctx) {
   // Provider construction happens once at startup; provider.init() is called
@@ -8,11 +9,15 @@ async function mcp(ctx) {
   const { provider, kind, model } = await ctx.buildProvider(ctx);
   await provider.init();
 
+  const prompts = new PromptRegistry().registerAll(builtInPrompts());
+
   const pkg = require('../../../package.json');
   const server = new MCPServer({
     name: pkg.name,
     version: pkg.version,
     tools: buildTools({ provider, providerKind: kind, providerModel: model }),
+    resources: buildResources({ provider, providerKind: kind, providerModel: model }),
+    prompts,
     logger: (level, msg) => ctx.stderr.write(`[mcp:${level}] ${msg}\n`),
   });
 
@@ -51,6 +56,17 @@ Tools exposed:
   embed           — embed input(s), return vectors
   verify          — tiny probe, return {ok, latencyMs, model, text}
   list_providers  — list every supported provider kind
+
+Resources exposed (readable via resources/read):
+  config://active-provider       — current provider + model + middleware count
+  config://supported-providers   — every provider kind + default model
+
+Prompts registered (invokable via prompts/get):
+  summarize                — text -> N-sentence summary
+  extract_json             — text + schema -> structured JSON
+  classify                 — text + labels -> single label
+  translate                — text + target language
+  procurement_risk_scorer  — SAP-flavored risk analysis
 
 Provider selection + credentials: same env vars as other subcommands
 (SAPTARISHI_LLM_PROVIDER, ANTHROPIC_API_KEY, etc — see 'saptarishi-llm help').`;

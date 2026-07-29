@@ -5,7 +5,8 @@ const { spawn } = require('node:child_process');
 const { PassThrough } = require('node:stream');
 
 const { MCPServer, PROTOCOL_VERSION, ERROR_CODES } = require('../lib/mcp/server');
-const { buildTools } = require('../lib/mcp/tools');
+const { buildTools, buildResources } = require('../lib/mcp/tools');
+const { PromptRegistry, builtInPrompts } = require('../lib/promptRegistry');
 
 // ---- MCPServer.handleMessage: protocol correctness ------------------------
 
@@ -246,6 +247,166 @@ test('buildTools verify: ok=false otherwise', async () => {
   assert.equal(res.ok, false);
 });
 
+// ---- resources + prompts (1.8.0) ------------------------------------------
+
+test('MCPServer: initialize advertises resources capability when any registered', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resources: [{ uri: 'test://foo', read: async () => 'ok' }],
+  });
+  const reply = await s.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+  assert.ok(reply.result.capabilities.resources);
+  assert.ok(reply.result.capabilities.tools);
+  assert.equal(reply.result.capabilities.prompts, undefined);
+});
+
+test('MCPServer: initialize advertises prompts capability when registry present', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    prompts: new PromptRegistry().registerAll(builtInPrompts()),
+  });
+  const reply = await s.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+  assert.ok(reply.result.capabilities.prompts);
+  assert.equal(reply.result.capabilities.resources, undefined);
+});
+
+test('MCPServer: resources/list enumerates registered resources', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resources: [
+      { uri: 'config://a', name: 'A', description: 'first', mimeType: 'application/json', read: async () => ({ ok: true }) },
+      { uri: 'config://b', name: 'B', read: async () => 'plain' },
+    ],
+  });
+  const reply = await s.handleMessage({ jsonrpc: '2.0', id: 1, method: 'resources/list' });
+  assert.equal(reply.result.resources.length, 2);
+  assert.equal(reply.result.resources[0].uri, 'config://a');
+  assert.equal(reply.result.resources[0].mimeType, 'application/json');
+  assert.equal(reply.result.resources[1].mimeType, 'text/plain'); // default
+});
+
+test('MCPServer: resources/read returns text content for known URI', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resources: [{ uri: 'config://demo', mimeType: 'application/json', read: async () => ({ hello: 'world' }) }],
+  });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'resources/read',
+    params: { uri: 'config://demo' },
+  });
+  const parsed = JSON.parse(reply.result.contents[0].text);
+  assert.deepEqual(parsed, { hello: 'world' });
+  assert.equal(reply.result.contents[0].mimeType, 'application/json');
+});
+
+test('MCPServer: resources/read for unknown URI returns INVALID_PARAMS', async () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0', resources: [] });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'resources/read',
+    params: { uri: 'nope://x' },
+  });
+  assert.equal(reply.error.code, ERROR_CODES.INVALID_PARAMS);
+});
+
+test('MCPServer: registerResource rejects duplicates + missing fields', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  s.registerResource({ uri: 'a://b', read: async () => 'x' });
+  assert.throws(() => s.registerResource({ uri: 'a://b', read: async () => 'x' }), /already registered/);
+  assert.throws(() => s.registerResource({ read: async () => 'x' }), /uri is required/);
+  assert.throws(() => s.registerResource({ uri: 'c://d' }), /read must be a function/);
+});
+
+test('MCPServer: prompts/list returns [] when no registry', async () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const reply = await s.handleMessage({ jsonrpc: '2.0', id: 1, method: 'prompts/list' });
+  assert.deepEqual(reply.result.prompts, []);
+});
+
+test('MCPServer: prompts/list returns registered templates with arguments', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    prompts: new PromptRegistry().registerAll(builtInPrompts()),
+  });
+  const reply = await s.handleMessage({ jsonrpc: '2.0', id: 1, method: 'prompts/list' });
+  assert.ok(reply.result.prompts.length >= 4);
+  const summarize = reply.result.prompts.find(p => p.name === 'summarize');
+  assert.ok(summarize);
+  assert.equal(summarize.arguments[0].name, 'text');
+  assert.equal(summarize.arguments[0].required, true);
+});
+
+test('MCPServer: prompts/get renders template into MCP message shape', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    prompts: new PromptRegistry().registerAll(builtInPrompts()),
+  });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'prompts/get',
+    params: { name: 'summarize', arguments: { text: 'long input', sentences: 2 } },
+  });
+  assert.match(reply.result.description, /Summarize/);
+  // system prompt becomes a synthetic user turn tagged [system]
+  const first = reply.result.messages[0];
+  assert.equal(first.role, 'user');
+  assert.equal(first.content.type, 'text');
+  assert.match(first.content.text, /\[system\][\s\S]*at most 2 sentences/);
+  // Actual user turn
+  const second = reply.result.messages[1];
+  assert.equal(second.role, 'user');
+  assert.equal(second.content.text, 'long input');
+});
+
+test('MCPServer: prompts/get with no registry returns INVALID_PARAMS', async () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'prompts/get',
+    params: { name: 'summarize', arguments: {} },
+  });
+  assert.equal(reply.error.code, ERROR_CODES.INVALID_PARAMS);
+  assert.match(reply.error.message, /no prompt registry/);
+});
+
+test('MCPServer: prompts/get for unknown name returns INVALID_PARAMS', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    prompts: new PromptRegistry().registerAll(builtInPrompts()),
+  });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'prompts/get',
+    params: { name: 'nosuch', arguments: {} },
+  });
+  assert.equal(reply.error.code, ERROR_CODES.INVALID_PARAMS);
+});
+
+test('buildResources: returns active-provider + supported-providers by default', async () => {
+  const resources = buildResources({
+    provider: { middleware: [1, 2], defaultMaxTokens: 512 },
+    providerKind: 'groq',
+    providerModel: 'llama-3.3-70b-versatile',
+  });
+  const uris = resources.map(r => r.uri);
+  assert.deepEqual(uris, ['config://active-provider', 'config://supported-providers']);
+
+  const active = await resources[0].read();
+  assert.equal(active.provider, 'groq');
+  assert.equal(active.middleware.count, 2);
+  assert.equal(active.defaultMaxTokens, 512);
+
+  const supported = await resources[1].read();
+  assert.equal(supported.supported.length, 5);
+});
+
+test('buildResources: includes cache-stats resource when cacheStats supplied', async () => {
+  const resources = buildResources({
+    provider: { middleware: [], defaultMaxTokens: 1024 },
+    providerKind: 'anthropic', providerModel: 'x',
+    cacheStats: () => ({ hits: 5, misses: 2, size: 7 }),
+  });
+  const cache = resources.find(r => r.uri === 'usage://cache-stats');
+  assert.ok(cache);
+  assert.deepEqual(await cache.read(), { hits: 5, misses: 2, size: 7 });
+});
+
 test('buildTools list_providers: includes activeProvider + all 5 kinds', async () => {
   const tools = buildTools({ provider: stubProvider(), providerKind: 'groq', providerModel: 'llama-3.3-70b-versatile' });
   const t = tools.find(t => t.name === 'list_providers');
@@ -311,6 +472,30 @@ test('CLI mcp: subprocess handshake works over stdio', async () => {
     const payload = JSON.parse(lp.result.content[0].text);
     assert.equal(payload.activeProvider, 'ollama');
     assert.equal(payload.supported.length, 5);
+
+    // resources/list should include the two config:// resources
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'resources/list' }) + '\n');
+    const rlLine = await readOne();
+    const rl = JSON.parse(rlLine);
+    const uris = rl.result.resources.map(r => r.uri).sort();
+    assert.deepEqual(uris, ['config://active-provider', 'config://supported-providers']);
+
+    // prompts/list should include the 5 built-in prompts
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'prompts/list' }) + '\n');
+    const plLine = await readOne();
+    const pl = JSON.parse(plLine);
+    const promptNames = pl.result.prompts.map(p => p.name).sort();
+    assert.ok(promptNames.includes('summarize'));
+    assert.ok(promptNames.includes('procurement_risk_scorer'));
+
+    // prompts/get for summarize
+    child.stdin.write(JSON.stringify({
+      jsonrpc: '2.0', id: 6, method: 'prompts/get',
+      params: { name: 'summarize', arguments: { text: 'hello' } },
+    }) + '\n');
+    const pgLine = await readOne();
+    const pg = JSON.parse(pgLine);
+    assert.match(pg.result.description, /Summarize/);
   } finally {
     child.stdin.end();
     child.kill();
