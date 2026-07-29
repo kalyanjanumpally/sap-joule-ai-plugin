@@ -6,7 +6,7 @@
 
 LLM-agnostic AI service for SAP CAP. One unified interface — swap between Anthropic (Claude), Ollama (local), Groq, any OpenAI-compatible endpoint, or SAP Generative AI Hub without changing your handler code.
 
-**Status:** alpha (v0.6.2). All five providers implemented, 39 unit tests + wire-protocol E2E verification against a mock AI Core, CI on Node 20 + 22. GenAI Hub built to SAP's documented API contract and unit-tested against mocks; live-verification against a real AI Core `extended` deployment is the next open item.
+**Status:** stable (v1.0.0). All five providers implemented; 64 unit tests + wire-protocol E2E verification against a mock AI Core; CI green on Node 20 + 22. API stability commitment in force — breaking changes require a major version bump. GenAI Hub is spec-compliant and mock-verified end-to-end; live verification against a real AI Core `extended` deployment is a labeled community-help gap (see FAQ).
 
 ## What it is
 
@@ -84,7 +84,15 @@ Set the appropriate env var (see `.env.example`):
 | `llm-ollama` | Local Ollama daemon | Free | Working |
 | `llm-groq` | Groq's hosted Llama/Mixtral/Qwen (sub-second inference) | Generous free tier | Working |
 | `llm-openai-compatible` | Any endpoint speaking OpenAI's `/chat/completions` (OpenAI, Together, Fireworks, DeepSeek direct, LM Studio, LocalAI...) | Varies | Working |
-| `llm-genai-hub` | SAP AI Core / Generative AI Hub | Paid (extended plan) | Working (mock-verified; live-verify pending community access) |
+| `llm-genai-hub` | SAP AI Core / Generative AI Hub | Paid (extended plan) | Spec-compliant · mock-verified end-to-end · live verify open (community help welcome) |
+
+## Stability
+
+- **Semantic Versioning.** `1.x` will preserve the public API contract documented in `lib/index.d.ts`. Breaking changes require a major version bump.
+- **What's covered:** all exported symbols in `lib/index.js` — `LLMService` and 5 provider subclasses, `chat` / `stream` / `embed` shapes, `ContentBlock` union (text / image / document), message shapes, tool call shapes, stream chunk shapes, image / PDF helpers, and provider option fields (`kind`, `modelId`, `credentials`, `retries`, `responseCache`).
+- **What's not covered:** provider-native `raw` response objects (shape follows the upstream API), CDS kind config field names (which follow CAP conventions), and behavior of individual model IDs (upstream provider concern).
+- **Deprecation policy:** any deprecated field or method will be marked in the JSDoc + CHANGELOG for at least one minor release before removal, and only removed in a subsequent major version.
+- **Full history** in [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Use
 
@@ -509,7 +517,7 @@ llm.embed({ input: string | string[], model? })
 Yes. Only the `llm-genai-hub` kind requires BTP (specifically AI Core). The other four kinds (Anthropic, Ollama, Groq, OpenAI-compatible) work in any Node.js environment. This is deliberate — the plugin is useful for CAP apps that don't run on BTP, and useful for prototyping before a BTP deployment.
 
 **Is this production-ready?**
-It's `0.x`. The core surface (`chat`, `stream`, `embed`, five providers, retries, structured output, tool use, vision) is functional and unit-tested. Pin an exact version (`"@saptarishi/cds-plugin-llm": "0.6.2"`) if you deploy — the `0.x` range doesn't promise API stability across minor bumps. Live-verification against a real SAP AI Core `extended` deployment is the biggest open item.
+As of `1.0.0`: the public API surface is committed under semver (breaking changes require a major bump). The core is functional and unit-tested (64 tests + wire-protocol E2E). The plugin is deployed live on SAP BTP Cloud Foundry through this repo's `joule-project-api`. The one remaining honesty note: the GenAI Hub provider is spec-compliant and mock-verified end-to-end but not yet live-verified against a real AI Core `extended` deployment — happy to accept a PR from anyone with access. Everything else has been live-verified against its target service.
 
 **How do I add a new provider?**
 Extend `LLMService` (or `OpenAICompatibleLLMService` if the target speaks the OpenAI shape), implement `_chat` (required), plus `_stream` and `_embed` if applicable. Register a kind in your `package.json` under `cds.requires.kinds.<my-provider>` with `impl` pointing at the new class file and `external: true`.
@@ -552,8 +560,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**0.7**: embeddings on OpenAI-compat / Groq~~ ✓ shipped in v0.7.0
 - ~~**0.8**: PDF content blocks (Anthropic native; other providers explicit-reject)~~ ✓ shipped in v0.8.0
 - ~~**0.9**: OpenAI-compat inline PDF (via `file` content-block) + GenAI Hub embeddings + response caching layer~~ ✓ shipped in v0.9.0
-- **1.0**: live-verified GenAI Hub provider + API stability commitment
-- **Beyond**: per-user rate limiting hooks, custom middleware/interceptor pattern, HANA Cloud vector store integration
+- ~~**1.0**: API stability commitment~~ ✓ shipped in v1.0.0 (live verification of GenAI Hub open — see FAQ)
+- **1.1+**: per-user rate limiting hooks, custom middleware/interceptor pattern, HANA Cloud vector store integration, OpenAI Files API for URL PDFs
 
 ## License
 
