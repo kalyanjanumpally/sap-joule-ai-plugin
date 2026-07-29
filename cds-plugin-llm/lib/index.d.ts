@@ -55,9 +55,17 @@ export interface DocumentBase64Source {
   data: string;
 }
 
+/** Refers to a file previously uploaded via OpenAI's Files API (v1.14.0+). */
+export interface DocumentFileIdSource {
+  type: 'file_id';
+  file_id: string;
+  /** Informational — 'application/pdf' for uploadPdfFromUrl results. */
+  mediaType?: string;
+}
+
 export interface DocumentBlock {
   type: 'document';
-  source: DocumentUrlSource | DocumentBase64Source;
+  source: DocumentUrlSource | DocumentBase64Source | DocumentFileIdSource;
 }
 
 export type ContentBlock = TextBlock | ImageBlock | DocumentBlock;
@@ -341,6 +349,22 @@ export function pdfFromUrl(url: string): DocumentBlock;
  * Wrap raw base64 PDF bytes into a plugin-shape document block. Anthropic-only.
  */
 export function pdfFromBase64(base64Data: string): DocumentBlock;
+
+/**
+ * Fetch a PDF from `url`, upload to the OpenAI Files API at `<baseUrl>/files`,
+ * and return a plugin-shape document block referencing the returned `file_id`.
+ * Pass the block into any OpenAI-compatible chat request the same way you'd
+ * pass a base64 PDF. Requires an endpoint that speaks OpenAI's Files API
+ * (real OpenAI, Azure OpenAI — not Groq / DeepSeek / etc.).
+ * @since 1.14.0
+ */
+export function uploadPdfFromUrl(url: string, options: {
+  apiKey: string;
+  baseUrl?: string;
+  purpose?: 'user_data' | 'assistants' | 'batch' | 'fine-tune';
+  filename?: string;
+  fetchHeaders?: Record<string, string>;
+}): Promise<DocumentBlock>;
 
 // ---------------------------------------------------------------------------
 // Tool runner — automatic multi-turn agent loop (new in v1.1.0)

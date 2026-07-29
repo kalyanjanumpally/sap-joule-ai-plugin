@@ -367,9 +367,28 @@ const { data } = await llm.chat({
 
 Provider notes:
 - **Anthropic** — native, both base64 and URL sources
-- **OpenAI-compat (GPT-4o+)** — base64 only. Plugin translates the document block to `{type:'file', file:{filename, file_data:'data:application/pdf;base64,...'}}`. URL PDFs throw with guidance to fetch client-side first.
-- **Groq / other OpenAI-compat that don't accept files** — will 400 upstream; the error propagates cleanly
+- **OpenAI-compat (GPT-4o+)** — base64 works out of the box. **URL PDFs (new in v1.14.0)** via the Files API: call `uploadPdfFromUrl(url, {apiKey})` first — it fetches, uploads to `/v1/files`, and returns a document block with `source.type='file_id'` that the provider translates to `{type:'file', file:{file_id}}`.
+- **Groq / other OpenAI-compat that don't accept files** — base64 will 400 upstream; `/v1/files` isn't exposed so `uploadPdfFromUrl` will also 404 there
 - **Ollama** — no PDF support; render pages to images via `pdftoppm` (poppler) and pass to a vision model like `llava` or `llama3.2-vision`
+
+### URL PDFs on OpenAI (v1.14.0+)
+
+```js
+const { uploadPdfFromUrl } = require('@saptarishi/cds-plugin-llm');
+
+const doc = await uploadPdfFromUrl('https://example.com/contract.pdf', {
+  apiKey: process.env.OPENAI_API_KEY,
+  // baseUrl:  'https://api.openai.com/v1'  (default)
+  // purpose:  'user_data'                  (default)
+  // filename: <inferred from URL basename, .pdf appended if missing>
+});
+
+await openai.chat({
+  messages: [{ role: 'user', content: [doc, { type: 'text', text: 'Summarize' }] }],
+});
+```
+
+The returned document block has `source: { type: 'file_id', file_id: 'file-xxx' }`. Reuse the block across multiple chat calls to avoid re-uploading. OpenAI retains uploaded files by account — bring your own retention policy.
 
 ## SAP Generative AI Hub setup
 
@@ -1015,7 +1034,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.11**: MCP bearer-token auth (`--auth-token`)~~ ✓ shipped in v1.11.0
 - ~~**1.12**: MCP progress notifications on `tools/call`~~ ✓ shipped in v1.12.0
 - ~~**1.13**: MCP list-changed notifications (broadcasts on hot-reload)~~ ✓ shipped in v1.13.0
-- **1.14+**: OpenAI Files API for URL PDFs, per-session provider overrides, MCP OAuth2 (client-credentials), CAP model registry (providers in `.cds` files)
+- ~~**1.14**: OpenAI Files API for URL PDFs (`uploadPdfFromUrl`)~~ ✓ shipped in v1.14.0
+- **1.15+**: per-session provider overrides, MCP OAuth2 (client-credentials), CAP model registry (providers in `.cds` files), Azure OpenAI Files API path
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

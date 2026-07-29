@@ -29,4 +29,6 @@ module.exports = {
   // Prompt-template registry (new in 1.8.0)
   PromptRegistry: require('./promptRegistry').PromptRegistry,
   builtInPrompts: require('./promptRegistry').builtInPrompts,
+  // OpenAI Files API helper (new in 1.14.0)
+  uploadPdfFromUrl: require('./openaiFiles').uploadPdfFromUrl,
 };

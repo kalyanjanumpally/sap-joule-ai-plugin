@@ -120,6 +120,59 @@ test('OpenAI-compat: URL PDF throws with actionable message', async () => {
   );
 });
 
+test('OpenAI-compat: document block with source.type=file_id passes through as file.file_id', async () => {
+  let captured = null;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    captured = JSON.parse(opts.body);
+    return {
+      ok: true, status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        choices: [{ message: { content: 'ok', role: 'assistant' }, finish_reason: 'stop' }],
+        model: 'gpt-4o', usage: {},
+      }),
+      text: async () => '',
+    };
+  };
+  try {
+    const svc = new OpenAICompatibleLLMService('llm', null, {
+      credentials: { baseUrl: 'https://x/v1', apiKey: 'k' },
+      modelId: 'gpt-4o',
+    });
+    await svc.init();
+    await svc.chat({
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'document', source: { type: 'file_id', file_id: 'file-abc123', mediaType: 'application/pdf' } },
+          { type: 'text', text: 'summarize' },
+        ],
+      }],
+    });
+    const userMsg = captured.messages.find(m => m.role === 'user');
+    assert.deepEqual(userMsg.content[0], { type: 'file', file: { file_id: 'file-abc123' } });
+    assert.deepEqual(userMsg.content[1], { type: 'text', text: 'summarize' });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('OpenAI-compat: URL PDF error message now suggests uploadPdfFromUrl helper', async () => {
+  const svc = new OpenAICompatibleLLMService('llm', null, {
+    credentials: { baseUrl: 'https://x/v1', apiKey: 'k' },
+    modelId: 'gpt-4o',
+  });
+  await svc.init();
+  await assert.rejects(
+    () => svc.chat({
+      messages: [{
+        role: 'user',
+        content: [pdfFromUrl('https://example.com/x.pdf'), { type: 'text', text: 'q' }],
+      }],
+    }),
+    /uploadPdfFromUrl/,
+  );
+});
+
 test('Ollama throws when a document block is passed', async () => {
   const svc = new OllamaLLMService('llm', null, {
     credentials: { baseUrl: 'http://localhost:11434' },

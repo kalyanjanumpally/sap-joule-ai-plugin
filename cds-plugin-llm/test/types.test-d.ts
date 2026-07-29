@@ -14,6 +14,7 @@ import {
   pdfFromFile,
   pdfFromUrl,
   pdfFromBase64,
+  uploadPdfFromUrl,
   runTools,
   RunnableTool,
   RunToolsResult,
@@ -163,6 +164,9 @@ async function example() {
   const pdf1: DocumentBlock = pdfFromUrl('https://x/y.pdf');
   const pdf2: DocumentBlock = pdfFromBase64('JVBERi0xLjQ=');
   const pdf3: DocumentBlock = await pdfFromFile('/tmp/x.pdf');
+  const pdf4: DocumentBlock = await uploadPdfFromUrl('https://x/y.pdf', {
+    apiKey: 'sk-x', baseUrl: 'https://api.openai.com/v1', purpose: 'user_data',
+  });
   const pdfContent: ContentBlock[] = [pdf1, pdf2, pdf3, { type: 'text', text: 'summarize' }];
   await anthropic.chat({
     messages: [{ role: 'user', content: pdfContent }],

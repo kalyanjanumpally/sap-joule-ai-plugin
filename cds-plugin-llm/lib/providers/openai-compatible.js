@@ -205,11 +205,18 @@ function translateBlock(block) {
         },
       };
     }
+    if (src.type === 'file_id') {
+      // Reference a file previously uploaded via /v1/files (see
+      // uploadPdfFromUrl helper). Wire format matches OpenAI's chat.completions
+      // file content-block for prior uploads.
+      return { type: 'file', file: { file_id: src.file_id } };
+    }
     if (src.type === 'url') {
       throw new Error(
-        'OpenAI-compat providers do not accept PDFs by URL. Fetch the file ' +
-        'client-side and pass via pdfFromBase64(), or use the Anthropic ' +
-        'provider (which does accept URL PDFs natively).'
+        'OpenAI-compat providers do not accept PDFs by URL directly. Either ' +
+        'fetch the file client-side and pass via pdfFromBase64(), or upload ' +
+        'via the Files API using uploadPdfFromUrl(url, {apiKey, baseUrl}). ' +
+        'Anthropic providers do accept URL PDFs natively.'
       );
     }
     throw new Error(`Unsupported document source type: ${src.type}`);
