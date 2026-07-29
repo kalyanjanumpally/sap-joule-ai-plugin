@@ -471,6 +471,62 @@ await llm.chat({ messages: [...], retries: { max: 5, baseMs: 1000, maxMs: 30000 
 }}}}
 ```
 
+## Middleware / interceptors (new in v1.2.0)
+
+Register hooks around every `chat` / `stream` / `embed` call. Koa-style compose — outermost first, `next()` returns the next middleware's result (or the provider's response). Middleware may inspect or transform the request AND the response, share state via `ctx.meta`, or short-circuit by returning without calling `next()`.
+
+```js
+const llm = await cds.connect.to('llm');
+
+// 1. Logging + duration
+llm.use(async (ctx, next) => {
+  const start = Date.now();
+  const res = await next();
+  console.log(`[${ctx.method}] ${Date.now() - start}ms`);
+  return res;
+});
+
+// 2. Cost tracking (aggregate tokens across every call)
+const totals = { in: 0, out: 0 };
+llm.use(async (ctx, next) => {
+  const res = await next();
+  totals.in  += res?.usage?.input_tokens  ?? 0;
+  totals.out += res?.usage?.output_tokens ?? 0;
+  return res;
+});
+
+// 3. Auto-injected system prompt suffix
+llm.use(async (ctx, next) => {
+  if (ctx.method === 'chat' && ctx.request.system) {
+    ctx.request.system += '\n\nBe concise. If uncertain, say so.';
+  }
+  return next();
+});
+
+// 4. Streams: wrap the iterator to observe each chunk
+llm.use(async (ctx, next) => {
+  if (ctx.method !== 'stream') return next();
+  const inner = await next();
+  return (async function* () {
+    for await (const chunk of inner) {
+      if (chunk.type === 'text_delta') myLiveUI.append(chunk.text);
+      yield chunk;
+    }
+  })();
+});
+```
+
+Context object:
+- `ctx.method` — `'chat'` | `'stream'` | `'embed'`
+- `ctx.request` — mutable request options (modify before `next()` to affect the provider call)
+- `ctx.meta` — scratchpad for cross-middleware state (e.g. timing marks, request IDs)
+
+Notes:
+- Middleware runs **around** the response cache, retries, and format-parsing — those are internal concerns your middleware can observe. Cache hits arrive at your middleware with `cached: true` set.
+- Calling `next()` more than once from the same middleware throws.
+- Errors propagate up the chain.
+- For streams, `next()` returns an async iterable. To observe/transform chunks, wrap it into a new async generator.
+
 ## Response caching (new in v0.9.0)
 
 Opt-in per-instance LRU cache with TTL. Skips tool-use calls (side-effects) and streaming (partial responses). Hits return the same `ChatResponse` shape with `cached: true` set.
@@ -604,7 +660,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**0.9**: OpenAI-compat inline PDF (via `file` content-block) + GenAI Hub embeddings + response caching layer~~ ✓ shipped in v0.9.0
 - ~~**1.0**: API stability commitment~~ ✓ shipped in v1.0.0 (live verification of GenAI Hub open — see FAQ)
 - ~~**1.1**: `runTools()` — automatic multi-turn tool-use loop~~ ✓ shipped in v1.1.0
-- **1.2+**: per-user rate limiting hooks, custom middleware/interceptor pattern, OpenAI Files API for URL PDFs, HANA HNSW index config
+- ~~**1.2**: middleware / interceptor pattern~~ ✓ shipped in v1.2.0
+- **1.3+**: per-user rate limiting middleware (build on 1.2's hook system), OpenAI Files API for URL PDFs, batch upsertMany for vector store, HANA HNSW index config, CLI
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

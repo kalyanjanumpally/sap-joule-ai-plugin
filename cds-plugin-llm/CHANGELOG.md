@@ -4,6 +4,23 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-07-29
+
+### Added
+
+- **Middleware / interceptor pattern.** `llm.use(mw)` registers a Koa-style middleware around every `chat` / `stream` / `embed` call.
+  - Signature: `async (ctx, next) => ...` where `ctx = { method, request, meta }`
+  - Compose in registration order (outermost first); `next()` returns the next middleware's result (or provider response)
+  - Middleware may modify request before `next()`, modify response after, or short-circuit by returning without calling `next()`
+  - For streams, `next()` returns an async iterable — wrap it to observe / transform chunks
+  - `ctx.meta` shared across the chain for cross-middleware state
+- `chat` / `stream` / `embed` internally refactored so caching, retry, and format-parsing are visible to middleware as `next()`-returned response fields (e.g. `cached: true` on cache hits).
+- 14 new middleware tests (87 total). TS defs: `Middleware`, `MiddlewareContext`.
+
+### Notes
+
+- Purely additive — no changes to `chat` / `stream` / `embed` public shape or provider hooks. Consumers on `^1.1` can bump to `^1.2` with zero code changes.
+
 ## [1.1.0] — 2026-07-29
 
 ### Added

@@ -17,6 +17,8 @@ import {
   runTools,
   RunnableTool,
   RunToolsResult,
+  Middleware,
+  MiddlewareContext,
   // Types
   ChatRequest,
   ChatResponse,
@@ -171,6 +173,15 @@ async function example() {
   const emb: EmbedResponse = await ollama.embed({ input: ['hello', 'world'] } as EmbedRequest);
   const vectors: number[][] = emb.embeddings;
   void vectors;
+
+  // ---- middleware (new in 1.2.0) -----------------------------------------
+  const logger: Middleware = async (ctx: MiddlewareContext, next) => {
+    ctx.meta.start = Date.now();
+    const res = await next();
+    ctx.meta.durationMs = Date.now() - (ctx.meta.start as number);
+    return res;
+  };
+  groq.use(logger).use(async (ctx, next) => next());
 
   // ---- runTools (new in 1.1.0) -------------------------------------------
   const tools: RunnableTool[] = [{

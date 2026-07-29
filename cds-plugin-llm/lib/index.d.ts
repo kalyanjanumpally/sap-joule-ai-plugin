@@ -232,6 +232,35 @@ export interface ProviderOptions {
 // ---------------------------------------------------------------------------
 
 /**
+ * Middleware context object passed to every middleware function.
+ * `method` tells you which public API triggered the chain.
+ * `request` is mutable — modify it before calling next() to affect the provider call.
+ * `meta` is a scratchpad for cross-middleware state (e.g. timing marks).
+ */
+export interface MiddlewareContext {
+  method: 'chat' | 'stream' | 'embed';
+  request: any;
+  meta: Record<string, any>;
+}
+
+/**
+ * Middleware signature (Koa-style compose):
+ *   async (ctx, next) => {
+ *     // before: inspect / modify ctx.request
+ *     const result = await next();       // -> chat: ChatResponse, embed: EmbedResponse,
+ *                                        //    stream: AsyncIterable<StreamChunk>
+ *     // after: inspect / modify result before returning
+ *     return result;
+ *   }
+ * Middleware may short-circuit by returning without calling next().
+ * For streams, wrap the returned iterable to observe/transform chunks.
+ */
+export type Middleware = (
+  ctx: MiddlewareContext,
+  next: () => Promise<any>,
+) => Promise<any>;
+
+/**
  * Abstract LLM service. All providers extend this.
  * Not intended to be instantiated directly; use one of the provider subclasses,
  * or connect via `cds.connect.to('llm')` in a CAP app.
@@ -240,7 +269,10 @@ export class LLMService {
   constructor(name: string, model: unknown, options?: ProviderOptions);
   modelId?: string;
   defaultMaxTokens: number;
+  middleware: Middleware[];
   init(): Promise<void>;
+  /** Register a middleware. Returns `this` for chaining. */
+  use(middleware: Middleware): this;
   chat<D = unknown>(req: ChatRequest): Promise<ChatResponse<D>>;
   stream(req: ChatRequest): AsyncGenerator<StreamChunk, void, void>;
   embed(req: EmbedRequest): Promise<EmbedResponse>;
