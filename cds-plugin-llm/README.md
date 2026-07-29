@@ -801,6 +801,32 @@ saptarishi-llm mcp --prompts-dir ./prompts
 
 Three export conventions handled in one scan: `export default <template>`, `export default [<t1>, <t2>]`, or named exports.
 
+Add `--watch-prompts` and the server hot-reloads templates when files change — iterate without restart (new in v1.10.0):
+
+```bash
+saptarishi-llm mcp --prompts-dir ./prompts --watch-prompts
+```
+
+### HTTP+SSE transport (new in v1.10.0)
+
+By default `saptarishi-llm mcp` speaks stdio (for Claude Desktop / Cursor / Zed as a local subprocess). Add `--http` and it runs as a network service instead — the same MCP server, addressable over HTTP. Deploy to CF, put behind an auth proxy, share with a team.
+
+```bash
+saptarishi-llm mcp --http --port 3333 --host 0.0.0.0
+# → MCP HTTP+SSE listening on http://0.0.0.0:3333/sse
+# → GET /health for liveness/session count
+```
+
+Wire protocol (MCP 2024-11-05 SSE spec):
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/sse` | Client opens SSE stream. Server sends `event: endpoint\ndata: /messages?sessionId=<uuid>`. Server replies to that session flow back on this stream. |
+| `POST` | `/messages?sessionId=<uuid>` | Client sends a single JSON-RPC message. Server acknowledges 202; reply arrives on the SSE stream. |
+| `GET` | `/health` | `{ server, version, transport, sessions }` — plug into monitoring. |
+
+Multi-session — N concurrent clients each get their own session and stream. Graceful shutdown on SIGINT/SIGTERM.
+
 ## Response caching (new in v0.9.0)
 
 Opt-in per-instance LRU cache with TTL. Skips tool-use calls (side-effects) and streaming (partial responses). Hits return the same `ChatResponse` shape with `cached: true` set.
@@ -942,7 +968,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.7**: `saptarishi-llm mcp` server (MCP over stdio)~~ ✓ shipped in v1.7.0
 - ~~**1.8**: `PromptRegistry` + MCP resources + MCP prompts~~ ✓ shipped in v1.8.0
 - ~~**1.9**: `loadFromDir` prompt loader + `--prompts-dir` on MCP + scaffold SSE endpoint + MCP resource templates~~ ✓ shipped in v1.9.0
-- **1.10+**: OpenAI Files API for URL PDFs, hot-reload prompts folder (watch mode), MCP HTTP transport (SSE), CAP model registry (define providers in `.cds` files)
+- ~~**1.10**: MCP HTTP+SSE transport (`--http`) + hot-reload prompts (`--watch-prompts`)~~ ✓ shipped in v1.10.0
+- **1.11+**: OpenAI Files API for URL PDFs, CAP model registry (providers in `.cds` files), MCP auth (bearer token / OAuth2), MCP progress notifications on tools/call, per-session provider overrides
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

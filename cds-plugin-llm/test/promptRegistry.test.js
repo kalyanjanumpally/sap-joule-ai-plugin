@@ -236,3 +236,116 @@ test('loadFromDir: sorted file order is stable', async () => {
     assert.deepEqual(names, ['from_a', 'from_b']);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- unregister / clear / watchDir (1.10.0) ------------------------------
+
+test('unregister: removes template and returns true/false', () => {
+  const r = new PromptRegistry();
+  r.register({ name: 'a', render: () => ({ messages: [] }) });
+  assert.equal(r.unregister('a'), true);
+  assert.equal(r.has('a'), false);
+  assert.equal(r.unregister('nope'), false);
+});
+
+test('clear: removes every template', () => {
+  const r = new PromptRegistry();
+  r.registerAll(builtInPrompts());
+  assert.ok(r.list().length >= 4);
+  const chained = r.clear();
+  assert.equal(chained, r);
+  assert.equal(r.list().length, 0);
+});
+
+test('watchDir: throws if loadFromDir was not called first', () => {
+  const dir = tmpPromptsDir();
+  try {
+    const r = new PromptRegistry();
+    assert.throws(() => r.watchDir(dir), /no prior loadFromDir/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('watchDir: reloads when a file changes; new template appears', async () => {
+  const dir = tmpPromptsDir();
+  const tplPath = path.join(dir, 'live.mjs');
+  fs.writeFileSync(tplPath, `export default { name: 'live_v1', render: () => ({ messages: [] }) };`);
+  const r = new PromptRegistry();
+  await r.loadFromDir(dir);
+  assert.ok(r.has('live_v1'));
+
+  // Only the LAST onReload wins — macOS FSEvents can fire multiple times
+  // for one save; wait for the reload that actually contains live_v2.
+  let latest = null;
+  let resolveLatest;
+  const gotV2 = new Promise((res) => { resolveLatest = res; });
+  const w = r.watchDir(dir, { debounceMs: 100, onReload: (info) => {
+    latest = info;
+    if (r.has('live_v2')) resolveLatest(info);
+  } });
+
+  await new Promise(res => setTimeout(res, 100));
+  fs.writeFileSync(tplPath, `export default { name: 'live_v2', render: () => ({ messages: [] }) };`);
+
+  const info = await Promise.race([
+    gotV2,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`reload timeout — latest: ${JSON.stringify(latest)}`)), 5000)),
+  ]);
+  w.close();
+  assert.ok(!info.error, `reload error: ${info.error?.message}`);
+  assert.equal(info.registered, 1);
+  assert.equal(r.has('live_v1'), false, 'old template should be unregistered');
+  assert.ok(r.has('live_v2'), 'new template should be registered');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('watchDir: onReload surfaces registration errors', async () => {
+  const dir = tmpPromptsDir();
+  const tplPath = path.join(dir, 'ok.mjs');
+  fs.writeFileSync(tplPath, `export default { name: 'ok_prompt', render: () => ({ messages: [] }) };`);
+  const r = new PromptRegistry();
+  await r.loadFromDir(dir);
+
+  const errPromise = new Promise((resolve) => {
+    const w = r.watchDir(dir, { debounceMs: 20, onReload: (info) => {
+      if (info.error) { w.close(); resolve(info.error); }
+    } });
+  });
+
+  await new Promise(res => setTimeout(res, 50));
+  // Broken syntax — import() will throw
+  fs.writeFileSync(tplPath, `this is not valid javascript !!!`);
+
+  const err = await Promise.race([
+    errPromise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error('no error surfaced')), 3000)),
+  ]);
+  assert.ok(err instanceof Error);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('loadFromDir + watchDir: hot reload picks up new files added later', async () => {
+  const dir = tmpPromptsDir();
+  fs.writeFileSync(path.join(dir, 'first.mjs'), `export default { name: 'first', render: () => ({ messages: [] }) };`);
+  const r = new PromptRegistry();
+  await r.loadFromDir(dir);
+
+  let latest = null;
+  let resolveGot;
+  const gotBoth = new Promise((res) => { resolveGot = res; });
+  const w = r.watchDir(dir, { debounceMs: 100, onReload: (info) => {
+    latest = info;
+    if (r.has('first') && r.has('second')) resolveGot(info);
+  } });
+
+  await new Promise(res => setTimeout(res, 100));
+  fs.writeFileSync(path.join(dir, 'second.mjs'), `export default { name: 'second', render: () => ({ messages: [] }) };`);
+
+  const info = await Promise.race([
+    gotBoth,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout — latest: ${JSON.stringify(latest)}`)), 5000)),
+  ]);
+  w.close();
+  assert.equal(info.loaded, 2);
+  assert.ok(r.has('first'));
+  assert.ok(r.has('second'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});

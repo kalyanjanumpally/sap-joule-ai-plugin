@@ -27,6 +27,10 @@ const GLOBAL_OPTS = {
   force:       { type: 'boolean' },
   'dry-run':   { type: 'boolean' },
   'prompts-dir': { type: 'string' },
+  'watch-prompts': { type: 'boolean' },
+  http:          { type: 'boolean' },
+  port:          { type: 'string' },
+  host:          { type: 'string' },
 };
 
 async function run(argv) {

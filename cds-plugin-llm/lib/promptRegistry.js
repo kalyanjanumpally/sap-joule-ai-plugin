@@ -79,6 +79,17 @@ class PromptRegistry {
     }
     return req;
   }
+
+  /** Remove a template by name. Returns true if it existed. */
+  unregister(name) {
+    return this._prompts.delete(name);
+  }
+
+  /** Remove every registered template. */
+  clear() {
+    this._prompts.clear();
+    return this;
+  }
 }
 
 /**
@@ -171,7 +182,7 @@ PromptRegistry.prototype.registerAll = function (prompts) {
  * the directory doesn't exist (a common misconfiguration worth surfacing
  * loudly).
  */
-PromptRegistry.prototype.loadFromDir = async function (dirPath) {
+PromptRegistry.prototype.loadFromDir = async function (dirPath, options = {}) {
   const fs = require('node:fs');
   const path = require('node:path');
   const url = require('node:url');
@@ -189,11 +200,19 @@ PromptRegistry.prototype.loadFromDir = async function (dirPath) {
     .filter(f => f.endsWith('.mjs') || f.endsWith('.js'))
     .sort();
 
+  if (!this._dirTracked) this._dirTracked = new Map();  // dir -> Set<name>
+  if (!this._dirTracked.has(abs)) this._dirTracked.set(abs, new Set());
+  const tracked = this._dirTracked.get(abs);
+
+  // Cache-busting suffix so re-imports pick up file changes (hot reload).
+  const cacheBust = options._cacheBust ?? '';
+
   let loaded = 0;
   let registered = 0;
   for (const file of files) {
     const filePath = path.join(abs, file);
-    const mod = await import(url.pathToFileURL(filePath).href);
+    const importUrl = url.pathToFileURL(filePath).href + cacheBust;
+    const mod = await import(importUrl);
     loaded++;
 
     const candidates = [];
@@ -209,11 +228,68 @@ PromptRegistry.prototype.loadFromDir = async function (dirPath) {
     for (const c of candidates) {
       if (!looksLikeTemplate(c)) continue;
       this.register(c);
+      tracked.add(c.name);
       registered++;
     }
   }
 
   return { loaded, registered };
+};
+
+/**
+ * Watch a directory for changes and hot-reload prompt templates. Requires
+ * a prior successful loadFromDir() on the same path. Returns a watcher
+ * handle with { close() }.
+ *
+ * On any add / modify / rename in the directory:
+ *   - Unregister every template that came from this directory
+ *   - Re-run loadFromDir with a cache-busting import URL suffix so ESM
+ *     picks up the changed code (import() otherwise caches the module URL)
+ *   - Invokes options.onReload({ loaded, registered, error? }) if provided
+ *
+ * Debounced (default 100ms) because macOS FSEvents commonly fires 2-3
+ * events for a single save.
+ */
+PromptRegistry.prototype.watchDir = function (dirPath, options = {}) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const abs = path.resolve(dirPath);
+  const { debounceMs = 100, onReload } = options;
+
+  if (!this._dirTracked?.has(abs)) {
+    throw new Error(`watchDir: no prior loadFromDir(${dirPath}) — call loadFromDir first`);
+  }
+
+  let timer = null;
+  const registry = this;
+
+  const reload = async () => {
+    try {
+      // Unregister every template previously loaded from this dir
+      const tracked = registry._dirTracked.get(abs);
+      for (const name of tracked) registry.unregister(name);
+      tracked.clear();
+      // Cache-bust the ESM import URL so changes are picked up
+      const stats = await registry.loadFromDir(abs, { _cacheBust: `?t=${Date.now()}` });
+      onReload?.({ ...stats });
+    } catch (err) {
+      onReload?.({ error: err });
+    }
+  };
+
+  const watcher = fs.watch(abs, { persistent: false }, (event, filename) => {
+    if (!filename) return;
+    if (!filename.endsWith('.mjs') && !filename.endsWith('.js')) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(reload, debounceMs);
+  });
+
+  return {
+    close: () => {
+      if (timer) clearTimeout(timer);
+      watcher.close();
+    },
+  };
 };
 
 function looksLikeTemplate(v) {

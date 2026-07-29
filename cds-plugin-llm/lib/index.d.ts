@@ -541,10 +541,22 @@ export class PromptRegistry {
    * register the exported templates. Returns { loaded, registered } counts.
    */
   loadFromDir(dirPath: string): Promise<{ loaded: number; registered: number }>;
+  /**
+   * Watch a previously-loaded directory for changes and hot-reload templates.
+   * Requires a prior `loadFromDir(dirPath)` call. Returns a watcher handle.
+   */
+  watchDir(dirPath: string, options?: {
+    debounceMs?: number;
+    onReload?: (r: { loaded?: number; registered?: number; error?: Error }) => void;
+  }): { close(): void };
   list(): { name: string; description: string; arguments: PromptArgument[] }[];
   has(name: string): boolean;
   get(name: string): PromptTemplate | null;
   render(name: string, vars?: Record<string, any>): RenderedPrompt;
+  /** Remove a template by name. Returns true if it existed. */
+  unregister(name: string): boolean;
+  /** Remove every registered template. */
+  clear(): this;
 }
 
 /** Bundle of general-purpose prompt templates ready to `registerAll(...)`. */

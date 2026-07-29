@@ -1,4 +1,5 @@
 const { MCPServer } = require('../../mcp/server');
+const { createHttpTransport } = require('../../mcp/httpTransport');
 const { buildTools, buildResources, buildResourceTemplates } = require('../../mcp/tools');
 const { PromptRegistry, builtInPrompts } = require('../../promptRegistry');
 
@@ -15,6 +16,15 @@ async function mcp(ctx) {
   if (dir) {
     const { loaded, registered } = await prompts.loadFromDir(dir);
     ctx.stderr.write(`[mcp] loaded ${registered} prompt template(s) from ${loaded} file(s) in ${dir}\n`);
+    if (ctx.opts['watch-prompts']) {
+      prompts.watchDir(dir, {
+        onReload: ({ loaded: l, registered: r, error }) => {
+          if (error) ctx.stderr.write(`[mcp:warn] hot-reload failed: ${error.message}\n`);
+          else ctx.stderr.write(`[mcp] hot-reloaded ${r} prompt(s) from ${l} file(s)\n`);
+        },
+      });
+      ctx.stderr.write(`[mcp] watching ${dir} for changes\n`);
+    }
   }
 
   const pkg = require('../../../package.json');
@@ -27,6 +37,23 @@ async function mcp(ctx) {
     prompts,
     logger: (level, msg) => ctx.stderr.write(`[mcp:${level}] ${msg}\n`),
   });
+
+  const logger = (level, msg) => ctx.stderr.write(`[mcp:${level}] ${msg}\n`);
+
+  if (ctx.opts.http) {
+    const port = ctx.opts.port ? parseInt(ctx.opts.port, 10) : 3333;
+    const host = ctx.opts.host ?? '127.0.0.1';
+    const transport = await createHttpTransport({ server, port, host, logger });
+    ctx.stderr.write(`[mcp] ready (HTTP+SSE) — provider=${kind} model=${model}\n`);
+    ctx.stderr.write(`[mcp] connect an MCP client to ${transport.url}/sse\n`);
+    // Keep alive until SIGINT / SIGTERM
+    await new Promise((resolve) => {
+      const shutdown = () => { transport.close().then(resolve); };
+      process.once('SIGINT', shutdown);
+      process.once('SIGTERM', shutdown);
+    });
+    return 0;
+  }
 
   ctx.stderr.write(`[mcp] ready — provider=${kind} model=${model}\n`);
 
@@ -78,6 +105,13 @@ Prompts registered (invokable via prompts/get):
 Load extra prompts from a directory:
   --prompts-dir <path>     — .mjs/.js files exporting templates
                              (or set SAPTARISHI_LLM_PROMPTS_DIR env var)
+  --watch-prompts          — hot-reload templates when files change
+
+Transport:
+  (default)                — stdio JSON-RPC (Claude Desktop / Cursor / Zed)
+  --http [--port 3333]     — HTTP+SSE server. GET /sse for the event stream,
+        [--host 127.0.0.1]   POST /messages?sessionId=X for client messages.
+                             Handy for deploying as a network service.
 
 Provider selection + credentials: same env vars as other subcommands
 (SAPTARISHI_LLM_PROVIDER, ANTHROPIC_API_KEY, etc — see 'saptarishi-llm help').`;
