@@ -1,7 +1,16 @@
 {
   "name": "@saptarishi/cds-plugin-llm",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "LLM-agnostic AI service for SAP CAP. Speaks Anthropic, Ollama, Groq, any OpenAI-compatible endpoint, and SAP Generative AI Hub behind one API. Supports vision / multimodal input, streaming responses, structured outputs, tool use / function calling, and automatic retries with exponential backoff.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kalyanjanumpally/sap-joule-ai-plugin.git",
+    "directory": "cds-plugin-llm"
+  },
+  "bugs": {
+    "url": "https://github.com/kalyanjanumpally/sap-joule-ai-plugin/issues"
+  },
+  "homepage": "https://github.com/kalyanjanumpally/sap-joule-ai-plugin/tree/main/cds-plugin-llm#readme",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "files": [

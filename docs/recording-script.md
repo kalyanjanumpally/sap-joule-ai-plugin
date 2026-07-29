@@ -153,7 +153,7 @@ Hold 3s. Then fade to end card.
 
 **End card (last 3s):**
 ```
-github.com/kalyanjanumpally/sap-joule-procurement-copilot
+github.com/kalyanjanumpally/sap-joule-ai-plugin
 npm install @saptarishi/cds-plugin-llm
 ```
 

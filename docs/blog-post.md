@@ -119,7 +119,7 @@ const {
 } = require('@saptarishi/cds-plugin-llm');
 ```
 
-- **Repo:** https://github.com/kalyanjanumpally/sap-joule-procurement-copilot
+- **Repo:** https://github.com/kalyanjanumpally/sap-joule-ai-plugin
 - **npm:** https://www.npmjs.com/package/@saptarishi/cds-plugin-llm
 - **License:** Apache-2.0
 

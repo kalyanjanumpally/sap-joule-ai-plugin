@@ -1,6 +1,6 @@
 # cds-plugin-llm
 
-[![CI](https://github.com/kalyanjanumpally/sap-joule-procurement-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/kalyanjanumpally/sap-joule-procurement-copilot/actions/workflows/ci.yml)
+[![CI](https://github.com/kalyanjanumpally/sap-joule-ai-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/kalyanjanumpally/sap-joule-ai-plugin/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@saptarishi/cds-plugin-llm.svg)](https://www.npmjs.com/package/@saptarishi/cds-plugin-llm)
 [![license](https://img.shields.io/npm/l/@saptarishi/cds-plugin-llm.svg)](./LICENSE)
 
@@ -537,11 +537,11 @@ Each provider adapter is a thin file (~150 lines). Provider API changes are loca
 
 ## Contributing
 
-PRs and issues welcome. The [repo](https://github.com/kalyanjanumpally/sap-joule-procurement-copilot) has the plugin as `cds-plugin-llm/`. Standard workflow:
+PRs and issues welcome. The [repo](https://github.com/kalyanjanumpally/sap-joule-ai-plugin) has the plugin as `cds-plugin-llm/`. Standard workflow:
 
 ```sh
-git clone https://github.com/kalyanjanumpally/sap-joule-procurement-copilot
-cd sap-joule-procurement-copilot/cds-plugin-llm
+git clone https://github.com/kalyanjanumpally/sap-joule-ai-plugin
+cd sap-joule-ai-plugin/cds-plugin-llm
 npm install
 npm test              # 39 unit tests, no external deps
 npm run typecheck     # TypeScript definition check
