@@ -30,13 +30,21 @@ jobs:
       - name: Syntax-check all plugin source files
         working-directory: cds-plugin-llm
         run: |
-          for f in lib/*.js lib/providers/*.js; do
+          for f in lib/*.js lib/providers/*.js lib/cli/*.js lib/cli/commands/*.js lib/middleware/*.js lib/mcp/*.js; do
             node --check "$f"
           done
           for f in test/*.js; do node --check "$f"; done
           for f in ../scripts/*.js; do node --check "$f"; done
 
-      - name: Unit tests (base LLMService, retry helper, GenAI Hub OAuth flow)
+      - name: Install @sap/cds (needed by subprocess tests that spawn the CLI)
+        working-directory: cds-plugin-llm
+        # In-process tests shim @sap/cds via Module._resolveFilename, but the
+        # `saptarishi-llm mcp` subprocess test spawns a real child that loads
+        # providers (which extend cds.Service) — so the real package must be
+        # resolvable in the sandbox for that test to run.
+        run: npm install --no-save --no-audit --no-fund --loglevel=error @sap/cds
+
+      - name: Unit tests
         working-directory: cds-plugin-llm
         # explicit file glob rather than `test/` — Node 22 changed directory
         # resolution and treats a bare directory name as a require() target
