@@ -50,3 +50,20 @@ jobs:
 
       - name: End-to-end verification against mock AI Core
         run: node scripts/verify-genai-hub.js
+
+      - name: Syntax-check cds-plugin-vector-hana source files
+        working-directory: cds-plugin-vector-hana
+        run: |
+          for f in lib/*.js lib/backends/*.js test/*.js; do node --check "$f"; done
+
+      - name: Unit tests — cds-plugin-vector-hana (SQLite integration + HANA mock)
+        working-directory: cds-plugin-vector-hana
+        run: |
+          npm install --no-save --no-audit --no-fund --loglevel=error better-sqlite3
+          node --test test/*.js
+
+      - name: TypeScript type-check — cds-plugin-vector-hana
+        working-directory: cds-plugin-vector-hana
+        run: |
+          npm install --no-save --no-audit --no-fund --loglevel=error typescript @types/node
+          npx tsc --noEmit lib/index.d.ts
