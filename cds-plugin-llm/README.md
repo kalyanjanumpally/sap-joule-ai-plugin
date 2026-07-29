@@ -532,6 +532,9 @@ Extend `LLMService` (or `OpenAICompatibleLLMService` if the target speaks the Op
 **Why not just use `@anthropic-ai/sdk` or `openai` directly?**
 Three reasons: (1) CAP idiom — `cds.connect.to('llm')` is more natural in a CAP handler than importing an SDK class. (2) Provider swap without code change — flip a config value from `llm-groq` to `llm-anthropic` and the same handler works. (3) Unified interface for tools + structured output + streaming across all providers, so you don't rewrite the message-translation code five times.
 
+**How do I do RAG (retrieval-augmented generation)?**
+The plugin gives you `embed()` — combine with a vector store to complete the loop. Companion package [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) provides a SAP HANA Cloud vector store (native `REAL_VECTOR` + `COSINE_SIMILARITY`) with a SQLite fallback for local dev, so you can build semantic-search features without HANA access and swap backends at deploy time.
+
 **What happens if the underlying provider's API changes?**
 Each provider adapter is a thin file (~150 lines). Provider API changes are localized to one file. The plugin's public surface (`chat`, `stream`, `embed`) is stable across provider changes.
 

@@ -1,0 +1,137 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+
+// Stub `hdb` before requiring the HANA backend
+const Module = require('module');
+const STUB_PATH = '/tmp/__hdb_stub__';
+
+const state = { executed: [] };
+require.cache[STUB_PATH] = {
+  exports: {
+    createClient: () => ({
+      connect: (cb) => cb(null),
+      prepare: (sql, cb) => {
+        cb(null, {
+          exec: (params, cb2) => {
+            state.executed.push({ sql, params });
+            // Return canned rows for SELECT COUNT queries (table-exists check)
+            if (/COUNT\(\*\)/i.test(sql)) return cb2(null, [{ N: 0 }]);
+            // Canned rows for SELECT similarity
+            if (/COSINE_SIMILARITY/i.test(sql)) {
+              return cb2(null, [
+                { id: 'a', text: 'hello world', metadata: null, score: 0.95 },
+                { id: 'b', text: 'goodbye',     metadata: '{"tag":"x"}', score: 0.42 },
+              ]);
+            }
+            cb2(null, []);
+          },
+        });
+      },
+      end: (cb) => cb && cb(),
+    }),
+  },
+  loaded: true,
+};
+const origResolve = Module._resolveFilename;
+Module._resolveFilename = function(request, ...rest) {
+  if (request === 'hdb') return STUB_PATH;
+  return origResolve.call(this, request, ...rest);
+};
+
+const HanaVectorStore = require('../lib/backends/hana');
+
+const fakeEmbedder = {
+  async embed({ input }) {
+    const inputs = Array.isArray(input) ? input : [input];
+    return { embeddings: inputs.map(() => [0.1, 0.2, 0.3, 0.4]), model: 'x' };
+  },
+};
+
+function makeStore() {
+  return new HanaVectorStore({
+    embed: fakeEmbedder,
+    dimension: 4,
+    table: 'CONTRACTS',
+    connection: { host: 'x', port: 443, user: 'u', password: 'p' },
+  });
+}
+
+test('HanaVectorStore: init creates a column table with REAL_VECTOR(dim)', async () => {
+  state.executed = [];
+  const store = makeStore();
+  await store.init();
+  const create = state.executed.find(x => /CREATE COLUMN TABLE/i.test(x.sql));
+  assert.ok(create, 'CREATE TABLE was not issued');
+  assert.match(create.sql, /"CONTRACTS"/);
+  assert.match(create.sql, /REAL_VECTOR\(4\)/);
+  assert.match(create.sql, /NVARCHAR\(256\) PRIMARY KEY/);
+  assert.match(create.sql, /NCLOB/);
+});
+
+test('HanaVectorStore: upsert uses MERGE INTO with TO_REAL_VECTOR', async () => {
+  state.executed = [];
+  const store = makeStore();
+  await store.init();
+  await store.upsert({ id: 'a', text: 'hello', metadata: { k: 'v' } });
+  const merge = state.executed.find(x => /MERGE INTO/i.test(x.sql));
+  assert.ok(merge, 'MERGE was not issued');
+  assert.match(merge.sql, /TO_REAL_VECTOR\(\?\)/);
+  assert.match(merge.sql, /WHEN MATCHED THEN UPDATE/);
+  assert.match(merge.sql, /WHEN NOT MATCHED THEN INSERT/);
+  // Params: id, text, vector-as-json, metadata-as-json
+  assert.equal(merge.params[0], 'a');
+  assert.equal(merge.params[1], 'hello');
+  assert.equal(merge.params[2], JSON.stringify([0.1, 0.2, 0.3, 0.4]));
+  assert.equal(merge.params[3], '{"k":"v"}');
+});
+
+test('HanaVectorStore: search uses COSINE_SIMILARITY + TOP N + ORDER BY DESC', async () => {
+  state.executed = [];
+  const store = makeStore();
+  await store.init();
+  const hits = await store.search({ text: 'query', topK: 5 });
+  const sel = state.executed.find(x => /COSINE_SIMILARITY/i.test(x.sql));
+  assert.ok(sel);
+  assert.match(sel.sql, /TOP 5/);
+  assert.match(sel.sql, /COSINE_SIMILARITY\("embedding", TO_REAL_VECTOR\(\?\)\)/);
+  assert.match(sel.sql, /ORDER BY "score" DESC/);
+  // Verify result shape
+  assert.equal(hits.length, 2);
+  assert.equal(hits[0].id, 'a');
+  assert.equal(hits[0].score, 0.95);
+  assert.equal(hits[1].metadata.tag, 'x');
+});
+
+test('HanaVectorStore: filter adds JSON_VALUE clauses', async () => {
+  state.executed = [];
+  const store = makeStore();
+  await store.init();
+  await store.search({ text: 'q', topK: 3, filter: { region: 'EMEA', priority: '1' } });
+  const sel = state.executed.find(x => /COSINE_SIMILARITY/i.test(x.sql));
+  assert.match(sel.sql, /JSON_VALUE\("metadata", '\$.region'\) = \?/);
+  assert.match(sel.sql, /JSON_VALUE\("metadata", '\$.priority'\) = \?/);
+  // Params order: vector JSON first, then filter values in insertion order
+  assert.equal(sel.params[0], JSON.stringify([0.1, 0.2, 0.3, 0.4]));
+  assert.equal(sel.params[1], 'EMEA');
+  assert.equal(sel.params[2], '1');
+});
+
+test('HanaVectorStore: delete issues DELETE WHERE id = ?', async () => {
+  state.executed = [];
+  const store = makeStore();
+  await store.init();
+  await store.delete({ id: 'zzz' });
+  const del = state.executed.find(x => /^\s*DELETE FROM/i.test(x.sql));
+  assert.ok(del);
+  assert.match(del.sql, /WHERE "id" = \?/);
+  assert.equal(del.params[0], 'zzz');
+});
+
+test('HanaVectorStore: dropTable issues DROP TABLE', async () => {
+  state.executed = [];
+  const store = makeStore();
+  await store.init();
+  await store.dropTable();
+  const drop = state.executed.find(x => /DROP TABLE/i.test(x.sql));
+  assert.ok(drop);
+});

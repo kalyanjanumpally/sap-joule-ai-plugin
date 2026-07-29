@@ -1,0 +1,45 @@
+{
+  "name": "@saptarishi/cds-plugin-vector-hana",
+  "version": "0.1.0",
+  "description": "Vector store for SAP CAP with HANA Cloud's native REAL_VECTOR + COSINE_SIMILARITY. Includes a SQLite fallback for local development so you can build semantic-search features without paying for HANA. Composes with @saptarishi/cds-plugin-llm for embeddings.",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "sap", "cap", "cds", "hana", "hana-cloud", "vector-store", "vector-search",
+    "semantic-search", "rag", "embeddings", "llm", "ai", "joule"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kalyanjanumpally/sap-joule-ai-plugin.git",
+    "directory": "cds-plugin-vector-hana"
+  },
+  "bugs": {
+    "url": "https://github.com/kalyanjanumpally/sap-joule-ai-plugin/issues"
+  },
+  "homepage": "https://github.com/kalyanjanumpally/sap-joule-ai-plugin/tree/main/cds-plugin-vector-hana#readme",
+  "author": "",
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "@saptarishi/cds-plugin-llm": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@saptarishi/cds-plugin-llm": { "optional": false }
+  },
+  "optionalDependencies": {
+    "hdb": "^0.19.0",
+    "better-sqlite3": "^11.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

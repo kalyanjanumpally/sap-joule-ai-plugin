@@ -1,0 +1,156 @@
+const VectorStore = require('../VectorStore');
+
+/**
+ * SAP HANA Cloud vector store using native REAL_VECTOR + COSINE_SIMILARITY.
+ * Requires HANA Cloud QRC 1/2024 or later (when the vector engine landed GA).
+ *
+ * Uses the `hdb` client — pure JS, no native compilation required.
+ * Install separately: `npm install hdb`.
+ *
+ * Configuration:
+ *   {
+ *     embed:      <@saptarishi/cds-plugin-llm instance>,
+ *     dimension:  1536,                        // must match embedding model
+ *     table:      'CONTRACTS_EMBEDDINGS',      // HANA-style uppercase preferred
+ *     connection: {
+ *       host:     '<subaccount>.hanacloud.ondemand.com',
+ *       port:     443,
+ *       user:     '<HANA user>',
+ *       password: '<HANA password>',
+ *       ...standard hdb options
+ *     }
+ *   }
+ *
+ * On BTP with a HANA service binding, pass `credentials` from the binding
+ * as `connection` directly.
+ */
+class HanaVectorStore extends VectorStore {
+  constructor(options = {}) {
+    super(options);
+    this.connection = options.connection ?? {};
+  }
+
+  async _connect() {
+    let hdb;
+    try {
+      hdb = require('hdb');
+    } catch (e) {
+      throw new Error(
+        'HanaVectorStore requires the `hdb` package. Install with: ' +
+        '`npm install hdb`. Or use the SQLite backend for local dev.'
+      );
+    }
+    this.client = hdb.createClient(this.connection);
+    await new Promise((resolve, reject) => {
+      this.client.connect(err => (err ? reject(err) : resolve()));
+    });
+  }
+
+  async _createTableIfMissing() {
+    // Check for existence in SYS.TABLES (public metadata view)
+    const exists = await this._exec(
+      `SELECT COUNT(*) AS N FROM SYS.TABLES WHERE TABLE_NAME = ? AND SCHEMA_NAME = CURRENT_SCHEMA`,
+      [this.table],
+    );
+    if (exists?.[0]?.N > 0) return;
+
+    // REAL_VECTOR(dim) is HANA Cloud native (QRC 1/2024+). METADATA stored as
+    // NCLOB (JSON blob) — HANA doesn't have a native JSON column type but
+    // JSON functions work over NCLOB just fine.
+    const sql = `
+      CREATE COLUMN TABLE "${this.table}" (
+        "${this.idColumn}"        NVARCHAR(256) PRIMARY KEY,
+        "${this.textColumn}"      NCLOB NOT NULL,
+        "${this.embeddingColumn}" REAL_VECTOR(${this.dimension}) NOT NULL,
+        "${this.metadataColumn}"  NCLOB
+      )
+    `;
+    await this._exec(sql);
+  }
+
+  async _upsert({ id, text, vector, metadata }) {
+    // HANA doesn't have native UPSERT — use MERGE INTO. TO_REAL_VECTOR converts
+    // a JSON array string into the native vector representation.
+    const sql = `
+      MERGE INTO "${this.table}" AS T
+      USING (SELECT ? AS "${this.idColumn}", ? AS "${this.textColumn}",
+                    TO_REAL_VECTOR(?) AS "${this.embeddingColumn}",
+                    ? AS "${this.metadataColumn}" FROM DUMMY) AS S
+      ON T."${this.idColumn}" = S."${this.idColumn}"
+      WHEN MATCHED THEN UPDATE SET
+        "${this.textColumn}" = S."${this.textColumn}",
+        "${this.embeddingColumn}" = S."${this.embeddingColumn}",
+        "${this.metadataColumn}" = S."${this.metadataColumn}"
+      WHEN NOT MATCHED THEN INSERT VALUES (
+        S."${this.idColumn}", S."${this.textColumn}",
+        S."${this.embeddingColumn}", S."${this.metadataColumn}"
+      )
+    `;
+    await this._exec(sql, [id, text, JSON.stringify(vector), metadata ? JSON.stringify(metadata) : null]);
+    return { id };
+  }
+
+  async _search({ queryVector, topK, filter }) {
+    // COSINE_SIMILARITY returns [-1, 1] where 1 = identical, -1 = opposite.
+    // Sort DESC for closest matches first. TOP N limits at the SQL level.
+    let where = '';
+    const params = [JSON.stringify(queryVector)];
+    if (filter && Object.keys(filter).length > 0) {
+      const clauses = [];
+      for (const [key, value] of Object.entries(filter)) {
+        clauses.push(`JSON_VALUE("${this.metadataColumn}", '$.${key}') = ?`);
+        params.push(value);
+      }
+      where = 'WHERE ' + clauses.join(' AND ');
+    }
+    const sql = `
+      SELECT TOP ${Math.floor(topK)}
+        "${this.idColumn}" AS "id",
+        "${this.textColumn}" AS "text",
+        "${this.metadataColumn}" AS "metadata",
+        COSINE_SIMILARITY("${this.embeddingColumn}", TO_REAL_VECTOR(?)) AS "score"
+      FROM "${this.table}"
+      ${where}
+      ORDER BY "score" DESC
+    `;
+    const rows = await this._exec(sql, params);
+    return (rows ?? []).map(r => ({
+      id: r.id ?? r.ID,
+      text: r.text ?? r.TEXT,
+      metadata: (r.metadata ?? r.METADATA) ? JSON.parse(r.metadata ?? r.METADATA) : null,
+      score: r.score ?? r.SCORE,
+    }));
+  }
+
+  async _delete({ id }) {
+    const sql = `DELETE FROM "${this.table}" WHERE "${this.idColumn}" = ?`;
+    await this._exec(sql, [id]);
+    return { id };
+  }
+
+  async _dropTable() {
+    await this._exec(`DROP TABLE "${this.table}"`);
+  }
+
+  async _close() {
+    if (this.client) {
+      await new Promise(resolve => this.client.end(() => resolve()));
+    }
+  }
+
+  // ---- internal helpers ---------------------------------------------------
+
+  _exec(sql, params = []) {
+    return new Promise((resolve, reject) => {
+      this.client.prepare(sql, (err, stmt) => {
+        if (err) return reject(err);
+        stmt.exec(params, (err2, rows) => {
+          if (err2) return reject(err2);
+          resolve(rows);
+        });
+      });
+    });
+  }
+}
+
+module.exports = HanaVectorStore;
