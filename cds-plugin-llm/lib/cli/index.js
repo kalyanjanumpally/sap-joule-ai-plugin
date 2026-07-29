@@ -8,6 +8,7 @@ const COMMANDS = {
   embed: require('./commands/embed'),
   verify: require('./commands/verify'),
   providers: require('./commands/providers'),
+  init: require('./commands/init'),
   help: async () => { printHelp(); return 0; },
 };
 
@@ -22,6 +23,8 @@ const GLOBAL_OPTS = {
   json:        { type: 'boolean' },
   help:        { type: 'boolean', short: 'h' },
   version:     { type: 'boolean' },
+  force:       { type: 'boolean' },
+  'dry-run':   { type: 'boolean' },
 };
 
 async function run(argv) {
@@ -89,6 +92,7 @@ commands:
   embed       Embed input text(s), print vectors
   verify      Sanity-check provider config (connect + tiny chat)
   providers   List supported provider kinds
+  init        Scaffold a CAP app pre-wired to this plugin
   help        Show this help
 
 common options:
@@ -115,6 +119,7 @@ examples:
   echo "explain this code" | saptarishi-llm stream -f app.js
   saptarishi-llm embed -p "purchase order for steel coils" --json
   saptarishi-llm verify --provider anthropic
+  saptarishi-llm init joule-demo --provider groq
 `);
 }
 

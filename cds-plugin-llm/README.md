@@ -593,7 +593,7 @@ Uses an atomic Lua `EVAL` so two instances checking the bucket at the same time 
 
 ## CLI (new in v1.5.0)
 
-A `saptarishi-llm` executable ships with the package. Handy for provider health checks in CI, quick prompt experiments from the shell, or pipelining embeddings into a downstream tool.
+A `saptarishi-llm` executable ships with the package. Handy for provider health checks in CI, quick prompt experiments from the shell, pipelining embeddings into a downstream tool, or **scaffolding a fresh CAP project** pre-wired to the plugin (v1.6.0).
 
 ```bash
 npx @saptarishi/cds-plugin-llm --help
@@ -641,6 +641,43 @@ saptarishi-llm embed -p "one\n---\ntwo\n---\nthree"      # 3 vectors from 1 call
 ```bash
 saptarishi-llm verify --provider genai-hub --json
 ```
+
+### Scaffold a fresh CAP project (new in v1.6.0)
+
+`init` creates a fully-wired CAP app in seconds — no manual `package.json` editing, no CDS boilerplate:
+
+```bash
+npx @saptarishi/cds-plugin-llm init joule-demo --provider groq
+cd joule-demo
+cp .env.example .env               # then fill in real credentials
+npm install
+cds watch
+```
+
+Then:
+
+```bash
+curl 'http://localhost:4004/ai/chat(prompt='"'"'hello'"'"')'
+```
+
+Generated:
+
+```
+joule-demo/
+├── package.json          # cds.requires.llm pointing at chosen provider
+├── srv/
+│   ├── ai-service.cds    # service AIService { chat(prompt), summarize(text) }
+│   └── ai-service.js     # handlers using cds.connect.to('llm')
+├── .env.example          # provider-specific env vars
+├── .gitignore            # excludes .env, node_modules/, gen/
+└── README.md             # how to run
+```
+
+Flags:
+- `--provider <kind>` — `anthropic` (default) | `ollama` | `groq` | `openai-compatible` | `genai-hub`
+- `--model <id>` — override the default model for the chosen provider
+- `--force` — overwrite a non-empty target directory
+- `--dry-run` — print the file list without writing anything
 
 ## Response caching (new in v0.9.0)
 
@@ -779,7 +816,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.3**: built-in `rateLimit` + `otel` middlewares; vector store `upsertMany`~~ ✓ shipped in v1.3.0 (llm) / v0.2.0 (vector-hana)
 - ~~**1.4**: `redisRateLimit` middleware; HANA HNSW index config~~ ✓ shipped in v1.4.0 (llm) / v0.3.0 (vector-hana)
 - ~~**1.5**: `saptarishi-llm` CLI~~ ✓ shipped in v1.5.0
-- **1.6+**: OpenAI Files API for URL PDFs, HANA IVF-Flat index option, per-provider prompt-template registry, CAP-app scaffolder (`saptarishi-llm init`)
+- ~~**1.6**: `saptarishi-llm init` CAP-app scaffolder~~ ✓ shipped in v1.6.0
+- **1.7+**: OpenAI Files API for URL PDFs, HANA IVF-Flat index option, per-provider prompt-template registry, streaming SSE endpoint in the scaffold, MCP server exposing the plugin
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

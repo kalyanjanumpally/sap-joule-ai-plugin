@@ -4,6 +4,32 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] — 2026-07-29
+
+### Added
+
+- **`saptarishi-llm init <dir>` subcommand — scaffolds a working CAP app pre-wired to this plugin.** Turns "install & try" into a single command:
+
+  ```bash
+  npx @saptarishi/cds-plugin-llm init joule-demo --provider groq
+  cd joule-demo && npm install && cds watch
+  ```
+
+  Generates:
+  - `package.json` with `cds.requires.llm` config for the chosen provider (`${ENV_VAR}` substitution so credentials come from `.env`)
+  - `srv/ai-service.cds` — service exposing `chat(prompt)` and `summarize(text)`
+  - `srv/ai-service.js` — handlers using `cds.connect.to('llm')`
+  - `.env.example` with provider-specific env vars
+  - `.gitignore` (excludes `.env`, `node_modules/`, `gen/`)
+  - `README.md` with run instructions
+
+  Flags: `--provider <kind>` (default `anthropic`), `--model <id>`, `--force` (overwrite non-empty dir), `--dry-run` (print plan, write nothing). App name derived from directory basename.
+- 14 new tests (148 total) covering template substitution, all 5 provider paths, non-empty dir rejection, `--force`, `--dry-run`, app-name derivation, and end-to-end subprocess invocation.
+
+### Notes
+
+- Additive — no changes to CAP-plugin runtime behavior. `^1.5` consumers can bump to `^1.6` with zero code changes; scaffolder is opt-in.
+
 ## [1.5.0] — 2026-07-29
 
 ### Added
