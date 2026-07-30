@@ -473,8 +473,213 @@ test('MCPServer: initialize advertises listChanged: true on all present capabili
   });
   const reply = await s.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' });
   assert.deepEqual(reply.result.capabilities.tools, { listChanged: true });
-  assert.deepEqual(reply.result.capabilities.resources, { listChanged: true });
+  assert.deepEqual(reply.result.capabilities.resources, { listChanged: true, subscribe: true });
   assert.deepEqual(reply.result.capabilities.prompts, { listChanged: true });
+});
+
+// ---- resource subscriptions (1.17.0) --------------------------------------
+
+test('MCPServer: addSubscriber returns unsubscribe fn with .subscriptions Set', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const unsub = s.addSubscriber(() => {});
+  assert.ok(unsub.subscriptions instanceof Set);
+  assert.equal(unsub.subscriptions.size, 0);
+  unsub();
+});
+
+test('MCPServer: resources/subscribe adds uri to transportCtx.subscriptions Set', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resources: [{ uri: 'config://a', read: async () => 'ok' }],
+  });
+  const subs = new Set();
+  const reply = await s.handleMessage(
+    { jsonrpc: '2.0', id: 1, method: 'resources/subscribe', params: { uri: 'config://a' } },
+    { subscriptions: subs },
+  );
+  assert.deepEqual(reply.result, {});
+  assert.ok(subs.has('config://a'));
+});
+
+test('MCPServer: resources/subscribe accepts templated URI matches', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resourceTemplates: [{
+      uriTemplate: 'prompt://{name}',
+      read: ({ name }) => ({ name }),
+    }],
+  });
+  const subs = new Set();
+  const reply = await s.handleMessage(
+    { jsonrpc: '2.0', id: 1, method: 'resources/subscribe', params: { uri: 'prompt://summarize' } },
+    { subscriptions: subs },
+  );
+  assert.deepEqual(reply.result, {});
+  assert.ok(subs.has('prompt://summarize'));
+});
+
+test('MCPServer: resources/subscribe rejects unknown URI', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resources: [{ uri: 'config://a', read: async () => 'ok' }],
+  });
+  const reply = await s.handleMessage(
+    { jsonrpc: '2.0', id: 1, method: 'resources/subscribe', params: { uri: 'config://does-not-exist' } },
+    { subscriptions: new Set() },
+  );
+  assert.equal(reply.error.code, ERROR_CODES.INVALID_PARAMS);
+  assert.match(reply.error.message, /unknown resource/);
+});
+
+test('MCPServer: resources/subscribe rejects missing uri', async () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const reply = await s.handleMessage(
+    { jsonrpc: '2.0', id: 1, method: 'resources/subscribe', params: {} },
+    { subscriptions: new Set() },
+  );
+  assert.equal(reply.error.code, ERROR_CODES.INVALID_PARAMS);
+  assert.match(reply.error.message, /uri is required/);
+});
+
+test('MCPServer: resources/unsubscribe removes uri', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resources: [{ uri: 'config://a', read: async () => 'ok' }],
+  });
+  const subs = new Set(['config://a', 'config://b']);
+  const reply = await s.handleMessage(
+    { jsonrpc: '2.0', id: 1, method: 'resources/unsubscribe', params: { uri: 'config://a' } },
+    { subscriptions: subs },
+  );
+  assert.deepEqual(reply.result, {});
+  assert.equal(subs.has('config://a'), false);
+  assert.ok(subs.has('config://b'));
+});
+
+test('MCPServer: resources/unsubscribe is idempotent for unknown uri', async () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const subs = new Set();
+  const reply = await s.handleMessage(
+    { jsonrpc: '2.0', id: 1, method: 'resources/unsubscribe', params: { uri: 'never-subscribed' } },
+    { subscriptions: subs },
+  );
+  assert.deepEqual(reply.result, {});
+});
+
+test('MCPServer: notifyResourceUpdated requires a non-empty string uri', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  assert.throws(() => s.notifyResourceUpdated(''), /non-empty string/);
+  assert.throws(() => s.notifyResourceUpdated(null), /non-empty string/);
+  assert.throws(() => s.notifyResourceUpdated(42), /non-empty string/);
+});
+
+test('MCPServer: notifyResourceUpdated only reaches subscribers of that URI', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const rxA = []; const rxB = []; const rxNone = [];
+  const uA = s.addSubscriber((n) => rxA.push(n));
+  const uB = s.addSubscriber((n) => rxB.push(n));
+  s.addSubscriber((n) => rxNone.push(n)); // no subscriptions
+
+  uA.subscriptions.add('config://a');
+  uB.subscriptions.add('config://b');
+
+  s.notifyResourceUpdated('config://a');
+  assert.equal(rxA.length, 1);
+  assert.equal(rxB.length, 0);
+  assert.equal(rxNone.length, 0);
+  assert.equal(rxA[0].method, 'notifications/resources/updated');
+  assert.deepEqual(rxA[0].params, { uri: 'config://a' });
+  assert.equal(rxA[0].jsonrpc, '2.0');
+  assert.equal(rxA[0].id, undefined);
+});
+
+test('MCPServer: notifyResourceUpdated is a silent no-op when nobody is subscribed', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const rx = [];
+  s.addSubscriber((n) => rx.push(n));
+  s.notifyResourceUpdated('config://a'); // no subs on the subscriber
+  assert.equal(rx.length, 0);
+});
+
+test('MCPServer: notifyResourceUpdated fans out to multiple subscribers of same URI', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const rx1 = []; const rx2 = [];
+  const u1 = s.addSubscriber((n) => rx1.push(n));
+  const u2 = s.addSubscriber((n) => rx2.push(n));
+  u1.subscriptions.add('config://a');
+  u2.subscriptions.add('config://a');
+  s.notifyResourceUpdated('config://a');
+  assert.equal(rx1.length, 1);
+  assert.equal(rx2.length, 1);
+});
+
+test('MCPServer: notifyResourceUpdated survives a throwing subscriber', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const rx = [];
+  const u1 = s.addSubscriber(() => { throw new Error('boom'); });
+  const u2 = s.addSubscriber((n) => rx.push(n));
+  u1.subscriptions.add('config://a');
+  u2.subscriptions.add('config://a');
+  s.notifyResourceUpdated('config://a'); // must not throw
+  assert.equal(rx.length, 1);
+});
+
+test('MCPServer: unsubscribe drops the sink and its subscriptions', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const rx = [];
+  const unsub = s.addSubscriber((n) => rx.push(n));
+  unsub.subscriptions.add('config://a');
+  unsub();
+  s.notifyResourceUpdated('config://a');
+  assert.equal(rx.length, 0);
+});
+
+test('MCPServer: subscribedUris returns distinct URIs across subscribers, optionally filtered by prefix', () => {
+  const s = new MCPServer({ name: 'x', version: '1.0.0' });
+  const u1 = s.addSubscriber(() => {});
+  const u2 = s.addSubscriber(() => {});
+  u1.subscriptions.add('prompt://summarize');
+  u1.subscriptions.add('config://active-provider');
+  u2.subscriptions.add('prompt://summarize'); // duplicate across clients
+  u2.subscriptions.add('prompt://translate');
+
+  const all = s.subscribedUris();
+  assert.equal(all.size, 3);
+  assert.ok(all.has('prompt://summarize'));
+  assert.ok(all.has('prompt://translate'));
+  assert.ok(all.has('config://active-provider'));
+
+  const promptsOnly = s.subscribedUris('prompt://');
+  assert.equal(promptsOnly.size, 2);
+  assert.ok(promptsOnly.has('prompt://summarize'));
+  assert.ok(promptsOnly.has('prompt://translate'));
+  assert.equal(promptsOnly.has('config://active-provider'), false);
+});
+
+test('MCPServer: end-to-end subscribe -> notify -> unsubscribe over stdio-style transportCtx', async () => {
+  const s = new MCPServer({
+    name: 'x', version: '1.0.0',
+    resources: [{ uri: 'config://a', read: async () => 'ok' }],
+  });
+  // Simulate a single connection: one send sink, one shared subscriptions Set.
+  const rx = [];
+  const unsub = s.addSubscriber((n) => rx.push(n));
+  const ctx = { subscriptions: unsub.subscriptions };
+
+  await s.handleMessage(
+    { jsonrpc: '2.0', id: 1, method: 'resources/subscribe', params: { uri: 'config://a' } },
+    ctx,
+  );
+  s.notifyResourceUpdated('config://a');
+  assert.equal(rx.length, 1);
+  assert.equal(rx[0].method, 'notifications/resources/updated');
+
+  await s.handleMessage(
+    { jsonrpc: '2.0', id: 2, method: 'resources/unsubscribe', params: { uri: 'config://a' } },
+    ctx,
+  );
+  s.notifyResourceUpdated('config://a');
+  assert.equal(rx.length, 1); // no further notifications after unsubscribe
 });
 
 // ---- progress notifications (1.12.0) --------------------------------------

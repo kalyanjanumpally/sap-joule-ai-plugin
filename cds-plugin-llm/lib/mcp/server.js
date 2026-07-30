@@ -9,6 +9,10 @@
 //   ping                             - empty response
 //   tools/list                       - enumerate registered tools
 //   tools/call                       - invoke a tool by name
+//   resources/list, resources/read, resources/templates/list
+//   resources/subscribe              - subscribe to notifications/resources/updated
+//   resources/unsubscribe            - stop receiving updates for a URI
+//   prompts/list, prompts/get
 //
 // Transport: line-delimited JSON on stdin/stdout. Anything else on stdout
 // corrupts the protocol — every log line goes to stderr instead.
@@ -45,22 +49,32 @@ class MCPServer {
     this.log = logger ?? (() => {});
     this.initialized = false;
     // Transport-registered notification sinks. Each active connection adds
-    // one sink here; broadcast helpers (`notifyListChanged`) fan out across
-    // all of them so hot-reloads reach every connected client.
+    // one entry here — `send` is the wire-level notification writer;
+    // `subscriptions` is that connection's per-URI subscription set (populated
+    // by resources/subscribe). Broadcast helpers (`notifyListChanged`) fan out
+    // across every entry; `notifyResourceUpdated` only reaches entries whose
+    // `subscriptions` set contains the updated URI.
     this._subscribers = new Set();
   }
 
   /**
    * Transport-facing: register a notification sink for the lifetime of a
-   * connection. Returns an unsubscribe function. The transport MUST call the
-   * returned function when the connection closes, otherwise the sink leaks.
+   * connection. Returns an unsubscribe function whose `subscriptions` property
+   * is the per-connection URI subscription Set — transports pass it into
+   * `handleMessage` via `transportCtx.subscriptions` so resources/subscribe
+   * mutates the same Set that `notifyResourceUpdated` later reads. The
+   * transport MUST call the returned function when the connection closes,
+   * otherwise the sink (and its subscriptions) leaks.
    */
   addSubscriber(sendNotification) {
     if (typeof sendNotification !== 'function') {
       throw new Error('addSubscriber requires a function');
     }
-    this._subscribers.add(sendNotification);
-    return () => { this._subscribers.delete(sendNotification); };
+    const entry = { send: sendNotification, subscriptions: new Set() };
+    this._subscribers.add(entry);
+    const unsubscribe = () => { this._subscribers.delete(entry); };
+    unsubscribe.subscriptions = entry.subscriptions;
+    return unsubscribe;
   }
 
   /**
@@ -76,9 +90,48 @@ class MCPServer {
       jsonrpc: JSONRPC_VERSION,
       method: `notifications/${kind}/list_changed`,
     };
-    for (const send of this._subscribers) {
-      try { send(notif); }
+    for (const entry of this._subscribers) {
+      try { entry.send(notif); }
       catch (err) { this.log('warn', `list_changed notify failed: ${err.message}`); }
+    }
+  }
+
+  /**
+   * Return the distinct set of URIs any connected client has subscribed to,
+   * optionally filtered by prefix. Useful when a broad invalidation event
+   * (prompt hot-reload, config change) needs to fan out per-URI notifications
+   * only to URIs someone actually cares about.
+   */
+  subscribedUris(prefix = null) {
+    const seen = new Set();
+    for (const entry of this._subscribers) {
+      for (const uri of entry.subscriptions) {
+        if (prefix && !uri.startsWith(prefix)) continue;
+        seen.add(uri);
+      }
+    }
+    return seen;
+  }
+
+  /**
+   * Emit `notifications/resources/updated` for `uri` to every connection that
+   * previously called `resources/subscribe` with the same URI. Silent no-op
+   * when nobody is subscribed — safe to fire optimistically from hot-reload /
+   * cache-invalidation hooks. Fans out per MCP 2024-11-05 subscriptions spec.
+   */
+  notifyResourceUpdated(uri) {
+    if (typeof uri !== 'string' || !uri) {
+      throw new Error('notifyResourceUpdated requires a non-empty string uri');
+    }
+    const notif = {
+      jsonrpc: JSONRPC_VERSION,
+      method: 'notifications/resources/updated',
+      params: { uri },
+    };
+    for (const entry of this._subscribers) {
+      if (!entry.subscriptions.has(uri)) continue;
+      try { entry.send(notif); }
+      catch (err) { this.log('warn', `resources/updated notify failed: ${err.message}`); }
     }
   }
 
@@ -166,7 +219,7 @@ class MCPServer {
           capabilities: {
             tools: { listChanged: true },
             ...(this.resources.size > 0 || this.resourceTemplates.length > 0
-              ? { resources: { listChanged: true } } : {}),
+              ? { resources: { listChanged: true, subscribe: true } } : {}),
             ...(this.prompts ? { prompts: { listChanged: true } } : {}),
           },
         };
@@ -269,6 +322,42 @@ class MCPServer {
         throw err;
       }
 
+      case 'resources/subscribe': {
+        const uri = params?.uri;
+        if (typeof uri !== 'string' || !uri) {
+          const err = new Error('resources/subscribe: uri is required');
+          err.code = ERROR_CODES.INVALID_PARAMS;
+          throw err;
+        }
+        // Validate the URI is known — either a static resource or matches a
+        // registered template. Reject unknowns so clients notice typos early
+        // instead of silently subscribing to a URI that will never fire.
+        const exists = this.resources.has(uri) || this._matchTemplate(uri) !== null;
+        if (!exists) {
+          const err = new Error(`unknown resource: ${uri}`);
+          err.code = ERROR_CODES.INVALID_PARAMS;
+          throw err;
+        }
+        // No transport sink → subscribe is a silent no-op. The spec is silent
+        // on this edge, but rejecting would break the pattern of subscribe
+        // being harmless for stateless clients / test harnesses.
+        transportCtx.subscriptions?.add(uri);
+        return {};
+      }
+
+      case 'resources/unsubscribe': {
+        const uri = params?.uri;
+        if (typeof uri !== 'string' || !uri) {
+          const err = new Error('resources/unsubscribe: uri is required');
+          err.code = ERROR_CODES.INVALID_PARAMS;
+          throw err;
+        }
+        // Idempotent — unsubscribing a URI you never subscribed to succeeds.
+        // Matches MCP 2024-11-05 subscriptions spec.
+        transportCtx.subscriptions?.delete(uri);
+        return {};
+      }
+
       case 'prompts/list':
         if (!this.prompts) return { prompts: [] };
         return { prompts: this.prompts.list() };
@@ -347,9 +436,12 @@ class MCPServer {
               return;
             }
             // Wire sendNotification so tools can push progress upstream
-            // on the same stdout stream.
+            // on the same stdout stream. Subscriptions Set is shared with
+            // this connection's addSubscriber entry so resources/subscribe
+            // updates the same Set that notifyResourceUpdated reads.
             const transportCtx = {
               sendNotification: (notif) => stdout.write(JSON.stringify(notif) + '\n'),
+              subscriptions: unsubscribe.subscriptions,
             };
             const reply = await this.handleMessage(msg, transportCtx);
             if (reply) stdout.write(JSON.stringify(reply) + '\n');

@@ -502,6 +502,118 @@ test('httpTransport: verifier wins when both authToken and authTokenVerifier sup
   } finally { await transport.close(); }
 });
 
+// ---- resource subscriptions (1.17.0) --------------------------------------
+
+function makeSubServer() {
+  return new MCPServer({
+    name: 'sub-test', version: '1.0.0',
+    resources: [
+      { uri: 'config://a', read: async () => ({ v: 1 }) },
+      { uri: 'config://b', read: async () => ({ v: 2 }) },
+    ],
+  });
+}
+
+test('httpTransport: resources/subscribe + notifyResourceUpdated routes only to that session', async () => {
+  const server = makeSubServer();
+  const transport = await createHttpTransport({ server, port: 0 });
+  try {
+    // Session A subscribes to config://a
+    const sseA = await openSSE({ port: transport.port });
+    const epA = await sseA.nextEvent();
+    await httpRequest({
+      method: 'POST', path: epA.data, port: transport.port,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'resources/subscribe', params: { uri: 'config://a' } }),
+    });
+    // Read subscribe reply off the stream
+    const subReply = await sseA.nextEvent();
+    assert.deepEqual(JSON.parse(subReply.data).result, {});
+
+    // Session B subscribes to config://b only
+    const sseB = await openSSE({ port: transport.port });
+    const epB = await sseB.nextEvent();
+    await httpRequest({
+      method: 'POST', path: epB.data, port: transport.port,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'resources/subscribe', params: { uri: 'config://b' } }),
+    });
+    await sseB.nextEvent(); // consume subscribe reply
+
+    // Snapshot the raw event-buffer lengths so we can assert quiet channels
+    // without leaving an outstanding waiter behind.
+    const bLenBefore = sseB.events.length;
+
+    // Fire an update for config://a — only A should hear it
+    server.notifyResourceUpdated('config://a');
+    const nA = await sseA.nextEvent();
+    const parsedA = JSON.parse(nA.data);
+    assert.equal(parsedA.method, 'notifications/resources/updated');
+    assert.equal(parsedA.params.uri, 'config://a');
+    // After a brief pause, B's buffer must not have grown.
+    await new Promise(res => setTimeout(res, 150));
+    assert.equal(sseB.events.length, bLenBefore, 'session B must not receive updates for config://a');
+
+    // Fire an update for config://b — only B should hear it
+    server.notifyResourceUpdated('config://b');
+    const nB = await sseB.nextEvent();
+    const parsedB = JSON.parse(nB.data);
+    assert.equal(parsedB.params.uri, 'config://b');
+
+    sseA.close();
+    sseB.close();
+  } finally { await transport.close(); }
+});
+
+test('httpTransport: resources/unsubscribe stops delivery to that session', async () => {
+  const server = makeSubServer();
+  const transport = await createHttpTransport({ server, port: 0 });
+  try {
+    const sse = await openSSE({ port: transport.port });
+    const ep = await sse.nextEvent();
+
+    await httpRequest({
+      method: 'POST', path: ep.data, port: transport.port,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'resources/subscribe', params: { uri: 'config://a' } }),
+    });
+    await sse.nextEvent(); // subscribe reply
+
+    server.notifyResourceUpdated('config://a');
+    await sse.nextEvent(); // first update lands
+
+    await httpRequest({
+      method: 'POST', path: ep.data, port: transport.port,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'resources/unsubscribe', params: { uri: 'config://a' } }),
+    });
+    await sse.nextEvent(); // unsubscribe reply
+
+    const lenBefore = sse.events.length;
+    server.notifyResourceUpdated('config://a');
+    await new Promise(res => setTimeout(res, 150));
+    assert.equal(sse.events.length, lenBefore, 'update leaked after unsubscribe');
+
+    sse.close();
+  } finally { await transport.close(); }
+});
+
+test('httpTransport: subscriptions cleared when session closes', async () => {
+  const server = makeSubServer();
+  const transport = await createHttpTransport({ server, port: 0 });
+  try {
+    const sse = await openSSE({ port: transport.port });
+    const ep = await sse.nextEvent();
+    await httpRequest({
+      method: 'POST', path: ep.data, port: transport.port,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'resources/subscribe', params: { uri: 'config://a' } }),
+    });
+    await sse.nextEvent();
+
+    assert.equal(server.subscribedUris().size, 1);
+    sse.close();
+    await new Promise(res => setTimeout(res, 100));
+    assert.equal(server._subscribers.size, 0);
+    assert.equal(server.subscribedUris().size, 0);
+  } finally { await transport.close(); }
+});
+
 test('httpTransport auth: constant-time comparison rejects length-mismatched tokens', async () => {
   const server = makeServer();
   const transport = await createHttpTransport({ server, port: 0, authToken: 'exactly-16chars!' });

@@ -109,7 +109,12 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
         catch (err) { logger('warn', `session ${sessionId.slice(0, 8)} broadcast failed: ${err.message}`); }
       };
       const unsubscribe = server.addSubscriber(send);
-      sessions.set(sessionId, { res, connectedAt: Date.now(), unsubscribe });
+      sessions.set(sessionId, {
+        res,
+        connectedAt: Date.now(),
+        unsubscribe,
+        subscriptions: unsubscribe.subscriptions,
+      });
       logger('info', `session ${sessionId.slice(0, 8)} opened (${sessions.size} active)`);
 
       req.on('close', () => {
@@ -154,6 +159,7 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
               sessions.delete(sessionId);
             }
           },
+          subscriptions: session.subscriptions,
         };
         const reply = await server.handleMessage(msg, transportCtx);
         if (reply) {

@@ -694,7 +694,7 @@ Tools exposed:
 | `verify` | Tiny probe against the provider. Returns `{ ok, latencyMs, model, text }`. |
 | `list_providers` | Enumerate every supported provider kind with default models. |
 
-Uses a hand-rolled MCP implementation (2024-11-05 spec) over stdio JSON-RPC 2.0 — **zero new dependencies**. Full protocol coverage: `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`, `ping`, notifications. Tool errors surface as `result.isError: true` per spec so the model can recover, not as JSON-RPC errors.
+Uses a hand-rolled MCP implementation (2024-11-05 spec) over stdio JSON-RPC 2.0 — **zero new dependencies**. Full protocol coverage: `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `resources/subscribe`, `resources/unsubscribe`, `prompts/list`, `prompts/get`, `ping`, notifications. Tool errors surface as `result.isError: true` per spec so the model can recover, not as JSON-RPC errors.
 
 **Resources exposed** (readable via `resources/read`):
 
@@ -931,6 +931,32 @@ server.registerTool({
 
 When the client calls this tool with `_meta.progressToken: 'x'`, each `reportProgress(...)` becomes a server-pushed notification carrying that token. Delivered on **both** transports — stdio writes to the same stdout; HTTP+SSE pushes on the requesting session's SSE stream. Existing tools that ignore the second arg keep working (backwards-compatible).
 
+#### Resource subscriptions (new in v1.17.0)
+
+Complements the list-changed notifications from v1.13.0 with per-URI push updates. Use `list_changed` when the *set* of resources shifts, `resources/subscribe` when a *specific* resource's content changes.
+
+```jsonc
+// client -> server
+{ "jsonrpc": "2.0", "id": 1, "method": "resources/subscribe",
+  "params": { "uri": "prompt://summarize" } }
+
+// server -> client (later, when that prompt is hot-reloaded)
+{ "jsonrpc": "2.0", "method": "notifications/resources/updated",
+  "params": { "uri": "prompt://summarize" } }
+```
+
+- **Per-connection state** — session A subscribing never affects session B. Cleaned up when the SSE stream / stdio pipe closes.
+- **Both transports** — stdio writes updates to stdout on the reply stream; HTTP+SSE pushes to the subscribing session's stream only.
+- **Unknown URIs rejected** at subscribe time so client typos surface immediately. Matches both static resources and template URIs (`prompt://{name}`, `provider://{kind}`).
+- **`resources/unsubscribe`** is idempotent — safe to call for URIs you never subscribed to.
+
+`--watch-prompts` now fires `resources/updated` for every subscribed `prompt://<name>` URI on hot-reload (in addition to the existing `prompts/list_changed` broadcast). Pin a client to a specific prompt and every edit refreshes without a `resources/read`.
+
+For third-party transports / programmatic MCP setups, `MCPServer` exposes:
+
+- `notifyResourceUpdated(uri)` — broadcast to every subscriber of `uri`. Silent no-op with none.
+- `subscribedUris(prefix?)` — distinct URIs any connected client subscribed to, optionally prefix-filtered.
+
 ## Response caching (new in v0.9.0)
 
 Opt-in per-instance LRU cache with TTL. Skips tool-use calls (side-effects) and streaming (partial responses). Hits return the same `ChatResponse` shape with `cached: true` set.
@@ -1079,7 +1105,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.14**: OpenAI Files API for URL PDFs (`uploadPdfFromUrl`)~~ ✓ shipped in v1.14.0
 - ~~**1.15**: Azure OpenAI provider~~ ✓ shipped in v1.15.0
 - ~~**1.16**: MCP OAuth2 / JWKS-based JWT auth + pluggable `authTokenVerifier`~~ ✓ shipped in v1.16.0
-- **1.17+**: per-session provider overrides, CAP model registry (providers in `.cds` files), Bedrock + Vertex provider paths, mTLS auth for MCP HTTP
+- ~~**1.17**: MCP resource subscriptions (`resources/subscribe` + `notifications/resources/updated`)~~ ✓ shipped in v1.17.0
+- **1.18+**: per-session provider overrides, CAP model registry (providers in `.cds` files), Bedrock + Vertex provider paths, mTLS auth for MCP HTTP
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

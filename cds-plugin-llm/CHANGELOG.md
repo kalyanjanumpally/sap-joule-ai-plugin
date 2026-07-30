@@ -4,6 +4,45 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] — 2026-07-30
+
+### Added
+
+- **MCP resource subscriptions.** Clients can now `resources/subscribe` to a specific URI and get pushed a `notifications/resources/updated` whenever that resource mutates — no polling. Complements the list-changed notifications from 1.13.0: use `list_changed` when the *set* of resources shifts, `resources/updated` when a *specific* resource's content changes. Standard MCP 2024-11-05 subscriptions feature.
+
+  Wire format:
+
+  ```jsonc
+  // client -> server
+  { "jsonrpc": "2.0", "id": 1, "method": "resources/subscribe",
+    "params": { "uri": "prompt://summarize" } }
+  // server -> client (later, on change)
+  { "jsonrpc": "2.0", "method": "notifications/resources/updated",
+    "params": { "uri": "prompt://summarize" } }
+  ```
+
+  - **Per-connection state** — subscriptions live on the connection, not the server. Session A subscribing to `config://a` never affects session B. Cleaned up automatically when the SSE stream / stdio pipe closes.
+  - **Delivered on both transports** — stdio writes updates to stdout on the same stream as replies; HTTP+SSE pushes to the subscribing session's SSE stream only.
+  - **`resources/unsubscribe`** is idempotent — safe to call for a URI you never subscribed to.
+  - **Unknown URIs rejected** at subscribe time (`invalid params`) so client typos surface immediately instead of subscribing to a URI that will never fire. Matches both static resources and template URIs (`prompt://{name}`, `provider://{kind}`).
+
+- **`--watch-prompts` now fires per-URI updates.** When a template hot-reloads and a client had previously pinned to that prompt via `resources/subscribe('prompt://summarize')`, they get an immediate `resources/updated` for that exact URI (in addition to the existing `prompts/list_changed` broadcast). Iterate on a prompt file and every subscribed client refreshes their cached copy without a `resources/read`.
+
+- **`MCPServer.notifyResourceUpdated(uri)`** — public broadcast helper. Silent no-op when nobody's subscribed to `uri` — safe to fire optimistically from hot-reload / cache-invalidation hooks. Subscriber errors are logged but don't break the broadcast to others (same semantics as `notifyListChanged`).
+- **`MCPServer.subscribedUris(prefix?)`** — enumerate the distinct URIs any connected client has subscribed to, optionally filtered by prefix (e.g. `'prompt://'`). Useful when a broad invalidation event needs to fan out per-URI updates only to URIs someone actually cares about.
+- **`addSubscriber` return value grew a `subscriptions` Set property.** Transports use it to pass per-session subscription state into `handleMessage` via `transportCtx.subscriptions`. Backwards compatible — existing callers that only invoke the unsubscribe function keep working.
+
+- **Capability advertising updated.** `initialize` now returns `resources: { listChanged: true, subscribe: true }` (per MCP spec) when any resource or resource template is registered — signals to the client that both list_changed AND subscribe are available.
+
+- 18 new tests (310 total):
+  - `MCPServer` (+15): `addSubscriber` returns Set-carrying unsubscribe; `resources/subscribe` adds URI, accepts templated URI, rejects unknown URI, rejects missing uri; `resources/unsubscribe` removes URI, idempotent for never-subscribed URI; `notifyResourceUpdated` validates uri, routes only to subscribers of that URI, silent no-op with none, fans out to multiple, survives throwing subscriber; unsubscribe drops sink + its subscriptions; `subscribedUris` distinct + prefix-filtered; end-to-end subscribe → notify → unsubscribe over transportCtx
+  - `httpTransport` (+3): per-session routing (A subscribed to `config://a`, B to `config://b`; each only receives their URI); `resources/unsubscribe` stops delivery; subscriptions cleared when session closes
+
+### Notes
+
+- Additive — `^1.16` consumers bump to `^1.17` with zero code changes. Subscriptions are opt-in from the client side; servers that don't `notifyResourceUpdated` behave identically to 1.16.
+- The hot-reload path calls both `notifyListChanged('prompts')` (unchanged from 1.13) AND `notifyResourceUpdated('prompt://<name>')` (new) — clients that subscribed to specific prompt URIs get a targeted refresh; clients that only listen to list_changed keep working.
+
 ## [1.16.0] — 2026-07-30
 
 ### Added

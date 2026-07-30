@@ -42,6 +42,16 @@ async function mcp(ctx) {
         ctx.stderr.write(`[mcp] hot-reloaded ${r} prompt(s) from ${l} file(s)\n`);
         try { server.notifyListChanged('prompts'); }
         catch (e) { ctx.stderr.write(`[mcp:warn] list_changed notify failed: ${e.message}\n`); }
+        // Also fire per-URI updates for every subscribed prompt://* URI so
+        // clients that pinned to a specific prompt refresh their cached copy
+        // without re-listing. Silent no-op when nobody's subscribed.
+        try {
+          for (const uri of server.subscribedUris('prompt://')) {
+            server.notifyResourceUpdated(uri);
+          }
+        } catch (e) {
+          ctx.stderr.write(`[mcp:warn] resources/updated notify failed: ${e.message}\n`);
+        }
       },
     });
     ctx.stderr.write(`[mcp] watching ${dir} for changes\n`);
