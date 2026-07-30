@@ -868,6 +868,47 @@ Client-side example (curl):
 curl -N -H 'Authorization: Bearer <token>' http://host:3333/sse
 ```
 
+#### JWT / JWKS validation (new in v1.16.0)
+
+For real enterprise deployments, validate signed JWTs against your IdP's JWKS endpoint. Works with SAP XSUAA, Auth0, Okta, Azure AD, Google, Keycloak, AWS Cognito, and any other standards-compliant IdP.
+
+```bash
+npm install jose   # optional peer dep, only needed for JWT auth
+
+saptarishi-llm mcp --http --host 0.0.0.0 \
+  --jwks-url https://tenant.authentication.us10.hana.ondemand.com/token_keys \
+  --jwt-issuer https://tenant.authentication.us10.hana.ondemand.com \
+  --jwt-audience sb-my-cap-app!t12345
+```
+
+Behavior:
+- Each request's `Authorization: Bearer <jwt>` is verified against the JWKS (signature, `exp`, `iat`, `nbf`, optional `iss` / `aud`).
+- JWKS cached + auto-refreshed on unknown `kid` by `jose`.
+- Any failure — bad signature, expired, wrong issuer, wrong audience, unknown key — collapses to a uniform 401. Never leaks *which* check failed (avoids oracle attacks; same rationale as bearer-token constant-time compare).
+
+On BTP with an XSUAA service binding, use the values from `VCAP_SERVICES.xsuaa[0].credentials`:
+- `--jwks-url  <url>/token_keys` (where `<url>` = credentials.url)
+- `--jwt-issuer <url>`
+- `--jwt-audience credentials.xsappname`
+
+Programmatic use — build your own verifier for custom flows (introspection endpoints, mTLS metadata → role mapping, JWT + local RBAC check):
+
+```js
+const { createHttpTransport, createJwtVerifier } = require('@saptarishi/cds-plugin-llm');
+
+const jwtVerifier = createJwtVerifier({ jwksUrl, issuer, audience });
+createHttpTransport({
+  server,
+  authTokenVerifier: async (token) => {
+    const claims = await jwtVerifier(token);
+    if (!claims) return null;
+    // Extra check: reject unless the client has the 'llm-user' scope
+    if (!claims.scope?.includes('llm-user')) return null;
+    return claims;
+  },
+});
+```
+
 #### Progress notifications (new in v1.12.0)
 
 Long-running tools can push `notifications/progress` back to the client instead of leaving them hanging silently. Tool handlers grow an optional second argument — a `ctx` object with `reportProgress(current, total?)`:
@@ -1037,7 +1078,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.13**: MCP list-changed notifications (broadcasts on hot-reload)~~ ✓ shipped in v1.13.0
 - ~~**1.14**: OpenAI Files API for URL PDFs (`uploadPdfFromUrl`)~~ ✓ shipped in v1.14.0
 - ~~**1.15**: Azure OpenAI provider~~ ✓ shipped in v1.15.0
-- **1.16+**: per-session provider overrides, MCP OAuth2 (client-credentials), CAP model registry (providers in `.cds` files), Bedrock + Vertex provider paths
+- ~~**1.16**: MCP OAuth2 / JWKS-based JWT auth + pluggable `authTokenVerifier`~~ ✓ shipped in v1.16.0
+- **1.17+**: per-session provider overrides, CAP model registry (providers in `.cds` files), Bedrock + Vertex provider paths, mTLS auth for MCP HTTP
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

@@ -4,6 +4,41 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] — 2026-07-30
+
+### Added
+
+- **MCP OAuth2 / JWKS-based JWT authentication** for the HTTP transport. Standard OAuth2/OIDC path — server validates `Authorization: Bearer <jwt>` against a remote JWKS endpoint, with optional issuer + audience claim checks. Works with any spec-compliant IdP: SAP XSUAA, Auth0, Okta, Azure AD, Google, Keycloak, AWS Cognito, Zitadel.
+
+  ```bash
+  saptarishi-llm mcp --http --host 0.0.0.0 \
+    --jwks-url https://tenant.authentication.us10.hana.ondemand.com/token_keys \
+    --jwt-issuer https://tenant.authentication.us10.hana.ondemand.com \
+    --jwt-audience sb-my-cap-app!t12345
+  ```
+
+  - CLI flags: `--jwks-url`, `--jwt-issuer`, `--jwt-audience` (+ env fallbacks `SAPTARISHI_LLM_MCP_JWKS_URL`, `_JWT_ISSUER`, `_JWT_AUDIENCE`)
+  - JWKS caching + auto-refresh handled by `jose` (peer dep — `npm install jose`)
+  - Silent uniform 401 on any failure (bad sig, expired, wrong iss/aud, unknown kid) — never leaks *why* to avoid oracle attacks. Same rationale as the bearer-token constant-time compare.
+
+- **Pluggable `authTokenVerifier`** on `createHttpTransport`. New shape: `async (token) => claims | null`. Custom flows (introspection endpoint, mTLS metadata mapping, JWT + local role check, etc.) drop straight in. Static-string `authToken: 'xxx'` (v1.11.0 API) is auto-wrapped into a verifier internally, so existing configs keep working unchanged.
+- **`createJwtVerifier({jwksUrl, issuer?, audience?})`** — public factory returning an `AuthTokenVerifier` backed by `jose`. Reusable outside the CLI, e.g. for programmatic MCP HTTP setup or your own auth middleware.
+
+- 14 new tests (292 total):
+  - `jwtVerifier.test.js` (7): `jwksUrl` required, `createRemoteJWKSet` initialized from URL, valid token returns claims, invalid/thrown collapses to null, `issuer` + `audience` forwarded to `jose.jwtVerify`, unspecified issuer/audience omitted from opts
+  - `mcpHttp.test.js` (+7): verifier accepts token when returning truthy, rejects when null, throws treated as rejection (logged), `/health` public even with verifier configured, missing Authorization header rejected, verifier wins when both `authToken` + `authTokenVerifier` supplied (warning logged), static `authToken` still works (v1.11.0 back-compat)
+
+- TS defs: `AuthTokenVerifier` type, `createJwtVerifier` function. Exercised in `types.test-d.ts`.
+
+### Notes
+
+- Additive — `^1.15` consumers bump to `^1.16` with zero code changes. Existing `--auth-token` usage keeps working identically; JWT auth is opt-in per deployment.
+- `jose` is an OPTIONAL peer dep — only needed when you use `--jwks-url` or `createJwtVerifier`. Static bearer tokens don't need it.
+- On BTP with an XSUAA service binding, extract `credentials.uaadomain` + `credentials.xsappname` to build the flags:
+  - `--jwks-url https://<subaccount>.authentication.<region>.hana.ondemand.com/token_keys`
+  - `--jwt-issuer https://<subaccount>.authentication.<region>.hana.ondemand.com`
+  - `--jwt-audience <xsappname>`
+
 ## [1.15.0] — 2026-07-29
 
 ### Added

@@ -31,20 +31,39 @@ const crypto = require('node:crypto');
  * @param {string}   [params.host='127.0.0.1']
  * @param {Function} [params.logger]       (level, msg) => void
  */
-function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger = () => {}, authToken = null }) {
+function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger = () => {}, authToken = null, authTokenVerifier = null }) {
   const sessions = new Map();
 
-  // Bearer-token auth. When authToken is set, /sse and /messages both require
-  // `Authorization: Bearer <token>`. /health stays public so load balancers /
-  // monitoring can probe without a credential. Constant-time comparison to
-  // avoid trivial timing side-channels — the check runs on every request.
-  const authorize = (req) => {
-    if (!authToken) return true;
+  // Pluggable bearer-token auth. Two modes:
+  //   1. `authToken: 'static-string'` — constant-time compare (v1.11.0 API,
+  //      kept for backwards compat)
+  //   2. `authTokenVerifier: async (token) => claims | null` — arbitrary
+  //      verifier. Returns truthy for accept, null/false for reject. Used
+  //      by the JWKS-based JWT verifier (v1.16.0) and any custom flow
+  //      (introspection endpoint, mTLS metadata, static bearer, etc).
+  // Both null = no auth. Both set = verifier wins (with a warning at start).
+  if (authToken && authTokenVerifier) {
+    logger('warn', 'both authToken and authTokenVerifier supplied; using verifier');
+    authToken = null;
+  }
+  const verifier = authTokenVerifier ?? (authToken
+    ? (async (token) => safeEqual(token, authToken) ? { sub: 'static' } : null)
+    : null);
+
+  // Returns { ok: true, claims } or { ok: false } (never throws).
+  const authorize = async (req) => {
+    if (!verifier) return { ok: true };
     const header = req.headers['authorization'];
-    if (!header) return false;
+    if (!header) return { ok: false };
     const m = header.match(/^Bearer\s+(.+)$/i);
-    if (!m) return false;
-    return safeEqual(m[1].trim(), authToken);
+    if (!m) return { ok: false };
+    try {
+      const claims = await verifier(m[1].trim());
+      return claims ? { ok: true, claims } : { ok: false };
+    } catch (err) {
+      logger('warn', `token verifier threw: ${err.message}`);
+      return { ok: false };
+    }
   };
 
   const httpServer = http.createServer(async (req, res) => {
@@ -58,13 +77,14 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
         version: server.version,
         transport: 'http+sse',
         sessions: sessions.size,
-        authRequired: !!authToken,
+        authRequired: !!verifier,
       }));
       return;
     }
 
-    // Every other endpoint requires auth when a token is configured.
-    if (!authorize(req)) {
+    // Every other endpoint requires auth when a verifier is configured.
+    const authResult = await authorize(req);
+    if (!authResult.ok) {
       res.writeHead(401, {
         'Content-Type': 'application/json',
         'WWW-Authenticate': 'Bearer realm="mcp"',

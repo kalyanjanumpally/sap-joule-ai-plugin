@@ -1,5 +1,6 @@
 const { MCPServer } = require('../../mcp/server');
 const { createHttpTransport } = require('../../mcp/httpTransport');
+const { createJwtVerifier } = require('../../mcp/jwtVerifier');
 const { buildTools, buildResources, buildResourceTemplates } = require('../../mcp/tools');
 const { PromptRegistry, builtInPrompts } = require('../../promptRegistry');
 
@@ -50,11 +51,24 @@ async function mcp(ctx) {
     const port = ctx.opts.port ? parseInt(ctx.opts.port, 10) : 3333;
     const host = ctx.opts.host ?? '127.0.0.1';
     const authToken = ctx.opts['auth-token'] ?? ctx.env.SAPTARISHI_LLM_MCP_TOKEN ?? null;
-    if (!authToken && host !== '127.0.0.1' && host !== 'localhost') {
-      ctx.stderr.write(`[mcp:warn] binding to ${host} with no --auth-token — anyone on the network can call your provider. Set --auth-token or SAPTARISHI_LLM_MCP_TOKEN.\n`);
+    const jwksUrl = ctx.opts['jwks-url'] ?? ctx.env.SAPTARISHI_LLM_MCP_JWKS_URL ?? null;
+    let authTokenVerifier = null;
+    let authLabel = '';
+    if (jwksUrl) {
+      authTokenVerifier = createJwtVerifier({
+        jwksUrl,
+        issuer: ctx.opts['jwt-issuer'] ?? ctx.env.SAPTARISHI_LLM_MCP_JWT_ISSUER,
+        audience: ctx.opts['jwt-audience'] ?? ctx.env.SAPTARISHI_LLM_MCP_JWT_AUDIENCE,
+      });
+      authLabel = ' — auth: JWT (JWKS)';
+    } else if (authToken) {
+      authLabel = ' — auth: bearer token required';
     }
-    const transport = await createHttpTransport({ server, port, host, logger, authToken });
-    ctx.stderr.write(`[mcp] ready (HTTP+SSE) — provider=${kind} model=${model}${authToken ? ' — auth: bearer token required' : ''}\n`);
+    if (!authToken && !jwksUrl && host !== '127.0.0.1' && host !== 'localhost') {
+      ctx.stderr.write(`[mcp:warn] binding to ${host} with no auth — anyone on the network can call your provider. Set --auth-token, --jwks-url, or the corresponding env var.\n`);
+    }
+    const transport = await createHttpTransport({ server, port, host, logger, authToken, authTokenVerifier });
+    ctx.stderr.write(`[mcp] ready (HTTP+SSE) — provider=${kind} model=${model}${authLabel}\n`);
     ctx.stderr.write(`[mcp] connect an MCP client to ${transport.url}/sse\n`);
     // Keep alive until SIGINT / SIGTERM
     await new Promise((resolve) => {
@@ -122,8 +136,11 @@ Transport:
   --http [--port 3333]     — HTTP+SSE server. GET /sse for the event stream,
         [--host 127.0.0.1]   POST /messages?sessionId=X for client messages.
                              Handy for deploying as a network service.
-        [--auth-token <t>]   Bearer token required on /sse + /messages
+        [--auth-token <t>]   Static bearer token required on /sse + /messages
                              (or set SAPTARISHI_LLM_MCP_TOKEN env var).
+        [--jwks-url <url>]   JWT bearer auth: verify against the given JWKS
+        [--jwt-issuer <iss>] endpoint (SAP XSUAA, Auth0, Okta, Azure AD,
+        [--jwt-audience <a>] etc.). Requires 'npm install jose'.
                              /health stays public for load balancer probes.
 
 Provider selection + credentials: same env vars as other subcommands

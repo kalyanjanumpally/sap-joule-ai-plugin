@@ -379,6 +379,36 @@ export function uploadPdfFromUrl(url: string, options: {
   fetchHeaders?: Record<string, string>;
 }): Promise<DocumentBlock>;
 
+/**
+ * A verifier for `createHttpTransport({ authTokenVerifier })`. Given a
+ * bearer token string, returns the token's claims (any truthy value) if
+ * valid, or null/false if invalid. May throw — the transport will treat
+ * a throw as a rejection.
+ * @since 1.16.0
+ */
+export type AuthTokenVerifier = (token: string) => Promise<unknown | null>;
+
+/**
+ * Build an `authTokenVerifier` that validates JWTs against a remote JWKS
+ * endpoint. Standard OAuth2 / OIDC path — works with SAP XSUAA, Auth0,
+ * Okta, Azure AD, Google, Keycloak, AWS Cognito, etc.
+ *
+ * Requires `jose` as a peer dep — install with `npm install jose`.
+ *
+ *   const verifier = createJwtVerifier({
+ *     jwksUrl:  'https://tenant.authentication.us10.hana.ondemand.com/token_keys',
+ *     issuer:   'https://tenant.authentication.us10.hana.ondemand.com',
+ *     audience: 'sb-my-cap-app!t12345',
+ *   });
+ *   createHttpTransport({ server, authTokenVerifier: verifier });
+ * @since 1.16.0
+ */
+export function createJwtVerifier(options: {
+  jwksUrl: string;
+  issuer?: string;
+  audience?: string;
+}): AuthTokenVerifier;
+
 // ---------------------------------------------------------------------------
 // Tool runner — automatic multi-turn agent loop (new in v1.1.0)
 // ---------------------------------------------------------------------------

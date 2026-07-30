@@ -15,6 +15,8 @@ import {
   pdfFromUrl,
   pdfFromBase64,
   uploadPdfFromUrl,
+  createJwtVerifier,
+  AuthTokenVerifier,
   runTools,
   RunnableTool,
   RunToolsResult,
@@ -167,6 +169,16 @@ async function example() {
   const pdf4: DocumentBlock = await uploadPdfFromUrl('https://x/y.pdf', {
     apiKey: 'sk-x', baseUrl: 'https://api.openai.com/v1', purpose: 'user_data',
   });
+
+  // ---- MCP JWT verifier (1.16.0) -----------------------------------------
+  // Note: doesn't require jose at type-check time — createJwtVerifier lazily
+  // resolves it only when called. Types are shape-only.
+  const jwtVerifier: AuthTokenVerifier = createJwtVerifier({
+    jwksUrl: 'https://tenant.authentication.example.com/token_keys',
+    issuer: 'https://tenant.authentication.example.com',
+    audience: 'sb-my-app!t12345',
+  });
+  void jwtVerifier;
   const pdfContent: ContentBlock[] = [pdf1, pdf2, pdf3, { type: 'text', text: 'summarize' }];
   await anthropic.chat({
     messages: [{ role: 'user', content: pdfContent }],

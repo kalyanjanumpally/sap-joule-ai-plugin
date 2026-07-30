@@ -32,6 +32,9 @@ const GLOBAL_OPTS = {
   port:          { type: 'string' },
   host:          { type: 'string' },
   'auth-token':  { type: 'string' },
+  'jwks-url':    { type: 'string' },
+  'jwt-issuer':  { type: 'string' },
+  'jwt-audience': { type: 'string' },
 };
 
 async function run(argv) {

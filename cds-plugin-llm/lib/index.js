@@ -32,4 +32,6 @@ module.exports = {
   builtInPrompts: require('./promptRegistry').builtInPrompts,
   // OpenAI Files API helper (new in 1.14.0)
   uploadPdfFromUrl: require('./openaiFiles').uploadPdfFromUrl,
+  // MCP HTTP transport helpers (new in 1.16.0)
+  createJwtVerifier: require('./mcp/jwtVerifier').createJwtVerifier,
 };

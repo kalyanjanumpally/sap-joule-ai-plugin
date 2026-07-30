@@ -398,6 +398,110 @@ test('httpTransport: progress notifications delivered to session SSE stream', as
   } finally { await transport.close(); }
 });
 
+// ---- pluggable authTokenVerifier (1.16.0) --------------------------------
+
+test('httpTransport authTokenVerifier: accepts token when verifier returns truthy', async () => {
+  const server = makeServer();
+  const seen = [];
+  const transport = await createHttpTransport({
+    server, port: 0,
+    authTokenVerifier: async (token) => {
+      seen.push(token);
+      return token === 'ok-token' ? { sub: 'alice' } : null;
+    },
+  });
+  try {
+    const sse = await openSSE({ port: transport.port, headers: { Authorization: 'Bearer ok-token' } });
+    const first = await sse.nextEvent();
+    assert.equal(first.event, 'endpoint');
+    assert.deepEqual(seen, ['ok-token']);
+    sse.close();
+  } finally { await transport.close(); }
+});
+
+test('httpTransport authTokenVerifier: rejects token when verifier returns null', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({
+    server, port: 0,
+    authTokenVerifier: async () => null,
+  });
+  try {
+    const res = await httpRequest({
+      method: 'GET', path: '/sse', port: transport.port,
+      headers: { Authorization: 'Bearer whatever' },
+    });
+    assert.equal(res.status, 401);
+  } finally { await transport.close(); }
+});
+
+test('httpTransport authTokenVerifier: throws are treated as rejections', async () => {
+  const server = makeServer();
+  const logs = [];
+  const transport = await createHttpTransport({
+    server, port: 0,
+    authTokenVerifier: async () => { throw new Error('verifier boom'); },
+    logger: (level, msg) => logs.push({ level, msg }),
+  });
+  try {
+    const res = await httpRequest({
+      method: 'GET', path: '/sse', port: transport.port,
+      headers: { Authorization: 'Bearer x' },
+    });
+    assert.equal(res.status, 401);
+    assert.ok(logs.some(l => /verifier threw/.test(l.msg)));
+  } finally { await transport.close(); }
+});
+
+test('httpTransport authTokenVerifier: /health public even with verifier configured', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({
+    server, port: 0,
+    authTokenVerifier: async () => null,
+  });
+  try {
+    const res = await httpRequest({ method: 'GET', path: '/health', port: transport.port });
+    assert.equal(res.status, 200);
+    assert.equal(JSON.parse(res.body).authRequired, true);
+  } finally { await transport.close(); }
+});
+
+test('httpTransport authTokenVerifier: rejects missing Authorization header', async () => {
+  const server = makeServer();
+  const transport = await createHttpTransport({
+    server, port: 0,
+    authTokenVerifier: async () => ({}),
+  });
+  try {
+    const res = await httpRequest({ method: 'GET', path: '/sse', port: transport.port });
+    assert.equal(res.status, 401);
+  } finally { await transport.close(); }
+});
+
+test('httpTransport: verifier wins when both authToken and authTokenVerifier supplied (warning logged)', async () => {
+  const server = makeServer();
+  const logs = [];
+  const seen = [];
+  const transport = await createHttpTransport({
+    server, port: 0,
+    authToken: 'static',
+    authTokenVerifier: async (t) => { seen.push(t); return t === 'verifier-token' ? { sub: 'x' } : null; },
+    logger: (level, msg) => logs.push({ level, msg }),
+  });
+  try {
+    // Static token should NOT work — verifier is in charge
+    const staticRes = await httpRequest({
+      method: 'GET', path: '/sse', port: transport.port,
+      headers: { Authorization: 'Bearer static' },
+    });
+    assert.equal(staticRes.status, 401);
+    // Verifier's token DOES work
+    const sse = await openSSE({ port: transport.port, headers: { Authorization: 'Bearer verifier-token' } });
+    await sse.nextEvent();
+    assert.ok(logs.some(l => /both authToken and authTokenVerifier/.test(l.msg)));
+    sse.close();
+  } finally { await transport.close(); }
+});
+
 test('httpTransport auth: constant-time comparison rejects length-mismatched tokens', async () => {
   const server = makeServer();
   const transport = await createHttpTransport({ server, port: 0, authToken: 'exactly-16chars!' });
