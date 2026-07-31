@@ -189,6 +189,11 @@ class MCPServer {
    * handlers can send `notifications/progress` back to the client mid-call
    * (MCP 2024-11-05 progress spec). The transport binds this to the specific
    * connection/session so notifications reach the right client.
+   *
+   * `transportCtx.sessionState` — optional plain object scoped to a single
+   * MCP connection. Populated by `initialize` (e.g. `_meta.provider`) and
+   * read by tool handlers to route calls to per-session defaults. Reset
+   * naturally when the transport closes and re-opens the connection.
    */
   async handleMessage(msg, transportCtx = {}) {
     if (!msg || typeof msg !== 'object') {
@@ -211,8 +216,18 @@ class MCPServer {
 
   async _dispatch(method, params, transportCtx = {}) {
     switch (method) {
-      case 'initialize':
+      case 'initialize': {
         this.initialized = true;
+        // Capture per-session defaults from the initialize handshake.
+        // MCP `_meta` is a spec-blessed extension slot for cross-cutting
+        // metadata like this (1.18.0 — session-scoped provider alias).
+        // Validation is deferred to tools/call so a bad alias doesn't
+        // wedge the handshake and hide the list_providers tool that would
+        // help the user recover.
+        const metaProvider = params?._meta?.provider;
+        if (typeof metaProvider === 'string' && metaProvider && transportCtx.sessionState) {
+          transportCtx.sessionState.provider = metaProvider;
+        }
         return {
           protocolVersion: PROTOCOL_VERSION,
           serverInfo: { name: this.name, version: this.version },
@@ -223,6 +238,7 @@ class MCPServer {
             ...(this.prompts ? { prompts: { listChanged: true } } : {}),
           },
         };
+      }
 
       case 'notifications/initialized':
         return {};
@@ -264,7 +280,11 @@ class MCPServer {
               catch (err) { this.log('warn', `progress notification failed: ${err.message}`); }
             }
           : () => {};
-        const handlerCtx = { reportProgress, progressToken: progressToken ?? null };
+        const handlerCtx = {
+          reportProgress,
+          progressToken: progressToken ?? null,
+          sessionState: transportCtx.sessionState ?? {},
+        };
         try {
           const value = await tool.handler(args ?? {}, handlerCtx);
           return { content: [{ type: 'text', text: stringify(value) }], isError: false };
@@ -419,6 +439,9 @@ class MCPServer {
     // reach this stdio client while the connection is live.
     const send = (notif) => stdout.write(JSON.stringify(notif) + '\n');
     const unsubscribe = this.addSubscriber(send);
+    // Per-connection scratch bag. `initialize` writes defaults here (e.g.
+    // provider alias); tool handlers read them.
+    const sessionState = {};
     return new Promise((resolve, reject) => {
       stdin.setEncoding?.('utf8');
       stdin.on('data', (chunk) => {
@@ -442,6 +465,7 @@ class MCPServer {
             const transportCtx = {
               sendNotification: (notif) => stdout.write(JSON.stringify(notif) + '\n'),
               subscriptions: unsubscribe.subscriptions,
+              sessionState,
             };
             const reply = await this.handleMessage(msg, transportCtx);
             if (reply) stdout.write(JSON.stringify(reply) + '\n');

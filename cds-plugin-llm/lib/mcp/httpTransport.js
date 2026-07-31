@@ -114,6 +114,7 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
         connectedAt: Date.now(),
         unsubscribe,
         subscriptions: unsubscribe.subscriptions,
+        sessionState: {},
       });
       logger('info', `session ${sessionId.slice(0, 8)} opened (${sessions.size} active)`);
 
@@ -160,6 +161,7 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
             }
           },
           subscriptions: session.subscriptions,
+          sessionState: session.sessionState,
         };
         const reply = await server.handleMessage(msg, transportCtx);
         if (reply) {

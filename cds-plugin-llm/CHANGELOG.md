@@ -4,6 +4,81 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0] — 2026-07-30
+
+### Added
+
+- **Per-session MCP provider overrides.** One `saptarishi-llm mcp` process can now serve multiple named provider configurations behind a single endpoint. Clients pick which one to use per session (via `initialize._meta.provider`) or per tool-call (via a `provider` arg on `chat`/`embed`/`verify`). Real enterprise use: one authenticated MCP endpoint, different agents hit different backends — the DevOps agent on `cheap`, the compliance reviewer on `smart`, the local dev on `local`. Credentials centralized server-side; agents never touch API keys.
+
+  ```bash
+  saptarishi-llm mcp --http --host 0.0.0.0 \
+    --providers-config ./providers.json
+  ```
+
+  ```jsonc
+  // providers.json
+  {
+    "cheap": {
+      "kind": "groq",
+      "model": "llama-3.1-8b-instant",
+      "credentials": { "apiKey": "gsk_..." }
+    },
+    "smart": {
+      "kind": "anthropic",
+      "model": "claude-opus-4-7",
+      "credentials": { "apiKey": "sk-ant-..." }
+    },
+    "local": {
+      "kind": "ollama",
+      "model": "qwen2.5:14b",
+      "credentials": { "baseUrl": "http://localhost:11434" }
+    }
+  }
+  ```
+
+  **Resolution order** for each tool call: `arguments.provider` > `sessionState.provider` (from `initialize._meta.provider`) > top-level default.
+
+- **`--providers-config <path>` CLI flag** (also `SAPTARISHI_LLM_PROVIDERS_CONFIG` env var). JSON file mapping alias → `{ kind, model, credentials }`. Every alias is validated + instantiated + `init()`'d at boot, so bad configs die at startup, not on the first client call. Reserved names (`default`) and invalid alias syntax rejected at load.
+
+- **Session-scoped defaults via `initialize._meta.provider`.** MCP's spec-blessed `_meta` slot on the initialize handshake carries the session's preferred alias; every subsequent tool call on that session uses it unless overridden per-call. Isolated per connection — session A picking `cheap` never leaks to session B. Validation deferred to tools/call so a typo doesn't wedge the handshake (users can still see the `list_providers` tool that would show them the right names).
+
+- **Per-call override via `chat` / `embed` / `verify` tool args.** Every call-site can bypass the session default by passing `provider: '<alias>'` in the tool arguments. Unknown alias → tool-result error listing the configured aliases so the model can self-correct on the next turn.
+
+- **`config://providers` resource.** Machine-readable dump of the current alias set (kind + model per alias, plus the default) — **credentials never returned**. Clients can `resources/read` this at any time to discover what's available.
+
+- **`list_providers` tool result grows `aliases: [...]`.** Each entry is `{alias, kind, model}` — same shape as `config://providers`, exposed as a tool for models that prefer tool calls over resource reads.
+
+- **`MCPServer.handleMessage(msg, transportCtx)` accepts `transportCtx.sessionState`.** Plain object scoped to a single connection. Populated by `initialize._meta.*`; forwarded to tool handlers via `handlerCtx.sessionState`. Reset naturally when the transport closes and re-opens. Third-party transports get this for free by allocating a fresh `{}` per session (matching the stdio + HTTP+SSE patterns).
+
+- Wire example (session default + per-call override):
+
+  ```jsonc
+  // client -> server: session default
+  { "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": { "protocolVersion": "2024-11-05",
+                "_meta": { "provider": "smart" } } }
+
+  // client -> server: uses session default (smart)
+  { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+    "params": { "name": "chat", "arguments": { "prompt": "summarize this PO" } } }
+
+  // client -> server: per-call override, ignores session default
+  { "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+    "params": { "name": "chat",
+                "arguments": { "prompt": "dispatch this", "provider": "cheap" } } }
+  ```
+
+- 35 new tests (345 total):
+  - `providerAliases.test.js` (30): registry (default fallback, known/unknown alias resolution, non-string rejection, list without credentials, hasAliases); config loader (JSON parse, parsed-object input, unknown kind, missing credentials, reserved 'default' alias, invalid alias syntax, malformed JSON error surfaces path, non-object root); `resolveConfigPath` (null, flag > env, relative → absolute); tools/call routing (default when no arg + no session, per-call arg wins, session default via `_meta.provider`, per-call wins over session, unknown alias error message, embed alias routing, embed anthropic rejection, verify uses session default, `list_providers` exposes aliases); `initialize._meta.provider` (stored in sessionState, missing = untouched, non-string ignored); tools/call handlerCtx exposes sessionState
+  - `mcpHttp.test.js` (+2): initialize._meta.provider persists across POSTs on same session; sessionState isolated between sessions
+
+### Notes
+
+- Additive — `^1.17` consumers bump to `^1.18` with zero code changes. Aliases are opt-in; without `--providers-config` the tools behave exactly as before.
+- **Credentials NEVER cross the MCP wire.** They live in `providers.json` (server-side, `chmod 600`); the wire only carries alias names. Rejecting client-supplied credentials is deliberate — it keeps the trust boundary at the server.
+- Config file changes need a server restart. `--watch` for the config file is out of scope for 1.18; add-on for a future release.
+- Ergonomic tip: `chmod 600 providers.json` + keep it out of git. Or point `--providers-config` at a path served by your secrets manager (`vault kv get -format=json …`).
+
 ## [1.17.0] — 2026-07-30
 
 ### Added

@@ -1,7 +1,47 @@
 {
   "permissions": {
     "allow": [
-      "Skill(claude-api)"
+      "Skill(claude-api)",
+      "Bash(node --test test/*.js)",
+      "Bash(npx tsc *)",
+      "Bash(npm publish *)",
+      "Bash(git remote *)",
+      "Bash(git fetch *)",
+      "Bash(npm install *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(node --check lib/LLMService.js)",
+      "Bash(npm run *)",
+      "Bash(../cds-plugin-llm/node_modules/.bin/tsc --noEmit lib/index.d.ts)",
+      "Bash(git tag *)",
+      "Bash(chmod +x /Users/janumpallykalyan/Documents/joule/cds-plugin-llm/bin/saptarishi-llm.js)",
+      "Bash(./bin/saptarishi-llm.js providers *)",
+      "Bash(OLLAMA_URL=http://192.168.5.13:11434 ./bin/saptarishi-llm.js verify --provider ollama --model qwen2.5:14b)",
+      "Bash(gh run *)",
+      "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs?per_page=1\")",
+      "Bash(python3 -c \"import json,sys; r=json.load\\(sys.stdin\\)['workflow_runs'][0]; print\\(r['id']\\)\")",
+      "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30440815333/jobs\")",
+      "Bash(python3 -c 'import json,sys *)",
+      "Bash(curl -sSL \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30440815333/logs\" -o /tmp/logs.zip)",
+      "Bash(unzip -p /tmp/logs.zip)",
+      "Bash(unzip -l /tmp/logs.zip)",
+      "Read(//private/tmp/**)",
+      "Bash(curl -sS 'https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30440815333/jobs')",
+      "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/check-runs/$\\(curl -sS 'https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30440815333/jobs')",
+      "Bash(python3 -m json.tool)",
+      "Bash(wait)",
+      "Bash(node --test --test-name-pattern='reloads when a file changes' test/promptRegistry.test.js)",
+      "Bash(node --test --test-name-pattern='watchDir|hot reload picks up' test/promptRegistry.test.js)",
+      "Bash(node --test --test-name-pattern='reloads when a file changes|hot reload picks up' test/promptRegistry.test.js)",
+      "Bash(grep -n \"^| .*llm-anthropic\\\\|## Providers$\" README.md)",
+      "Bash(npm view *)",
+      "Bash(npm test *)",
+      "Bash(git commit *)",
+      "WebFetch(domain:github.com)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(node scripts/verify-genai-hub.js)",
+      "Bash(lsof -iTCP:8080 -sTCP:LISTEN)"
     ]
   }
 }

@@ -35,6 +35,7 @@ const GLOBAL_OPTS = {
   'jwks-url':    { type: 'string' },
   'jwt-issuer':  { type: 'string' },
   'jwt-audience': { type: 'string' },
+  'providers-config': { type: 'string' },
 };
 
 async function run(argv) {

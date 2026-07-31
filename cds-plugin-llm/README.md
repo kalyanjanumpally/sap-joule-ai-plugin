@@ -957,6 +957,58 @@ For third-party transports / programmatic MCP setups, `MCPServer` exposes:
 - `notifyResourceUpdated(uri)` — broadcast to every subscriber of `uri`. Silent no-op with none.
 - `subscribedUris(prefix?)` — distinct URIs any connected client subscribed to, optionally prefix-filtered.
 
+#### Per-session provider overrides (new in v1.18.0)
+
+One `saptarishi-llm mcp` process, multiple named provider configs behind a single MCP endpoint. Clients pick which one to use per session or per tool call. Real enterprise use: one authenticated endpoint, different agents hit different backends — DevOps on `cheap`, compliance reviewer on `smart`, local dev on `local`. Credentials centralized server-side; agents never touch API keys.
+
+```bash
+saptarishi-llm mcp --http --host 0.0.0.0 \
+  --providers-config ./providers.json
+```
+
+```jsonc
+// providers.json  —  chmod 600 and keep out of git
+{
+  "cheap": {
+    "kind": "groq",
+    "model": "llama-3.1-8b-instant",
+    "credentials": { "apiKey": "gsk_..." }
+  },
+  "smart": {
+    "kind": "anthropic",
+    "model": "claude-opus-4-7",
+    "credentials": { "apiKey": "sk-ant-..." }
+  },
+  "local": {
+    "kind": "ollama",
+    "model": "qwen2.5:14b",
+    "credentials": { "baseUrl": "http://localhost:11434" }
+  }
+}
+```
+
+**Resolution order per tool call**: `arguments.provider` → `sessionState.provider` (from `initialize._meta.provider`) → top-level default.
+
+**Session default** — client declares once at initialize; every subsequent call on that session uses it:
+
+```jsonc
+{ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+  "params": { "protocolVersion": "2024-11-05",
+              "_meta": { "provider": "smart" } } }
+```
+
+**Per-call override** — bypass the session default one call at a time:
+
+```jsonc
+{ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+  "params": { "name": "chat",
+              "arguments": { "prompt": "dispatch this", "provider": "cheap" } } }
+```
+
+**Discovery** — `list_providers` tool and `config://providers` resource both dump the alias list (kind + model per alias; credentials never returned). Unknown aliases surface as tool-result errors with the configured list so the model can self-correct on the next turn.
+
+**Boot-time validation** — every alias is instantiated + `init()`'d at server startup. Bad credentials or unknown kinds die on `saptarishi-llm mcp`, not on the first client call.
+
 ## Response caching (new in v0.9.0)
 
 Opt-in per-instance LRU cache with TTL. Skips tool-use calls (side-effects) and streaming (partial responses). Hits return the same `ChatResponse` shape with `cached: true` set.
@@ -1106,7 +1158,8 @@ CI runs the same checks on every push (Node 20 + 22 matrix).
 - ~~**1.15**: Azure OpenAI provider~~ ✓ shipped in v1.15.0
 - ~~**1.16**: MCP OAuth2 / JWKS-based JWT auth + pluggable `authTokenVerifier`~~ ✓ shipped in v1.16.0
 - ~~**1.17**: MCP resource subscriptions (`resources/subscribe` + `notifications/resources/updated`)~~ ✓ shipped in v1.17.0
-- **1.18+**: per-session provider overrides, CAP model registry (providers in `.cds` files), Bedrock + Vertex provider paths, mTLS auth for MCP HTTP
+- ~~**1.18**: per-session provider overrides (`--providers-config`, `initialize._meta.provider`, per-call `provider` arg)~~ ✓ shipped in v1.18.0
+- **1.19+**: CAP model registry (providers in `.cds` files), Bedrock + Vertex provider paths, mTLS auth for MCP HTTP, Anthropic prompt caching
 - **Companion package**: [`@saptarishi/cds-plugin-vector-hana`](https://www.npmjs.com/package/@saptarishi/cds-plugin-vector-hana) — HANA Cloud vector store + SQLite fallback for RAG
 
 ## License

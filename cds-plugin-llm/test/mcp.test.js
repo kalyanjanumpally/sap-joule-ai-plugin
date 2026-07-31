@@ -177,6 +177,8 @@ test('MCPServer.run: handles multiple line-delimited requests + parse errors', a
 
 // ---- buildTools -----------------------------------------------------------
 
+const { ProviderRegistry } = require('../lib/cli/providerAliases');
+
 function stubProvider(overrides = {}) {
   return {
     async chat(req) {
@@ -193,8 +195,12 @@ function stubProvider(overrides = {}) {
   };
 }
 
+function stubRegistry(kind = 'groq', model = 'x', overrides = {}) {
+  return new ProviderRegistry({ provider: stubProvider(overrides), kind, model });
+}
+
 test('buildTools: exposes chat, embed, verify, list_providers', () => {
-  const tools = buildTools({ provider: stubProvider(), providerKind: 'groq', providerModel: 'x' });
+  const tools = buildTools({ providers: stubRegistry() });
   assert.deepEqual(tools.map(t => t.name).sort(), ['chat', 'embed', 'list_providers', 'verify']);
 });
 
@@ -203,7 +209,8 @@ test('buildTools chat: forwards prompt + system + maxTokens to provider', async 
   const p = {
     async chat(req) { Object.assign(captured, req); return { text: 'reply', model: 'x', usage: {}, stopReason: 'end_turn' }; },
   };
-  const [chatTool] = buildTools({ provider: p, providerKind: 'groq', providerModel: 'x' });
+  const providers = new ProviderRegistry({ provider: p, kind: 'groq', model: 'x' });
+  const [chatTool] = buildTools({ providers });
   const result = await chatTool.handler({ prompt: 'hi', system: 'be nice', maxTokens: 42 });
   assert.equal(captured.system, 'be nice');
   assert.equal(captured.maxTokens, 42);
@@ -212,19 +219,19 @@ test('buildTools chat: forwards prompt + system + maxTokens to provider', async 
 });
 
 test('buildTools chat: rejects empty prompt', async () => {
-  const [chatTool] = buildTools({ provider: stubProvider(), providerKind: 'groq', providerModel: 'x' });
+  const [chatTool] = buildTools({ providers: stubRegistry() });
   await assert.rejects(() => chatTool.handler({ prompt: '' }), /non-empty/);
   await assert.rejects(() => chatTool.handler({}), /non-empty/);
 });
 
 test('buildTools embed: rejects when provider is anthropic', async () => {
-  const tools = buildTools({ provider: stubProvider(), providerKind: 'anthropic', providerModel: 'claude-opus-4-7' });
+  const tools = buildTools({ providers: stubRegistry('anthropic', 'claude-opus-4-7') });
   const embedTool = tools.find(t => t.name === 'embed');
   await assert.rejects(() => embedTool.handler({ input: 'x' }), /does not support embed/);
 });
 
 test('buildTools embed: returns dimension + count for array input', async () => {
-  const tools = buildTools({ provider: stubProvider(), providerKind: 'ollama', providerModel: 'x' });
+  const tools = buildTools({ providers: stubRegistry('ollama') });
   const embedTool = tools.find(t => t.name === 'embed');
   const res = await embedTool.handler({ input: ['a', 'b', 'c'] });
   assert.equal(res.count, 3);
@@ -232,7 +239,7 @@ test('buildTools embed: returns dimension + count for array input', async () => 
 });
 
 test('buildTools verify: ok=true when reply matches /ok/i', async () => {
-  const tools = buildTools({ provider: stubProvider({ chatText: 'ok' }), providerKind: 'groq', providerModel: 'x' });
+  const tools = buildTools({ providers: stubRegistry('groq', 'x', { chatText: 'ok' }) });
   const t = tools.find(t => t.name === 'verify');
   const res = await t.handler({});
   assert.equal(res.ok, true);
@@ -241,7 +248,7 @@ test('buildTools verify: ok=true when reply matches /ok/i', async () => {
 });
 
 test('buildTools verify: ok=false otherwise', async () => {
-  const tools = buildTools({ provider: stubProvider({ chatText: 'no' }), providerKind: 'groq', providerModel: 'x' });
+  const tools = buildTools({ providers: stubRegistry('groq', 'x', { chatText: 'no' }) });
   const t = tools.find(t => t.name === 'verify');
   const res = await t.handler({});
   assert.equal(res.ok, false);
@@ -378,14 +385,15 @@ test('MCPServer: prompts/get for unknown name returns INVALID_PARAMS', async () 
   assert.equal(reply.error.code, ERROR_CODES.INVALID_PARAMS);
 });
 
-test('buildResources: returns active-provider + supported-providers by default', async () => {
-  const resources = buildResources({
+test('buildResources: returns active-provider + supported-providers + providers by default', async () => {
+  const providers = new ProviderRegistry({
     provider: { middleware: [1, 2], defaultMaxTokens: 512 },
-    providerKind: 'groq',
-    providerModel: 'llama-3.3-70b-versatile',
+    kind: 'groq',
+    model: 'llama-3.3-70b-versatile',
   });
+  const resources = buildResources({ providers });
   const uris = resources.map(r => r.uri);
-  assert.deepEqual(uris, ['config://active-provider', 'config://supported-providers']);
+  assert.deepEqual(uris, ['config://active-provider', 'config://supported-providers', 'config://providers']);
 
   const active = await resources[0].read();
   assert.equal(active.provider, 'groq');
@@ -394,6 +402,10 @@ test('buildResources: returns active-provider + supported-providers by default',
 
   const supported = await resources[1].read();
   assert.equal(supported.supported.length, 6);
+
+  const aliases = await resources[2].read();
+  assert.equal(aliases.default.kind, 'groq');
+  assert.deepEqual(aliases.aliases, []);
 });
 
 // ---- list-changed notifications (1.13.0) ----------------------------------
@@ -899,9 +911,12 @@ test('buildResourceTemplates: includes prompt://{name} when prompts registry pre
 });
 
 test('buildResources: includes cache-stats resource when cacheStats supplied', async () => {
-  const resources = buildResources({
+  const providers = new ProviderRegistry({
     provider: { middleware: [], defaultMaxTokens: 1024 },
-    providerKind: 'anthropic', providerModel: 'x',
+    kind: 'anthropic', model: 'x',
+  });
+  const resources = buildResources({
+    providers,
     cacheStats: () => ({ hits: 5, misses: 2, size: 7 }),
   });
   const cache = resources.find(r => r.uri === 'usage://cache-stats');
@@ -910,12 +925,13 @@ test('buildResources: includes cache-stats resource when cacheStats supplied', a
 });
 
 test('buildTools list_providers: includes activeProvider + all provider kinds', async () => {
-  const tools = buildTools({ provider: stubProvider(), providerKind: 'groq', providerModel: 'llama-3.3-70b-versatile' });
+  const tools = buildTools({ providers: stubRegistry('groq', 'llama-3.3-70b-versatile') });
   const t = tools.find(t => t.name === 'list_providers');
   const res = await t.handler({});
   assert.equal(res.activeProvider, 'groq');
   assert.equal(res.activeModel, 'llama-3.3-70b-versatile');
   assert.equal(res.supported.length, 6);
+  assert.deepEqual(res.aliases, []);
 });
 
 // ---- end-to-end via saptarishi-llm mcp subprocess -------------------------
@@ -1026,12 +1042,16 @@ test('CLI mcp: subprocess handshake works over stdio', async () => {
     assert.equal(payload.activeProvider, 'ollama');
     assert.equal(payload.supported.length, 6);
 
-    // resources/list should include the two config:// resources
+    // resources/list should include the three config:// resources
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'resources/list' }) + '\n');
     const rlLine = await readOne();
     const rl = JSON.parse(rlLine);
     const uris = rl.result.resources.map(r => r.uri).sort();
-    assert.deepEqual(uris, ['config://active-provider', 'config://supported-providers']);
+    assert.deepEqual(uris, [
+      'config://active-provider',
+      'config://providers',
+      'config://supported-providers',
+    ]);
 
     // prompts/list should include the 5 built-in prompts
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'prompts/list' }) + '\n');

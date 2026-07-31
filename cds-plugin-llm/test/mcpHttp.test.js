@@ -594,6 +594,86 @@ test('httpTransport: resources/unsubscribe stops delivery to that session', asyn
   } finally { await transport.close(); }
 });
 
+test('httpTransport: initialize._meta.provider persists across POSTs on same session (1.18.0)', async () => {
+  let seen;
+  const server = new MCPServer({
+    name: 'x', version: '1.0.0',
+    tools: [{
+      name: 'peek', description: '', inputSchema: { type: 'object' },
+      handler: async (args, ctx) => { seen = ctx.sessionState.provider; return 'ok'; },
+    }],
+  });
+  const transport = await createHttpTransport({ server, port: 0 });
+  try {
+    const sse = await openSSE({ port: transport.port });
+    const ep = await sse.nextEvent();
+    // 1. initialize with _meta.provider
+    await httpRequest({
+      method: 'POST', path: ep.data, port: transport.port,
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { _meta: { provider: 'cheap' } },
+      }),
+    });
+    await sse.nextEvent(); // consume init reply
+    // 2. later tools/call on the same session should see the alias
+    await httpRequest({
+      method: 'POST', path: ep.data, port: transport.port,
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'peek', arguments: {} },
+      }),
+    });
+    await sse.nextEvent(); // consume tools/call reply
+    assert.equal(seen, 'cheap');
+    sse.close();
+  } finally { await transport.close(); }
+});
+
+test('httpTransport: sessionState isolated between sessions (1.18.0)', async () => {
+  const seen = [];
+  const server = new MCPServer({
+    name: 'x', version: '1.0.0',
+    tools: [{
+      name: 'peek', description: '', inputSchema: { type: 'object' },
+      handler: async (args, ctx) => { seen.push(ctx.sessionState.provider ?? null); return 'ok'; },
+    }],
+  });
+  const transport = await createHttpTransport({ server, port: 0 });
+  try {
+    const sseA = await openSSE({ port: transport.port });
+    const epA = await sseA.nextEvent();
+    const sseB = await openSSE({ port: transport.port });
+    const epB = await sseB.nextEvent();
+
+    // A initializes with 'cheap'; B does not touch initialize
+    await httpRequest({
+      method: 'POST', path: epA.data, port: transport.port,
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { _meta: { provider: 'cheap' } },
+      }),
+    });
+    await sseA.nextEvent();
+
+    // Both call peek — A sees 'cheap', B sees null
+    await httpRequest({
+      method: 'POST', path: epA.data, port: transport.port,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'peek', arguments: {} } }),
+    });
+    await sseA.nextEvent();
+    await httpRequest({
+      method: 'POST', path: epB.data, port: transport.port,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'peek', arguments: {} } }),
+    });
+    await sseB.nextEvent();
+
+    assert.deepEqual(seen, ['cheap', null]);
+    sseA.close();
+    sseB.close();
+  } finally { await transport.close(); }
+});
+
 test('httpTransport: subscriptions cleared when session closes', async () => {
   const server = makeSubServer();
   const transport = await createHttpTransport({ server, port: 0 });

@@ -3,6 +3,7 @@ const { createHttpTransport } = require('../../mcp/httpTransport');
 const { createJwtVerifier } = require('../../mcp/jwtVerifier');
 const { buildTools, buildResources, buildResourceTemplates } = require('../../mcp/tools');
 const { PromptRegistry, builtInPrompts } = require('../../promptRegistry');
+const { loadProviderAliases, ProviderRegistry, resolveConfigPath } = require('../providerAliases');
 
 async function mcp(ctx) {
   // Provider construction happens once at startup; provider.init() is called
@@ -10,6 +11,20 @@ async function mcp(ctx) {
   // immediately and the MCP client sees the process die cleanly.
   const { provider, kind, model } = await ctx.buildProvider(ctx);
   await provider.init();
+
+  // 1.18.0: optional providers-config file for named aliases. When present,
+  // each aliased provider is built + init()'d eagerly so misconfiguration
+  // surfaces at boot, not on the first `chat` from an MCP client.
+  const configPath = resolveConfigPath(ctx.opts, ctx.env);
+  const defaultEntry = { provider, kind, model };
+  let providers;
+  if (configPath) {
+    providers = await loadProviderAliases(configPath, defaultEntry);
+    await providers.initAll();
+    ctx.stderr.write(`[mcp] loaded ${providers.list().length} provider alias(es) from ${configPath}\n`);
+  } else {
+    providers = new ProviderRegistry(defaultEntry);
+  }
 
   const prompts = new PromptRegistry().registerAll(builtInPrompts());
   const dir = ctx.opts['prompts-dir'] ?? ctx.env.SAPTARISHI_LLM_PROMPTS_DIR;
@@ -23,8 +38,8 @@ async function mcp(ctx) {
   const server = new MCPServer({
     name: pkg.name,
     version: pkg.version,
-    tools: buildTools({ provider, providerKind: kind, providerModel: model }),
-    resources: buildResources({ provider, providerKind: kind, providerModel: model }),
+    tools: buildTools({ providers }),
+    resources: buildResources({ providers }),
     resourceTemplates: buildResourceTemplates({ prompts }),
     prompts,
     logger,
@@ -120,14 +135,15 @@ Claude Desktop config (~/Library/Application Support/Claude/claude_desktop_confi
   }
 
 Tools exposed:
-  chat            — send prompt, return text
-  embed           — embed input(s), return vectors
+  chat            — send prompt, return text (opt: provider: <alias>)
+  embed           — embed input(s), return vectors (opt: provider: <alias>)
   verify          — tiny probe, return {ok, latencyMs, model, text}
-  list_providers  — list every supported provider kind
+  list_providers  — list default + configured aliases + supported kinds
 
 Resources exposed (readable via resources/read):
-  config://active-provider       — current provider + model + middleware count
+  config://active-provider       — current default provider + model
   config://supported-providers   — every provider kind + default model
+  config://providers             — configured aliases (kind + model, no creds)
 
 Prompts registered (invokable via prompts/get):
   summarize                — text -> N-sentence summary
@@ -152,6 +168,13 @@ Transport:
         [--jwt-issuer <iss>] endpoint (SAP XSUAA, Auth0, Okta, Azure AD,
         [--jwt-audience <a>] etc.). Requires 'npm install jose'.
                              /health stays public for load balancer probes.
+
+Multi-provider (v1.18.0):
+  --providers-config <path>  JSON file mapping alias -> { kind, model, credentials }
+                             (or set SAPTARISHI_LLM_PROVIDERS_CONFIG env var).
+                             Clients pick an alias per-session via
+                             initialize._meta.provider or per-call via the
+                             \`provider\` arg on chat/embed/verify.
 
 Provider selection + credentials: same env vars as other subcommands
 (SAPTARISHI_LLM_PROVIDER, ANTHROPIC_API_KEY, etc — see 'saptarishi-llm help').`;
