@@ -8,6 +8,42 @@ const { MCPServer, PROTOCOL_VERSION, ERROR_CODES } = require('../lib/mcp/server'
 const { buildTools, buildResources, buildResourceTemplates } = require('../lib/mcp/tools');
 const { PromptRegistry, builtInPrompts } = require('../lib/promptRegistry');
 
+// Attach ONCE to stdout and queue every complete line. Each readLine() shifts
+// the next line off the queue (or waits for it). The naive per-call
+// attach-then-detach pattern loses lines when multiple JSON replies arrive in
+// a single OS chunk — the second line is buffered inside the closure that
+// already resolved and detached, then discarded when GC'd.
+function makeLineReader(child) {
+  let buf = '';
+  const lines = [];
+  const waiters = [];
+  child.stdout.on('data', (chunk) => {
+    buf += chunk.toString('utf8');
+    let idx;
+    while ((idx = buf.indexOf('\n')) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      const w = waiters.shift();
+      if (w) w.resolve(line);
+      else lines.push(line);
+    }
+  });
+  return (timeoutMs = 15000) => new Promise((resolve, reject) => {
+    if (lines.length) return resolve(lines.shift());
+    const waiter = { resolve };
+    waiters.push(waiter);
+    const to = setTimeout(() => {
+      const i = waiters.indexOf(waiter);
+      if (i !== -1) {
+        waiters.splice(i, 1);
+        reject(new Error(`timeout waiting for stdout line after ${timeoutMs}ms`));
+      }
+    }, timeoutMs);
+    to.unref();
+    waiter.resolve = (line) => { clearTimeout(to); resolve(line); };
+  });
+}
+
 // ---- MCPServer.handleMessage: protocol correctness ------------------------
 
 function makeServer(extraTools = []) {
@@ -954,21 +990,7 @@ test('CLI mcp: --prompts-dir loads custom templates that appear in prompts/list'
     env: { ...process.env, OLLAMA_URL: 'http://127.0.0.1:0' },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
-
-  const readOne = () => new Promise((resolve, reject) => {
-    let buf = '';
-    const onData = (chunk) => {
-      buf += chunk.toString('utf8');
-      const idx = buf.indexOf('\n');
-      if (idx !== -1) {
-        child.stdout.off('data', onData);
-        resolve(buf.slice(0, idx));
-      }
-    };
-    child.stdout.on('data', onData);
-    child.on('error', reject);
-    setTimeout(() => { child.stdout.off('data', onData); reject(new Error('timeout')); }, 5000);
-  });
+  const readOne = makeLineReader(child);
 
   try {
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' }) + '\n');
@@ -996,21 +1018,7 @@ test('CLI mcp: subprocess handshake works over stdio', async () => {
     env: { ...process.env, OLLAMA_URL: 'http://127.0.0.1:0' },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
-
-  const readOne = () => new Promise((resolve, reject) => {
-    let buf = '';
-    const onData = (chunk) => {
-      buf += chunk.toString('utf8');
-      const idx = buf.indexOf('\n');
-      if (idx !== -1) {
-        child.stdout.off('data', onData);
-        resolve(buf.slice(0, idx));
-      }
-    };
-    child.stdout.on('data', onData);
-    child.on('error', reject);
-    setTimeout(() => { child.stdout.off('data', onData); reject(new Error('timeout waiting for reply')); }, 5000);
-  });
+  const readOne = makeLineReader(child);
 
   try {
     // initialize

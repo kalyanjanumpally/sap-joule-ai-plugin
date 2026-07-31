@@ -67,20 +67,32 @@ function openSSE({ port, path = '/sse', headers = {} }) {
           if (waiters.length > 0) {
             const w = waiters.shift();
             cursor++;
-            w(parsed);
+            w.resolve(parsed);
           }
         }
       });
       resolve({
         req,
         events,
-        nextEvent: () => new Promise((res2, rej2) => {
+        nextEvent: (timeoutMs = 10000) => new Promise((res2, rej2) => {
           if (cursor < events.length) {
             const e = events[cursor++];
             return res2(e);
           }
-          waiters.push(res2);
-          setTimeout(() => rej2(new Error('SSE event timeout')), 3000);
+          const waiter = { resolve: res2 };
+          waiters.push(waiter);
+          // On timeout, remove the waiter so a late arrival isn't silently
+          // consumed by a rejected promise (which would break subsequent
+          // nextEvent() calls by dropping the event on the floor). .unref()
+          // so an orphaned waiter doesn't hold the event loop after tests
+          // finish.
+          setTimeout(() => {
+            const i = waiters.indexOf(waiter);
+            if (i !== -1) {
+              waiters.splice(i, 1);
+              rej2(new Error(`SSE event timeout after ${timeoutMs}ms`));
+            }
+          }, timeoutMs).unref();
         }),
         close: () => { req.destroy(); },
       });
@@ -88,6 +100,17 @@ function openSSE({ port, path = '/sse', headers = {} }) {
     req.on('error', reject);
     req.end();
   });
+}
+
+async function waitUntil(check, { timeoutMs = 2000, intervalMs = 20, label = 'condition' } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  while (Date.now() < deadline) {
+    last = await check();
+    if (last) return last;
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  throw new Error(`waitUntil: ${label} not met within ${timeoutMs}ms (last=${JSON.stringify(last)})`);
 }
 
 function parseSSEFrame(frame) {
@@ -191,8 +214,10 @@ test('httpTransport: session count grows and shrinks', async () => {
     assert.equal(JSON.parse(health.body).sessions, 2);
 
     sse1.close();
-    await new Promise(res => setTimeout(res, 100));
-    health = await httpRequest({ method: 'GET', path: '/health', port: transport.port });
+    health = await waitUntil(async () => {
+      const h = await httpRequest({ method: 'GET', path: '/health', port: transport.port });
+      return JSON.parse(h.body).sessions === 1 ? h : null;
+    }, { label: 'sessions dropped to 1' });
     assert.equal(JSON.parse(health.body).sessions, 1);
 
     sse2.close();
@@ -348,7 +373,7 @@ test('httpTransport: subscriber unregistered when session closes', async () => {
 
     assert.equal(server._subscribers.size, 1);
     sse.close();
-    await new Promise(res => setTimeout(res, 100));
+    await waitUntil(() => server._subscribers.size === 0, { label: '_subscribers drained' });
     assert.equal(server._subscribers.size, 0);
   } finally { await transport.close(); }
 });
@@ -688,7 +713,9 @@ test('httpTransport: subscriptions cleared when session closes', async () => {
 
     assert.equal(server.subscribedUris().size, 1);
     sse.close();
-    await new Promise(res => setTimeout(res, 100));
+    await waitUntil(() => server._subscribers.size === 0 && server.subscribedUris().size === 0, {
+      label: 'subscriptions cleared',
+    });
     assert.equal(server._subscribers.size, 0);
     assert.equal(server.subscribedUris().size, 0);
   } finally { await transport.close(); }
