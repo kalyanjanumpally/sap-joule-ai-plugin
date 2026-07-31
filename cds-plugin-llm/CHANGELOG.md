@@ -4,6 +4,17 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.1] — 2026-07-31
+
+### Fixed
+
+- **Test-suite flakiness on CI (test-only, no shipped behavior change).** Two race conditions in the internal MCP test harness intermittently failed on `ubuntu-latest` — reproduced on Node 20 in one run and Node 22 in another. Fixes:
+  - Persistent line-buffered reader for MCP subprocess stdio tests (attach `data` listener once; queue lines). The old per-call attach/detach dropped a JSON reply on the floor whenever the OS delivered two lines in a single chunk.
+  - `openSSE().nextEvent()` now removes its waiter on timeout, so a late event isn't silently consumed by an already-rejected promise (which would cascade into unrelated assertion failures on subsequent calls). Timeout bumped 3s → 10s for slower CI runners.
+  - Three sleep-then-assert-count-dropped patterns replaced with a poll-until-condition helper. The fixed 100ms budget was tight on ubuntu-latest.
+
+- No changes under `lib/` or `bin/` — 1.18.0 users get identical runtime behavior; this release exists to make the CI signal reliable for downstream contributors.
+
 ## [1.18.0] — 2026-07-30
 
 ### Added
