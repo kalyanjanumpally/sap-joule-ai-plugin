@@ -4,6 +4,12 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] — 2026-08-03
+
+### Fixed
+
+- **`@rag` entities were skipped at boot with "cds.services['<alias>'] not found".** The plugin looked up the embedder via `cds.services[alias]`, but CAP populates that dict lazily on first `cds.connect.to(alias)`. When the plugin's `served` handler ran before any app code had touched the service, the lookup returned undefined and the plugin skipped the entity — meaning `@rag`-annotated entities never got their vector store or OData actions in production apps that didn't happen to touch the LLM elsewhere. Now `resolveService()` falls back to `cds.connect.to(alias)` (awaited) to force-instantiate the service, matching the standard CAP pattern. Test doubles that pre-populate `cds.services` still work — they hit the fast path.
+
 ## [0.7.2] — 2026-08-03
 
 ### Fixed

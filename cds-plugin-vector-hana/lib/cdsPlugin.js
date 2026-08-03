@@ -92,7 +92,7 @@ function activate(cds, options = {}) {
 
       let embedder;
       try {
-        embedder = resolveService(cds, config.provider, 'embedder');
+        embedder = await resolveService(cds, config.provider, 'embedder');
       } catch (err) {
         log.error(`@rag: ${name}: ${err.message} — skipping entity`);
         continue;
@@ -139,7 +139,7 @@ function activate(cds, options = {}) {
       const { entity, query, topK, filter, systemInstructions, ...chatOpts } = params;
       const store = mustStore(stores, entity);
       const cfg = configs.get(entity);
-      const chatter = resolveService(cds, cfg.chatter, 'chatter');
+      const chatter = await resolveService(cds, cfg.chatter, 'chatter');
       const rag = new RAG({ llm: chatter, store });
       return rag.answer({ query, topK: topK ?? cfg.topK, filter, systemInstructions, ...chatOpts });
     },
@@ -246,9 +246,15 @@ function validateActionName(kind, value) {
 }
 
 function resolveService(cds, alias, role) {
-  const svc = cds.services?.[alias];
-  if (!svc) throw new Error(`cds.services['${alias}'] not found (${role} lookup) — check cds.requires.${alias} in your config`);
-  return svc;
+  // Prefer cds.services[alias] if already connected (fast path, unit-test
+  // friendly). Otherwise, force-instantiate via cds.connect.to(alias) —
+  // required when the plugin's served handler runs before any app code has
+  // touched the service (typical for @rag which needs its embedder at boot).
+  if (cds.services?.[alias]) return cds.services[alias];
+  if (cds.connect && typeof cds.connect.to === 'function') {
+    return cds.connect.to(alias);
+  }
+  throw new Error(`cds.services['${alias}'] not found (${role} lookup) — check cds.requires.${alias} in your config`);
 }
 
 function mustStore(stores, entity) {
