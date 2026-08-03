@@ -151,3 +151,47 @@ export class RAG {
   answer<M = Record<string, unknown>>(p: RAGAnswerParams): Promise<RAGAnswer<M>>;
   stream<M = Record<string, unknown>>(p: RAGAnswerParams): Promise<RAGStreamResult<M>>;
 }
+
+// ---- CDS @rag annotation plugin (0.5.0) --------------------------------
+
+/** Handle returned by `activateCdsPlugin(cds)` and also attached at `cds.vectorHana`. */
+export interface CdsRagPlugin {
+  /** VectorStore for a given `@rag`-annotated entity name (e.g. `'AppService.Suppliers'`). Returns undefined if not annotated or before `cds.on('served')` fires. */
+  getStore(entityName: string): VectorStore | undefined;
+
+  /** Retrieve top-K hits for an annotated entity by natural-language query. */
+  searchByMeaning<M = Record<string, unknown>>(p: {
+    entity: string;
+    query: string;
+    topK?: number;
+    filter?: Record<string, string | number | boolean>;
+  }): Promise<SearchHit<M>[]>;
+
+  /** Full RAG: retrieve hits, augment prompt, ask the configured chat LLM. Extra fields are forwarded to `llm.chat()`. */
+  askAbout<M = Record<string, unknown>>(p: {
+    entity: string;
+    query: string;
+    topK?: number;
+    filter?: Record<string, string | number | boolean>;
+    systemInstructions?: string;
+    [k: string]: unknown;
+  }): Promise<RAGAnswer<M>>;
+
+  /** Re-index every row of an annotated entity (useful after enabling `@rag` on an existing table). */
+  backfill(entityName: string): Promise<{ indexed: number }>;
+}
+
+export interface ActivateCdsPluginOptions {
+  /** Override the store class registry (mainly for testing). */
+  stores?: Record<string, new (opts: unknown) => VectorStore>;
+  /** Override the RAG class (mainly for testing). */
+  RAG?: typeof RAG;
+}
+
+/**
+ * Activate the `@rag` annotation plugin against an @sap/cds handle. The
+ * package's `cds-plugin.js` calls this automatically at boot and attaches the
+ * result at `cds.vectorHana` — you only need to call it yourself in tests or
+ * embedded scenarios where the auto-load didn't run.
+ */
+export function activateCdsPlugin(cds: unknown, options?: ActivateCdsPluginOptions): CdsRagPlugin;

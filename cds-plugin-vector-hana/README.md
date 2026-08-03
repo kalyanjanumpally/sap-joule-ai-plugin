@@ -114,6 +114,46 @@ CREATE HNSW VECTOR INDEX "SUPPLIER_CONTRACTS_embedding_HNSW_IDX"
 
 Requires HANA Cloud QRC 2/2024 or later (when HNSW GA'd). Search queries are unchanged — HANA transparently uses the index when `COSINE_SIMILARITY` is in the `ORDER BY`.
 
+### `@rag` annotation — auto-indexed entities (new in v0.5.0)
+
+Skip the boilerplate. Annotate a CDS entity with `@rag` and the plugin builds a vector table, keeps it in sync on every CRUD, and hands you two ergonomic operations on `cds.vectorHana`:
+
+```cds
+entity Suppliers {
+  key ID     : UUID;
+  name       : String;
+  description: LargeString;
+  country    : String;
+} @rag: {
+  fields:    ['name', 'description'],  // projected + embedded per row
+  dimension: 768,                      // your embedding model's vector size
+  store:     'sqlite',                 // or 'hana'
+  topK:      5,                        // default topK for searchByMeaning
+};
+```
+
+```js
+// Anywhere in a CAP handler
+const hits = await cds.vectorHana.searchByMeaning({
+  entity: 'AppService.Suppliers',
+  query:  'steel coils shipped from Europe',
+});
+
+const { answer, hits: sources } = await cds.vectorHana.askAbout({
+  entity: 'AppService.Suppliers',
+  query:  'Which suppliers can ship steel coils to Germany within two weeks?',
+});
+```
+
+The plugin registers `after CREATE|UPDATE` handlers so every save embeds + upserts the row's projected text into the vector table, and a `before DELETE` handler so the vector goes when the row does. Rows where every projected field is empty are silently skipped — no dead vectors clogging your search.
+
+Optional bits:
+
+- `@rag.provider` — cds.services alias for the embedder (default `'llm'`).
+- `@rag.chatter` — separate alias for `askAbout()`'s chat provider (default: same as `provider`). Useful when you want to embed with a cheap local model and chat with a smart one.
+- `@rag.table` — override the derived table name (default: `<entity>_vec`).
+- `cds.vectorHana.backfill('AppService.Suppliers')` — re-index every existing row. Use when enabling `@rag` on an already-populated table.
+
 ### RAG in one call (new in v0.4.0)
 
 Compose the store with any `@saptarishi/cds-plugin-llm` provider to get retrieval + citation-tagged prompt + chat generation in a single call:

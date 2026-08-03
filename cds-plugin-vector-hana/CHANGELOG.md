@@ -4,6 +4,59 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-08-03
+
+### Added
+
+- **`@rag` CDS annotation — one line on your entity, auto-indexed vector search on save/update/delete.** The package now ships a real CAP plugin (`cds-plugin.js`) that inspects the compiled model on `cds.on('served')`, builds a `VectorStore` per `@rag`-annotated entity, and wires CRUD handlers so the vector table stays in lockstep with the entity's rows — the developer writes zero glue code.
+
+  ```cds
+  entity Suppliers {
+    key ID     : UUID;
+    name       : String;
+    description: LargeString;
+    country    : String;
+  } @rag: {
+    fields:    ['name', 'description'],  // concatenated + embedded per row
+    dimension: 768,                      // your embedding model's vector size
+    store:     'sqlite',                 // or 'hana'
+    topK:      5,                        // default topK for searchByMeaning
+  };
+  ```
+
+  ```js
+  // Anywhere in a CAP handler:
+  const hits    = await cds.vectorHana.searchByMeaning({ entity: 'AppService.Suppliers', query: 'steel coils' });
+  const { answer, hits: sources } = await cds.vectorHana.askAbout({
+    entity: 'AppService.Suppliers',
+    query:  'Which suppliers ship steel from Europe?',
+  });
+  ```
+
+- **Plugin handle at `cds.vectorHana`** — same ergonomic pattern as the SAP-shipped `cds.mtx` / `cds.auth` handles. Four operations:
+  - `getStore(entityName)` — the underlying `VectorStore` (bypass this API and drop to raw `search()` / `upsert()` when you need to).
+  - `searchByMeaning({ entity, query, topK?, filter? })` → `SearchHit[]`.
+  - `askAbout({ entity, query, topK?, filter?, systemInstructions?, ...chatOpts })` → `{ answer, hits, raw }`. Uses `RAG` under the hood; the extra fields (`model`, `maxTokens`, `thinking`, ...) are forwarded to the chat provider.
+  - `backfill(entityName)` — re-index every row of an entity, useful after enabling `@rag` on an existing table or bulk-imports that bypassed the service layer.
+
+- **Automatic CRUD sync.** Handlers registered per annotated entity:
+  - `after CREATE|UPDATE` → build text from `@rag.fields`, embed, upsert. Rows where every projected field is empty are silently skipped (no dead vectors).
+  - `before DELETE` → remove the id from the store before CAP deletes the row (so a failing delete leaves both sides in sync).
+
+- **Provider aliases via `cds.services[...]`.** `@rag.provider` names an alias into `cds.requires.<alias>` — the same lookup CAP uses for every other service. Defaults to `'llm'`. `@rag.chatter` overrides just the LLM used for `askAbout()` when you want cheap-embed + smart-chat (e.g., embed with `ollama`, chat with `anthropic`).
+
+- **Fail-safe activation.** Every phase (bad `@rag` config, missing provider alias, unknown store kind, store `init()` failure) logs a specific error and skips that ONE entity — the rest of the app still boots. Silent-fail on plugin activation is the SAP-plugin convention (see `@sap/cds-mtx`).
+
+- 26 new tests (71 total): `normalizeConfig` (7), `buildItem` (4), `activate` wiring including error paths (5), CRUD sync (5), `searchByMeaning` (3), `askAbout` including chatter option forwarding (2). Runs with a hand-rolled fake `cds` — no `@sap/cds` install required, matching the existing test isolation model.
+
+- TS defs for `CdsRagPlugin`, `ActivateCdsPluginOptions`, and the `activateCdsPlugin(cds, options?)` factory. Power users can activate the plugin manually (embedded runtimes, tests) without going through `cds-plugin.js`.
+
+### Notes
+
+- Additive — the existing `VectorStore` / `HanaVectorStore` / `SqliteVectorStore` / `RAG` API is unchanged. `^0.4` consumers can bump to `^0.5` with zero code changes.
+- `@sap/cds` is now declared as an **optional** peer dep. The `RAG` and `VectorStore` classes still work standalone (no cds required); the CDS plugin obviously needs cds to be present at runtime.
+- Zero new production dependencies. The CDS plugin is pure composition over the existing `VectorStore` / `RAG` classes.
+
 ## [0.4.0] — 2026-08-03
 
 ### Added

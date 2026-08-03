@@ -1,10 +1,11 @@
 {
   "name": "@saptarishi/cds-plugin-vector-hana",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Vector store for SAP CAP with HANA Cloud's native REAL_VECTOR + COSINE_SIMILARITY. Includes a SQLite fallback for local development so you can build semantic-search features without paying for HANA. Composes with @saptarishi/cds-plugin-llm for embeddings.",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "files": [
+    "cds-plugin.js",
     "lib/",
     "README.md",
     "CHANGELOG.md",
@@ -30,10 +31,12 @@
   "author": "",
   "license": "Apache-2.0",
   "peerDependencies": {
-    "@saptarishi/cds-plugin-llm": "^1.0.0"
+    "@saptarishi/cds-plugin-llm": "^1.0.0",
+    "@sap/cds": ">=7"
   },
   "peerDependenciesMeta": {
-    "@saptarishi/cds-plugin-llm": { "optional": false }
+    "@saptarishi/cds-plugin-llm": { "optional": false },
+    "@sap/cds": { "optional": true }
   },
   "optionalDependencies": {
     "hdb": "^0.19.0",
