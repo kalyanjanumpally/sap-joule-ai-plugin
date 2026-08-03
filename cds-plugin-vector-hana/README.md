@@ -114,6 +114,38 @@ CREATE HNSW VECTOR INDEX "SUPPLIER_CONTRACTS_embedding_HNSW_IDX"
 
 Requires HANA Cloud QRC 2/2024 or later (when HNSW GA'd). Search queries are unchanged — HANA transparently uses the index when `COSINE_SIMILARITY` is in the `ORDER BY`.
 
+### RAG in one call (new in v0.4.0)
+
+Compose the store with any `@saptarishi/cds-plugin-llm` provider to get retrieval + citation-tagged prompt + chat generation in a single call:
+
+```js
+const { RAG, SqliteVectorStore } = require('@saptarishi/cds-plugin-vector-hana');
+const { OllamaLLMService } = require('@saptarishi/cds-plugin-llm');
+
+const embedder = new OllamaLLMService({ credentials: { embeddingModel: 'nomic-embed-text' } });
+const chatter  = new OllamaLLMService({ credentials: { model: 'qwen2.5:14b' } });
+
+const store = new SqliteVectorStore({ embed: embedder, dimension: 768, table: 'policies' });
+await store.init();
+await store.upsertMany([
+  { id: 'refund',   text: 'Refunds are accepted within 30 days.', metadata: { category: 'policy' } },
+  { id: 'shipping', text: 'Shipping is free over 50 EUR.',         metadata: { category: 'policy' } },
+]);
+
+const rag = new RAG({ llm: chatter, store });
+
+const { answer, hits } = await rag.answer({ query: 'How long do I have to return an item?' });
+//  → answer: "You have 30 days to return an item [refund]."
+//    hits:   [ { id: 'refund', score: 0.82, ... }, ... ]
+
+// Streaming variant — hits available before the first token
+const { hits: streamHits, stream } = await rag.stream({ query: '...', topK: 3 });
+// render `streamHits` immediately as sources; consume `stream` as chunks arrive
+for await (const chunk of stream) process.stdout.write(chunk.text ?? '');
+```
+
+The default system instruction tells the model to answer from context only and cite by `[id]`. Both the instruction and the context template are overridable per-instance (via the constructor) or per-call (via `systemInstructions`).
+
 ### Batch upsert (new in v0.2.0)
 
 For loading many rows at once — one embed call for the whole batch, one round-trip to persist:

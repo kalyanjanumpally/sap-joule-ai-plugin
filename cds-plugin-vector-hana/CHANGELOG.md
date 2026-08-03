@@ -4,6 +4,50 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-08-03
+
+### Added
+
+- **`RAG` class — turnkey retrieval-augmented-generation on top of any `VectorStore` + `@saptarishi/cds-plugin-llm` provider.** Composes `store.search()` and `llm.chat()/stream()` into a single call that retrieves, augments the prompt with citation-tagged context, and generates an answer. No new dependencies.
+
+  ```js
+  const { RAG, SqliteVectorStore } = require('@saptarishi/cds-plugin-vector-hana');
+  const { OllamaLLMService } = require('@saptarishi/cds-plugin-llm');
+
+  const embedder = new OllamaLLMService({ credentials: { embeddingModel: 'nomic-embed-text' } });
+  const chatter  = new OllamaLLMService({ credentials: { model: 'qwen2.5:14b' } });
+
+  const store = new SqliteVectorStore({ embed: embedder, dimension: 768, table: 'policies' });
+  await store.init();
+  await store.upsertMany([
+    { id: 'refund',   text: 'Refunds are accepted within 30 days.', metadata: { category: 'policy' } },
+    { id: 'shipping', text: 'Shipping is free over 50 EUR.',         metadata: { category: 'policy' } },
+  ]);
+
+  const rag = new RAG({ llm: chatter, store });
+  const { answer, hits } = await rag.answer({ query: 'How long do I have to return an item?' });
+  //  → answer: "You have 30 days to return an item [refund]."
+  //    hits:   [ { id: 'refund', score: 0.82, ... }, { id: 'shipping', score: 0.41, ... } ]
+  ```
+
+  API surface (`lib/rag.js`):
+  - `new RAG({ llm, store, systemInstructions?, promptTemplate? })` — llm needs `chat()`; store needs `search()`; both are validated at construction.
+  - `retrieve({ query, topK = 5, filter })` — thin, semantically-named pass-through to `store.search()`.
+  - `augment({ query, hits, systemInstructions })` — builds the `{ system, messages }` payload without calling the LLM. Useful when the caller wants to prepend a chat history or run their own middleware first.
+  - `answer({ query, topK, filter, systemInstructions, ...chatOpts })` — full RAG in one call. Returns `{ answer: string, hits: SearchHit[], raw: unknown }`. Extra fields (`model`, `maxTokens`, `thinking`, ...) are forwarded verbatim to `llm.chat()`; RAG-specific fields (`query`, `topK`, `filter`, `systemInstructions`) are stripped so provider SDKs don't see them.
+  - `stream({ query, ... })` — same as `answer()` but returns `{ hits, stream }`. **Hits resolve before the first token**, so a UI can render the source list while the answer streams in.
+
+- **Provider-agnostic reply extraction.** `answer()` normalizes the LLM reply to a plain string regardless of provider shape (plain string, `{ text }`, Anthropic content blocks, Ollama `{ message: { content } }`, OpenAI `choices[0].message.content`). The full envelope is still exposed on `raw` for callers that need usage/metadata.
+
+- **Default prompt tells the model to cite by `[id]`.** The default system instruction is "answer from context only, cite sources by their bracketed id"; the default context template renders each hit as `[hit_id] (metadata: {...}): hit_text`. Both are overridable per-instance or per-call. `defaultPromptTemplate` and `DEFAULT_SYSTEM_INSTRUCTIONS` are exported so callers can compose with the built-ins.
+
+- 21 new tests (45 total): constructor validation (llm/store/methods), `retrieve` defaults + validation, `augment` with default + custom template + empty hits + per-call override, `answer` end-to-end + reply-shape normalization (5 provider shapes) + option forwarding + filter pass-through, `stream` streams and returns hits eagerly + rejects when llm has no `stream()`.
+
+### Notes
+
+- Additive — the existing `VectorStore` / `HanaVectorStore` / `SqliteVectorStore` API is unchanged. `^0.3` consumers can bump to `^0.4` with zero code changes.
+- Zero new dependencies. `RAG` is 100% composition over the surfaces the two plugins already expose.
+
 ## [0.3.0] — 2026-07-29
 
 ### Added

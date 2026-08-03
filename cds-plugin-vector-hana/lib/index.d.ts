@@ -101,3 +101,53 @@ export interface HanaVectorStoreOptions extends VectorStoreOptions {
 export class HanaVectorStore extends VectorStore {
   constructor(options: HanaVectorStoreOptions);
 }
+
+// ---- RAG glue (0.4.0) ----------------------------------------------------
+
+/** Any object with a chat() method — typically an @saptarishi/cds-plugin-llm provider. */
+export interface ChatLLM {
+  chat(req: { system?: string; messages: Array<{ role: string; content: unknown }>; [k: string]: unknown }): Promise<unknown>;
+  stream?(req: { system?: string; messages: Array<{ role: string; content: unknown }>; [k: string]: unknown }): AsyncIterable<unknown>;
+}
+
+export interface RAGOptions {
+  llm: ChatLLM;
+  store: VectorStore;
+  /** Override the default "answer from context only, cite by [id]" instruction. */
+  systemInstructions?: string;
+  /** Custom formatter for the retrieved context block. Receives the hits, returns a string. */
+  promptTemplate?: (hits: SearchHit[]) => string;
+}
+
+export interface RAGAnswerParams {
+  query: string;
+  topK?: number;
+  filter?: Record<string, string | number | boolean>;
+  systemInstructions?: string;
+  /** Any additional field is forwarded verbatim to llm.chat() (model, maxTokens, etc). */
+  [k: string]: unknown;
+}
+
+export interface RAGAnswer<M = Record<string, unknown>> {
+  answer: string;
+  hits: SearchHit<M>[];
+  /** Raw provider reply — use this when you need usage/metadata that isn't the plain text. */
+  raw: unknown;
+}
+
+export interface RAGStreamResult<M = Record<string, unknown>> {
+  hits: SearchHit<M>[];
+  stream: AsyncIterable<unknown>;
+}
+
+export class RAG {
+  constructor(options: RAGOptions);
+  readonly llm: ChatLLM;
+  readonly store: VectorStore;
+  readonly systemInstructions: string;
+  readonly promptTemplate: (hits: SearchHit[]) => string;
+  retrieve<M = Record<string, unknown>>(p: { query: string; topK?: number; filter?: Record<string, string | number | boolean> }): Promise<SearchHit<M>[]>;
+  augment(p: { query: string; hits: SearchHit[]; systemInstructions?: string }): { system: string; messages: Array<{ role: string; content: string }> };
+  answer<M = Record<string, unknown>>(p: RAGAnswerParams): Promise<RAGAnswer<M>>;
+  stream<M = Record<string, unknown>>(p: RAGAnswerParams): Promise<RAGStreamResult<M>>;
+}
