@@ -11,6 +11,8 @@ module.exports = {
   GenAIHubLLMService: require('./providers/genai-hub'),
   OpenAICompatibleLLMService: require('./providers/openai-compatible'),
   AzureOpenAILLMService: require('./providers/azure-openai'),
+  GeminiLLMService: require('./providers/gemini'),
+  BedrockLLMService: require('./providers/bedrock'),
   GroqLLMService: require('./providers/groq'),
   // Vision helpers
   imageFromFile,

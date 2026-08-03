@@ -87,6 +87,8 @@ Set the appropriate env var (see `.env.example`):
 | `llm-groq` | Groq's hosted Llama/Mixtral/Qwen (sub-second inference) | Generous free tier | Working |
 | `llm-openai-compatible` | Any endpoint speaking OpenAI's `/chat/completions` (OpenAI, Together, Fireworks, DeepSeek direct, LM Studio, LocalAI...) | Varies | Working |
 | `llm-azure-openai` | Azure OpenAI Service (per-deployment URL + `api-key` header) | Paid via Azure subscription | Working (mock-verified end-to-end) |
+| `llm-gemini` (new in 1.19.0) | Google Gemini via Google AI Studio (chat, streaming, tools, vision, embeddings) | Free tier + paid per token | Working (mock-verified end-to-end) |
+| `llm-bedrock` (new in 1.19.0) | AWS Bedrock Converse API (chat, streaming, tools, vision) + Titan/Cohere embed. Uses `@aws-sdk/client-bedrock-runtime` (optional peer). | Paid via AWS Bedrock | Working (mock-verified end-to-end) |
 | `llm-genai-hub` | SAP AI Core / Generative AI Hub | Paid (extended plan) | Spec-compliant · mock-verified end-to-end · live verify open (community help welcome) |
 
 ## Stability

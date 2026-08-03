@@ -323,6 +323,31 @@ export class GenAIHubLLMService extends OpenAICompatibleLLMService {
   resourceGroup: string;
 }
 
+/**
+ * Google Gemini provider — calls the Google AI Studio API directly via fetch.
+ * Configure via `credentials.{apiKey, baseUrl?, embeddingModel?}` or the
+ * `GOOGLE_API_KEY` / `GEMINI_API_KEY` env vars.
+ * @since 1.19.0
+ */
+export class GeminiLLMService extends LLMService {
+  baseUrl: string;
+  apiKey: string;
+  embeddingModel: string;
+}
+
+/**
+ * AWS Bedrock provider — uses the Converse API for chat + streaming and
+ * InvokeModel for embeddings (Titan v2 / Cohere). Requires the optional peer
+ * dependency `@aws-sdk/client-bedrock-runtime`. Configure via
+ * `credentials.{region, accessKeyId?, secretAccessKey?, sessionToken?, embeddingModel?}`
+ * or the standard AWS env vars.
+ * @since 1.19.0
+ */
+export class BedrockLLMService extends LLMService {
+  region: string;
+  embeddingModel: string;
+}
+
 // ---------------------------------------------------------------------------
 // Image helpers
 // ---------------------------------------------------------------------------

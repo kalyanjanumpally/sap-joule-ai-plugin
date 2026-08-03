@@ -1,7 +1,7 @@
 {
   "name": "@saptarishi/cds-plugin-llm",
-  "version": "1.18.1",
-  "description": "LLM-agnostic AI service for SAP CAP. Speaks Anthropic, Ollama, Groq, any OpenAI-compatible endpoint, and SAP Generative AI Hub behind one API. Supports vision / multimodal input, streaming responses, structured outputs, tool use / function calling, and automatic retries with exponential backoff.",
+  "version": "1.19.0",
+  "description": "LLM-agnostic AI service for SAP CAP. Speaks Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI, Ollama, Groq, any OpenAI-compatible endpoint, and SAP Generative AI Hub behind one API. Supports vision / multimodal input, streaming responses, structured outputs, tool use / function calling, and automatic retries with exponential backoff.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kalyanjanumpally/sap-joule-ai-plugin.git",
@@ -37,6 +37,9 @@
     "ai",
     "anthropic",
     "claude",
+    "gemini",
+    "bedrock",
+    "aws-bedrock",
     "ollama",
     "groq",
     "openai-compatible",
@@ -74,16 +77,28 @@
         "llm-azure-openai": {
           "impl": "@saptarishi/cds-plugin-llm/lib/providers/azure-openai.js",
           "external": true
+        },
+        "llm-gemini": {
+          "impl": "@saptarishi/cds-plugin-llm/lib/providers/gemini.js",
+          "external": true
+        },
+        "llm-bedrock": {
+          "impl": "@saptarishi/cds-plugin-llm/lib/providers/bedrock.js",
+          "external": true
         }
       }
     }
   },
   "peerDependencies": {
-    "@sap/cds": ">=7"
+    "@sap/cds": ">=7",
+    "@aws-sdk/client-bedrock-runtime": ">=3.600.0"
   },
   "peerDependenciesMeta": {
     "@sap/cds": {
       "optional": false
+    },
+    "@aws-sdk/client-bedrock-runtime": {
+      "optional": true
     }
   },
   "dependencies": {

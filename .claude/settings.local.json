@@ -126,7 +126,10 @@
       "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-vector-hana-v0.7.3\" -m \"cds-plugin-vector-hana 0.7.3\" 767eefd)",
       "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-vector-hana-v0.7.3)",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\)['workflow_runs'][0]; print\\('status=', d['status'], 'concl=', d['conclusion']\\)\")",
-      "Bash(git -C /Users/janumpallykalyan/Documents/joule add joule-project-api/ joule-project/ .claude/settings.local.json)"
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule add joule-project-api/ joule-project/ .claude/settings.local.json)",
+      "Bash(node --test --test-reporter=spec test/*.js)",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule diff --stat)",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule add cds-plugin-llm/ .claude/settings.local.json)"
     ]
   }
 }

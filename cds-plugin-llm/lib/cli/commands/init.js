@@ -22,6 +22,18 @@ const PROVIDER_ENV_VARS = {
     'AICORE_DEPLOYMENT_ID=d...',
     'AICORE_RESOURCE_GROUP=default',
   ],
+  gemini: [
+    'GOOGLE_API_KEY=<your Google AI Studio key>',
+    '# GEMINI_BASE_URL=https://generativelanguage.googleapis.com   # optional override',
+    '# GEMINI_EMBEDDING_MODEL=text-embedding-004                    # optional override',
+  ],
+  bedrock: [
+    'AWS_REGION=us-east-1',
+    'AWS_ACCESS_KEY_ID=AKIA...',
+    'AWS_SECRET_ACCESS_KEY=<your secret>',
+    '# AWS_SESSION_TOKEN=<for temporary credentials only>',
+    '# BEDROCK_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0         # or cohere.embed-english-v3',
+  ],
 };
 
 function llmConfigFor(kind, model) {
@@ -56,6 +68,16 @@ function llmConfigFor(kind, model) {
         clientSecret: '${AICORE_CLIENT_SECRET}',
         deploymentId: '${AICORE_DEPLOYMENT_ID}',
         resourceGroup: '${AICORE_RESOURCE_GROUP}',
+      };
+      break;
+    case 'gemini':
+      base.credentials = { apiKey: '${GOOGLE_API_KEY}' };
+      break;
+    case 'bedrock':
+      base.credentials = {
+        region: '${AWS_REGION}',
+        accessKeyId: '${AWS_ACCESS_KEY_ID}',
+        secretAccessKey: '${AWS_SECRET_ACCESS_KEY}',
       };
       break;
   }

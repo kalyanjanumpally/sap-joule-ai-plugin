@@ -4,6 +4,58 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.0] — 2026-08-03
+
+### Added
+
+- **`llm-gemini` provider — Google Gemini via Google AI Studio.** Direct-fetch implementation (no SDK), full feature parity with the existing providers:
+  - Chat via `POST /v1beta/models/{model}:generateContent`
+  - Streaming via `POST /v1beta/models/{model}:streamGenerateContent?alt=sse` — SSE frame parsing with split-chunk tolerance
+  - Embeddings via `:embedContent` (single) or `:batchEmbedContents` (arrays — one round-trip for N inputs)
+  - Tool use — unified `{ name, description, input_schema }` translated to `tools[0].functionDeclarations`; `functionCall` parts parsed back into unified `toolCalls`
+  - Vision — base64 `image` blocks → `inlineData: { mimeType, data }`. URL blocks throw (Google AI Studio does not fetch)
+  - Structured outputs — `format` schema is sanitized (Gemini rejects `$schema` / `additionalProperties` / `title` / `default`) and passed as `generationConfig.responseSchema` with `responseMimeType: 'application/json'`
+  - Role translation — unified `assistant` → Gemini `model`; system-role in `messages` throws with a specific error pointing at the `system` field
+  - Auth via `x-goog-api-key` header (or `credentials.apiKey` / `GOOGLE_API_KEY` / `GEMINI_API_KEY` env)
+
+  ```jsonc
+  // cds.requires.llm
+  { "kind": "llm-gemini", "modelId": "gemini-1.5-pro",
+    "credentials": { "apiKey": "..." } }
+  ```
+
+- **`llm-bedrock` provider — AWS Bedrock via the Converse API.** Uses `@aws-sdk/client-bedrock-runtime` as an **optional peer dependency** (users only install it when they configure this provider):
+  - Chat via `ConverseCommand` — Bedrock's provider-agnostic surface (works with Claude-on-Bedrock, Llama, Mistral, Nova, ...)
+  - Streaming via `ConverseStreamCommand` — yields `text_delta` chunks; captures `messageStop.stopReason` + `metadata.usage`
+  - Embeddings via `InvokeModelCommand` — model-specific body shapes (Titan v1/v2: `{ inputText }`; Cohere embed v3: `{ texts, input_type }`); default embedding model `amazon.titan-embed-text-v2:0`
+  - Tool use — unified tools → `toolConfig.tools[].toolSpec`; `toolUse` blocks parsed back into unified `toolCalls`. `tool_result` blocks with `is_error` set → `status: 'error'`
+  - Vision — base64 `image` blocks → `image: { format, source: { bytes } }`; MIME → Bedrock format map (png/jpeg/gif/webp only). URL blocks throw. Media type validation fails fast for unsupported types
+  - SigV4 signing, retry backoff, and endpoint resolution are all delegated to the SDK. `maxAttempts: 1` on the SDK client so the base `LLMService.withRetry` isn't double-retried
+  - Auth via SDK credentials chain — `credentials.{accessKeyId, secretAccessKey, sessionToken?}` or the standard AWS env vars / profile / IAM role. Region is mandatory
+
+  ```sh
+  npm install @aws-sdk/client-bedrock-runtime
+  ```
+
+  ```jsonc
+  // cds.requires.llm
+  { "kind": "llm-bedrock", "modelId": "anthropic.claude-opus-4-20250514-v1:0",
+    "credentials": { "region": "us-east-1" } }   // creds picked up from env
+  ```
+
+- **CLI support**: `--provider gemini` and `--provider bedrock` on `chat` / `stream` / `embed` / `verify`. `saptarishi-llm init <dir> --provider gemini|bedrock` scaffolds a CAP app pre-wired to either. `providers` lists them; MCP `list_providers` tool and `config://supported-providers` resource now return 8 entries.
+
+- **TS defs**: `GeminiLLMService` and `BedrockLLMService` classes exported from `lib/index.d.ts` with `@since 1.19.0`.
+
+- **50 new tests (395 total)**: Gemini (26 — init/env fallbacks, endpoint construction, chat request shape, system-instruction mapping, role translation, tool declaration + parse, sanitized schema, base64 image + URL rejection, PDF-not-supported error, single + batch embed, SSE stream with split-chunk tolerance, CLI factory integration). Bedrock (24 — init region validation, SDK-missing error, credentials optional/session-token, `maxAttempts: 1`, chat/tools/vision/tool-result shape, Converse + ConverseStream + InvokeModel commands, Titan vs Cohere embed body shape, MIME→format map, batch embed via multiple InvokeModel calls, stream events → unified chunks, CLI factory integration). Adjusted 5 pre-existing tests hard-coded on the `supported` count (was 6, now 8) and the sorted provider-kind list.
+
+### Notes
+
+- Additive — every existing kind (`llm-anthropic`, `llm-ollama`, `llm-groq`, `llm-openai-compatible`, `llm-azure-openai`, `llm-genai-hub`) is unchanged. Consumers on `^1.18` bump to `^1.19` with zero code changes.
+- No new required dependencies. `@aws-sdk/client-bedrock-runtime` is an **optional** peer dep — you only install it if you use `llm-bedrock`. Users on the other 7 kinds pay nothing.
+- Bedrock retry policy: the SDK's own `maxAttempts` is set to 1 so the base `LLMService.withRetry` (exponential backoff with jitter) stays the single source of truth. Change `retries` in `chat({ retries })` to tune.
+- Gemini's schema sanitizer strips 4 fields (`$schema`, `additionalProperties`, `title`, `default`) that the Gemini structured-output validator rejects; the rest of the schema is passed through untouched. If you find a field that Gemini also rejects, open an issue.
+
 ## [1.18.1] — 2026-07-31
 
 ### Fixed

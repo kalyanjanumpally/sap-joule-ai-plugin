@@ -1,4 +1,4 @@
-const PROVIDER_KINDS = ['anthropic', 'ollama', 'groq', 'openai-compatible', 'azure-openai', 'genai-hub'];
+const PROVIDER_KINDS = ['anthropic', 'ollama', 'groq', 'openai-compatible', 'azure-openai', 'gemini', 'bedrock', 'genai-hub'];
 
 const PROVIDER_DEFAULTS = {
   anthropic:          { model: 'claude-opus-4-7', envKey: 'ANTHROPIC_API_KEY' },
@@ -6,6 +6,8 @@ const PROVIDER_DEFAULTS = {
   groq:               { model: 'llama-3.3-70b-versatile', envKey: 'GROQ_API_KEY' },
   'openai-compatible': { model: 'gpt-4o', envKey: 'OPENAI_API_KEY', envBaseUrl: 'OPENAI_BASE_URL' },
   'azure-openai':     { model: '(deployment-pinned)' },
+  gemini:             { model: 'gemini-1.5-flash', envKey: 'GOOGLE_API_KEY' },
+  bedrock:            { model: 'anthropic.claude-opus-4-20250514-v1:0' },
   'genai-hub':        { model: 'gpt-4o' },
 };
 
@@ -73,6 +75,30 @@ async function buildProvider({ opts, env }) {
     // in `verify` and `providers` output.
     const displayModel = env.AZURE_OPENAI_DEPLOYMENT;
     return { provider: makeProvider(AzureOpenAILLMService, providerOpts), kind, model: displayModel };
+  }
+
+  if (kind === 'gemini') {
+    const apiKey = env.GOOGLE_API_KEY ?? env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("missing GOOGLE_API_KEY / GEMINI_API_KEY env var (get one at aistudio.google.com)");
+    providerOpts.credentials.apiKey = apiKey;
+    if (env.GEMINI_BASE_URL) providerOpts.credentials.baseUrl = env.GEMINI_BASE_URL;
+    if (env.GEMINI_EMBEDDING_MODEL) providerOpts.credentials.embeddingModel = env.GEMINI_EMBEDDING_MODEL;
+    const GeminiLLMService = require('../providers/gemini');
+    return { provider: makeProvider(GeminiLLMService, providerOpts), kind, model };
+  }
+
+  if (kind === 'bedrock') {
+    const region = env.AWS_REGION ?? env.AWS_DEFAULT_REGION;
+    if (!region) throw new Error("missing AWS_REGION / AWS_DEFAULT_REGION env var (Bedrock is regional)");
+    providerOpts.credentials.region = region;
+    if (env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY) {
+      providerOpts.credentials.accessKeyId = env.AWS_ACCESS_KEY_ID;
+      providerOpts.credentials.secretAccessKey = env.AWS_SECRET_ACCESS_KEY;
+      if (env.AWS_SESSION_TOKEN) providerOpts.credentials.sessionToken = env.AWS_SESSION_TOKEN;
+    }
+    if (env.BEDROCK_EMBEDDING_MODEL) providerOpts.credentials.embeddingModel = env.BEDROCK_EMBEDDING_MODEL;
+    const BedrockLLMService = require('../providers/bedrock');
+    return { provider: makeProvider(BedrockLLMService, providerOpts), kind, model };
   }
 
   if (kind === 'genai-hub') {
