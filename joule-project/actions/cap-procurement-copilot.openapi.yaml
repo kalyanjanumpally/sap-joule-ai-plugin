@@ -1,0 +1,129 @@
+openapi: 3.0.3
+info:
+  title: Procurement Copilot — supplier-contract semantic search (joule-project-api)
+  description: |
+    OData actions bound to the `SupplierContracts` entity, auto-declared by
+    the `@rag` annotation via `@saptarishi/cds-plugin-vector-hana`. The CAP
+    project does NOT write any handler code for these actions — the plugin
+    walks the CSN at `cds.on('loaded')`, adds the actions to the entity, and
+    registers handlers at `cds.on('served')` that run vector search + (for
+    `askAbout`) an LLM chat over the retrieved context.
+
+    The embedding provider is configured via `cds.requires.llm-embed`
+    (default: Ollama `nomic-embed-text`, 768-dim). The chat provider for
+    `askAbout` is `cds.requires.llm` (default: `llm-groq` on
+    `llama-3.3-70b-versatile`). Both are swappable server-side without
+    changing this contract.
+  version: 1.0.0
+servers:
+  - url: /procurement
+    description: CAP service root (see destinations/cap-ai-backend.json)
+security:
+  - XsUaaBearer: []
+paths:
+  /SupplierContracts/ProcurementService.searchByMeaning:
+    post:
+      operationId: ProcurementCopilot.searchByMeaning
+      summary: Semantic search over supplier contracts
+      description: |
+        Runs a vector search over the `terms` field of every SupplierContracts
+        row (indexed automatically by `@rag`) and returns the top-K matching
+        rows in relevance order.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  description: The natural-language query.
+                topK:
+                  type: integer
+                  minimum: 1
+                  maximum: 20
+                  default: 5
+      responses:
+        "200":
+          description: Matching supplier contracts in hit-rank order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SupplierContract'
+
+  /SupplierContracts/ProcurementService.askAbout:
+    post:
+      operationId: ProcurementCopilot.askAbout
+      summary: RAG Q&A over supplier contracts (answer + cited sources)
+      description: |
+        Runs the full retrieve → augment → chat pipeline over the
+        SupplierContracts collection. Returns `{ answer, sources }` — the
+        LLM's answer (told by the default system prompt to cite by `[ID]`)
+        plus the underlying rows for citation UI.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  description: The natural-language question.
+                topK:
+                  type: integer
+                  minimum: 1
+                  maximum: 20
+                  default: 5
+                systemInstructions:
+                  type: string
+                  description: |
+                    Optional override for the plugin's default "answer from
+                    context only, cite by [id]" system prompt. Use sparingly.
+      responses:
+        "200":
+          description: Answer + cited source rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer:
+                    type: string
+                    description: LLM-generated answer, with `[ID]` citations inlined.
+                  sources:
+                    type: array
+                    description: Rows the answer was grounded in, in hit-rank order.
+                    items:
+                      $ref: '#/components/schemas/SupplierContract'
+
+components:
+  schemas:
+    SupplierContract:
+      type: object
+      properties:
+        ID:           { type: string, format: uuid }
+        supplierName: { type: string }
+        contractType: { type: string, enum: [framework, nda, sla, sow] }
+        category:     { type: string }
+        region:       { type: string, enum: [EMEA, APAC, AMER] }
+        terms:        { type: string }
+        validFrom:    { type: string, format: date }
+        validTo:      { type: string, format: date }
+        createdAt:    { type: string, format: date-time }
+        createdBy:    { type: string }
+        modifiedAt:   { type: string, format: date-time }
+        modifiedBy:   { type: string }
+  securitySchemes:
+    XsUaaBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

@@ -8,8 +8,27 @@ CAP backend for the **Procurement Copilot** Joule agent. Hosts LLM-backed action
 |---|---|
 | `POST /ai/summarizePurchaseOrder` | 2-sentence approver-ready PO summary |
 | `POST /ai/explainInvoiceRisk` | AP triage risk rating (low/medium/high) + rationale |
+| `POST /ai/extractInvoiceLineItems` | Structured extraction from an invoice image or PDF |
+| `POST /procurement/SupplierContracts/ProcurementService.searchByMeaning` | **Semantic search over supplier contracts (auto-declared by `@rag`)** |
+| `POST /procurement/SupplierContracts/ProcurementService.askAbout` | **Q&A with cited sources over supplier contracts (auto-declared by `@rag`)** |
 
-Both actions delegate to whichever LLM provider is configured under `cds.requires.llm` (see [`../cds-plugin-llm`](../cds-plugin-llm/README.md)).
+The `/ai/*` actions delegate to whichever LLM provider is configured under `cds.requires.llm` (see [`../cds-plugin-llm`](../cds-plugin-llm/README.md)). The `/procurement/*` actions are auto-declared by [`@saptarishi/cds-plugin-vector-hana`](../cds-plugin-vector-hana/README.md) from the `@rag` annotation on `SupplierContracts` — **zero handler code lives in this project for them**.
+
+### Try the RAG endpoints
+
+```sh
+# Semantic search
+curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.searchByMeaning \
+  -H 'content-type: application/json' \
+  -d '{"query": "steel coils Europe short lead time", "topK": 3}' | jq
+
+# Q&A with cited sources
+curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.askAbout \
+  -H 'content-type: application/json' \
+  -d '{"query": "Which suppliers can deliver aluminum in EMEA within 2 weeks and require green-electricity certificates?"}' | jq
+```
+
+The first request seeds the vector index from the CSV automatically (via the plugin's `after CREATE` handler when CAP loads the seed data). Subsequent runs are cached in the SQLite vector table.
 
 ## Provider by profile
 
@@ -25,10 +44,18 @@ Swap provider without touching handler code — `srv/ai-service.js` only talks t
 
 ## Run locally
 
+Prereqs for the RAG endpoints (skip if you only want the `/ai/*` actions):
+- **Ollama** running on `localhost:11434` with two models pulled:
+  - `ollama pull nomic-embed-text` (768-dim embeddings, used by `@rag`)
+  - `ollama pull qwen2.5:14b` (chat model for `askAbout`)
+- Alternative in production: point `cds.requires.llm-embed` and `cds.requires.llm` at `llm-genai-hub` (see the `[genai-hub]` profile in `package.json`).
+
 ```sh
 npm install
-export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=sk-ant-...   # for /ai/* actions
 npm run watch
+# or with Ollama-only (both chat + embed via Ollama):
+CDS_ENV=ollama npm run watch
 ```
 
 Then:

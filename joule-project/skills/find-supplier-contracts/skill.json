@@ -1,0 +1,70 @@
+{
+  "$schema": "https://sap.com/schemas/joule/skill/v1.json",
+  "name": "find-supplier-contracts",
+  "displayName": "Find supplier contracts",
+  "description": "Semantic search over supplier contract text. Answers natural-language questions like 'which suppliers can ship steel to EMEA in 2 weeks?' by calling the CAP backend's auto-declared @rag actions. No handler code — the CAP entity's @rag annotation exposes searchByMeaning and askAbout on OData automatically via @saptarishi/cds-plugin-vector-hana.",
+  "category": "procurement",
+  "version": "1.0.0",
+  "language": "en",
+  "confirmationRequired": false,
+  "utterances": [
+    "Find supplier contracts about steel coils in Europe",
+    "Which suppliers can deliver aluminum with a green-electricity certificate",
+    "Show contracts for offshore wind predictive maintenance",
+    "Who can move freight from Shanghai to Hamburg on an SLA",
+    "What are our framework agreements in raw-materials for EMEA"
+  ],
+  "parameters": [
+    {
+      "name": "question",
+      "type": "string",
+      "required": true,
+      "description": "The natural-language question about supplier contracts."
+    },
+    {
+      "name": "topK",
+      "type": "integer",
+      "required": false,
+      "default": 5,
+      "description": "How many source contracts to retrieve (1-10)."
+    }
+  ],
+  "actions": [
+    {
+      "actionRef": "ProcurementCopilot.askAbout",
+      "body": {
+        "query": "{{ question }}",
+        "topK": "{{ topK | default: 5 }}"
+      }
+    }
+  ],
+  "prompt": {
+    "$ref": "./prompt.md"
+  },
+  "responseTemplate": {
+    "$ref": "./response-template.md"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "answer": { "type": "string" },
+      "sources": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "ID":           { "type": "string" },
+            "supplierName": { "type": "string" },
+            "contractType": { "type": "string" },
+            "category":     { "type": "string" },
+            "region":       { "type": "string" },
+            "terms":        { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "requiredScopes": [
+    "S4:Procurement:Read"
+  ]
+}

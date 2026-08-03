@@ -1,7 +1,7 @@
 {
   "name": "joule-project-api",
-  "version": "0.1.0",
-  "description": "CAP backend for the Procurement Copilot. Hosts LLM-backed actions (summarize, explain) callable from Joule as skill actions.",
+  "version": "0.2.0",
+  "description": "CAP backend for the Procurement Copilot. Hosts LLM-backed actions (summarize, explain, extract) plus a @rag-annotated SupplierContracts entity that Joule can query semantically — all via auto-declared OData actions, no glue code.",
   "private": true,
   "scripts": {
     "start": "cds-serve",
@@ -10,8 +10,12 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@sap/cds": "^9",
-    "@saptarishi/cds-plugin-llm": "^0.6.1",
+    "@saptarishi/cds-plugin-llm": "^1.18.1",
+    "@saptarishi/cds-plugin-vector-hana": "^0.7.4",
     "express": "^4"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.5.0"
   },
   "engines": {
     "node": ">=18"
@@ -43,10 +47,53 @@
           }
         }
       },
+      "llm-embed": {
+        "[development]": {
+          "kind": "llm-ollama",
+          "modelId": "nomic-embed-text"
+        },
+        "[ollama]": {
+          "kind": "llm-ollama",
+          "modelId": "nomic-embed-text"
+        },
+        "[genai-hub]": {
+          "kind": "llm-genai-hub",
+          "credentials": {
+            "embeddingDeploymentId": "<AICORE_EMBED_DEPLOYMENT_ID>",
+            "resourceGroup": "default"
+          }
+        }
+      },
       "auth": {
-        "[development]": { "kind": "dummy" },
-        "[production]": { "kind": "dummy" }
+        "[development]": {
+          "kind": "dummy"
+        },
+        "[production]": {
+          "kind": "dummy"
+        }
+      },
+      "db": {
+        "[development]": {
+          "kind": "sqlite",
+          "credentials": {
+            "url": ":memory:"
+          }
+        },
+        "[production]": {
+          "kind": "sqlite",
+          "credentials": {
+            "url": ":memory:"
+          }
+        }
       }
+    }
+  },
+  "devDependencies": {
+    "@cap-js/sqlite": "^2.4.0"
+  },
+  "overrides": {
+    "@cap-js/sqlite": {
+      "better-sqlite3": "$better-sqlite3"
     }
   }
 }
