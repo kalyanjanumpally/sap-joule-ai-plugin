@@ -43,11 +43,18 @@ function activate(cds, options = {}) {
   // immediately, if the model is already loaded) so the OData adapter sees
   // the new actions when it constructs each service's routing table.
   //
-  // Idempotent: if the entity already has an `actions[name]`, we skip.
+  // `activate()` runs mutateCsn twice — once immediately (in case the model
+  // is already loaded) and once via cds.on('loaded'). We track the defs we
+  // already mutated in `mutated` and skip them silently on re-entry so the
+  // idempotency guard in declareActions doesn't fire a spurious warning on
+  // normal boots. (A warning on a truly user-defined pre-existing action
+  // still fires — that's a different case: `mutated.has(def)` is false.)
+  const mutated = new WeakSet();
   const mutateCsn = () => {
     if (!cds.model || !cds.model.definitions) return;
     for (const [name, def] of Object.entries(cds.model.definitions)) {
       if (!def || def.kind !== 'entity') continue;
+      if (mutated.has(def)) continue;
       const rag = readRagAnnotation(def);
       if (!rag || rag.enabled === false) continue;
       let config;
@@ -56,6 +63,7 @@ function activate(cds, options = {}) {
       } catch { continue; } // errors are reported during phase 2
       try {
         declareActions(cds.model.definitions, name, def, config, log);
+        mutated.add(def);
       } catch (err) {
         log.error(`@rag: ${name}: action declaration failed: ${err.message}`);
       }

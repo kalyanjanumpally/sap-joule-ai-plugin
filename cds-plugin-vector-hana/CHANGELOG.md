@@ -4,6 +4,12 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] — 2026-08-03
+
+### Fixed
+
+- **Silenced spurious "action already declared" warnings on normal boots.** `activate()` calls the CSN mutation twice — once immediately (in case the model is already loaded) and once via `cds.on('loaded')`. When both fired against the same model, the second run hit its own already-declared actions and logged idempotency warnings, even though nothing was wrong. Now the plugin tracks which entity defs it has already mutated via a `WeakSet` and skips them silently on re-entry. Genuine collisions (a user-declared `actions.searchByMeaning` or a competing plugin) still warn — that's a real signal worth surfacing.
+
 ## [0.7.1] — 2026-08-03
 
 ### Fixed
