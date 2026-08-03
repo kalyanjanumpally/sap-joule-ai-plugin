@@ -50,9 +50,14 @@ function activate(cds, options = {}) {
   // normal boots. (A warning on a truly user-defined pre-existing action
   // still fires — that's a different case: `mutated.has(def)` is false.)
   const mutated = new WeakSet();
-  const mutateCsn = () => {
-    if (!cds.model || !cds.model.definitions) return;
-    for (const [name, def] of Object.entries(cds.model.definitions)) {
+  const mutateCsn = (model) => {
+    // CAP passes the freshly-loaded model as the `loaded` event argument
+    // BEFORE assigning it to `cds.model`, so we must read from the arg — a
+    // handler that only trusted `cds.model` (as this plugin did in 0.7.0-3)
+    // silently no-ops during boot and no actions ever get declared.
+    const src = model?.definitions ? model : cds.model;
+    if (!src || !src.definitions) return;
+    for (const [name, def] of Object.entries(src.definitions)) {
       if (!def || def.kind !== 'entity') continue;
       if (mutated.has(def)) continue;
       const rag = readRagAnnotation(def);
@@ -62,14 +67,14 @@ function activate(cds, options = {}) {
         config = normalizeConfig(rag, name);
       } catch { continue; } // errors are reported during phase 2
       try {
-        declareActions(cds.model.definitions, name, def, config, log);
+        declareActions(src.definitions, name, def, config, log);
         mutated.add(def);
       } catch (err) {
         log.error(`@rag: ${name}: action declaration failed: ${err.message}`);
       }
     }
   };
-  if (cds.model?.definitions) mutateCsn();
+  if (cds.model?.definitions) mutateCsn(cds.model);
   cds.on('loaded', mutateCsn);
 
   cds.on('served', async () => {

@@ -4,6 +4,16 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] — 2026-08-03
+
+### Fixed
+
+- **Auto-declared OData actions never actually appeared in `$metadata`.** The plugin's CSN mutation ran at `cds.on('loaded')` — but CAP fires `loaded` BEFORE assigning `cds.model = m`. The plugin's guard `if (!cds.model?.definitions) return;` was falsy, so `mutateCsn` silently no-op'd and the actions were never declared. The mutation code, the action shape, the type synthesis — all correct. Just never ran. Fix: read the model from the `loaded` event argument (which CAP always passes as the raw model) instead of relying on `cds.model` being assigned yet. Verified end-to-end: `Action Name="searchByMeaning"` and `Action Name="askAbout"` now appear in the OData $metadata document.
+
+### Notes
+
+- Together with 0.7.1 (flat-annotation form), 0.7.2 (quiet reboots), and 0.7.3 (lazy `cds.connect.to`), this is the fourth patch closing gaps discovered while wiring `@rag` into a real CAP app (`joule-project-api`). If you were on any of 0.7.0–0.7.3 and wondered why nothing appeared on the OData surface — bump to 0.7.4 and it will.
+
 ## [0.7.3] — 2026-08-03
 
 ### Fixed
