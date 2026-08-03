@@ -4,6 +4,21 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-08-03
+
+### Fixed
+
+- **`@rag` annotation was silently ignored in real CAP apps.** The CDS compiler flattens `@rag: { fields: [...], dimension, ... }` into top-level keys `@rag.fields`, `@rag.dimension`, ..., which the plugin's `def['@rag']` check couldn't see — so the plugin walked past every annotated entity without doing anything. Test doubles that passed a nested object worked fine, but every actual `cds compile`-produced CSN hit the flat form. Both forms are now supported:
+  - Nested (from `cds.linked` or hand-authored CSN): `def['@rag'] = { ... }`
+  - Flat (from `cdsc` or the CAP runtime pre-`linked`): `def['@rag.fields'] = ...`, `def['@rag.dimension'] = ...`
+  - Flat with nested keys: `def['@rag.actions.search'] = 'findX'` reconstructs into `actions: { search: 'findX' }`
+- New exported helper `readRagAnnotation(def)` — reconstructs the config regardless of shape; useful for third-party plugins that want to introspect the annotation.
+- 7 new tests (111 total) covering both annotation forms including the nested-wins-if-both-present rule and the shorthand `@rag: true / false`.
+
+### Notes
+
+- Behaviorally identical to 0.7.0 for anyone whose tests worked. If you noticed `@rag`-annotated entities booting quietly without OData actions appearing on `/odata/v4/...`, this is the fix — bump and restart.
+
 ## [0.7.0] — 2026-08-03
 
 ### Added

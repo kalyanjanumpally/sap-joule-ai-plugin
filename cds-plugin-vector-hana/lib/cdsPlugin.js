@@ -48,7 +48,7 @@ function activate(cds, options = {}) {
     if (!cds.model || !cds.model.definitions) return;
     for (const [name, def] of Object.entries(cds.model.definitions)) {
       if (!def || def.kind !== 'entity') continue;
-      const rag = def['@rag'];
+      const rag = readRagAnnotation(def);
       if (!rag || rag.enabled === false) continue;
       let config;
       try {
@@ -71,7 +71,7 @@ function activate(cds, options = {}) {
     }
     for (const [name, def] of Object.entries(cds.model.definitions)) {
       if (!def || def.kind !== 'entity') continue;
-      const rag = def['@rag'];
+      const rag = readRagAnnotation(def);
       if (!rag || rag.enabled === false) continue;
 
       let config;
@@ -151,6 +151,37 @@ function activate(cds, options = {}) {
     _configs: configs,
   };
   return publicApi;
+}
+
+// Handle both annotation forms CAP produces:
+//   nested (from cds.linked or hand-authored CSN):  def['@rag']         = { fields: [...], dimension, ... }
+//   flat   (from cdsc / raw CSN):                    def['@rag.fields']  = [...], def['@rag.dimension'] = ...
+// Test doubles hand the plugin the nested form directly; real CAP apps
+// often see the flat form. Both must work.
+function readRagAnnotation(def) {
+  if (def['@rag'] !== undefined && def['@rag'] !== null) {
+    if (typeof def['@rag'] === 'object') return def['@rag'];
+    if (def['@rag'] === false || def['@rag'] === true) return { enabled: def['@rag'] };
+  }
+  const flat = {};
+  let found = false;
+  for (const key of Object.keys(def)) {
+    if (key.startsWith('@rag.')) {
+      setDotPath(flat, key.slice(5), def[key]);
+      found = true;
+    }
+  }
+  return found ? flat : null;
+}
+
+function setDotPath(target, path, value) {
+  const parts = path.split('.');
+  let cur = target;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (typeof cur[parts[i]] !== 'object' || cur[parts[i]] === null) cur[parts[i]] = {};
+    cur = cur[parts[i]];
+  }
+  cur[parts[parts.length - 1]] = value;
 }
 
 function normalizeConfig(rag, entityName) {
@@ -430,4 +461,4 @@ function silentLog() {
   return { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 }
 
-module.exports = { activate, normalizeConfig, buildItem, declareActions };
+module.exports = { activate, normalizeConfig, buildItem, declareActions, readRagAnnotation };

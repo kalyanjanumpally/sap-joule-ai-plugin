@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { activate, normalizeConfig, buildItem, declareActions } = require('../lib/cdsPlugin');
+const { activate, normalizeConfig, buildItem, declareActions, readRagAnnotation } = require('../lib/cdsPlugin');
 const SqliteVectorStore = require('../lib/backends/sqlite');
 const RAG = require('../lib/rag');
 
@@ -144,6 +144,68 @@ function makeSuppliersEntity(ragOverrides = {}) {
   };
 }
 
+// ---- readRagAnnotation (nested vs flat CSN forms) ----------------------
+
+test('readRagAnnotation: nested form (from cds.linked or test doubles)', () => {
+  const def = {
+    '@rag': { fields: ['a'], dimension: 4, store: 'sqlite' },
+  };
+  const rag = readRagAnnotation(def);
+  assert.deepEqual(rag, { fields: ['a'], dimension: 4, store: 'sqlite' });
+});
+
+test('readRagAnnotation: flat form (from cdsc / raw CSN)', () => {
+  const def = {
+    '@rag.fields': ['name', 'description'],
+    '@rag.dimension': 768,
+    '@rag.store': 'sqlite',
+    '@rag.topK': 5,
+    '@rag.provider': 'llm-embed',
+  };
+  const rag = readRagAnnotation(def);
+  assert.deepEqual(rag, {
+    fields: ['name', 'description'],
+    dimension: 768,
+    store: 'sqlite',
+    topK: 5,
+    provider: 'llm-embed',
+  });
+});
+
+test('readRagAnnotation: flat form with nested keys (e.g., @rag.actions.search)', () => {
+  const def = {
+    '@rag.fields': ['a'],
+    '@rag.dimension': 4,
+    '@rag.actions.search': 'findX',
+    '@rag.actions.ask': false,
+  };
+  const rag = readRagAnnotation(def);
+  assert.deepEqual(rag, {
+    fields: ['a'],
+    dimension: 4,
+    actions: { search: 'findX', ask: false },
+  });
+});
+
+test('readRagAnnotation: returns null when no @rag annotation present', () => {
+  assert.equal(readRagAnnotation({ '@Common.Label': 'x' }), null);
+  assert.equal(readRagAnnotation({}), null);
+});
+
+test('readRagAnnotation: nested form wins if both nested + flat coexist', () => {
+  const def = {
+    '@rag': { fields: ['x'], dimension: 8 },
+    '@rag.dimension': 16, // ignored — nested wins
+  };
+  const rag = readRagAnnotation(def);
+  assert.deepEqual(rag, { fields: ['x'], dimension: 8 });
+});
+
+test('readRagAnnotation: @rag: true / false shorthand → { enabled: ... }', () => {
+  assert.deepEqual(readRagAnnotation({ '@rag': true }), { enabled: true });
+  assert.deepEqual(readRagAnnotation({ '@rag': false }), { enabled: false });
+});
+
 // ---- normalizeConfig ----------------------------------------------------
 
 test('normalizeConfig: requires object form', () => {
@@ -219,6 +281,30 @@ test('buildItem: throws when id field missing', () => {
 });
 
 // ---- activate: wiring ---------------------------------------------------
+
+test('activate: works with flat @rag.* annotations (raw CSN from cdsc)', async () => {
+  const def = {
+    kind: 'entity',
+    name: 'AppService.Suppliers',
+    _service: { name: 'AppService' },
+    '@rag.fields': ['name', 'description'],
+    '@rag.dimension': 8,
+    '@rag.store': 'sqlite',
+    '@rag.table': 'suppliers_vec',
+  };
+  const svc = makeFakeService('AppService');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: fakeEmbedder, AppService: svc },
+  });
+  const plugin = activate(cds);
+  await cds.emit('served');
+  assert.equal(plugin._stores.size, 1);
+  assert.ok(plugin.getStore('AppService.Suppliers') instanceof SqliteVectorStore);
+  // OData actions also get declared for flat-annotated entities
+  assert.ok(def.actions?.searchByMeaning);
+  assert.ok(def.actions?.askAbout);
+});
 
 test('activate: skips entities without @rag', async () => {
   const cds = makeFakeCds({
