@@ -55,7 +55,7 @@ function activate(cds, options = {}) {
         config = normalizeConfig(rag, name);
       } catch { continue; } // errors are reported during phase 2
       try {
-        declareActions(name, def, config, log);
+        declareActions(cds.model.definitions, name, def, config, log);
       } catch (err) {
         log.error(`@rag: ${name}: action declaration failed: ${err.message}`);
       }
@@ -181,21 +181,29 @@ function normalizeConfig(rag, entityName) {
 }
 
 // `@rag.actions` shapes:
-//   undefined            → { search: 'searchByMeaning' }  (default: on, default name)
-//   false                → false                          (all auto-actions off)
-//   { search: false }    → { search: false }              (skip searchByMeaning)
-//   { search: 'foo' }    → { search: 'foo' }              (custom action name)
+//   undefined                           → { search: 'searchByMeaning', ask: 'askAbout' }
+//   false                               → false     (all auto-actions off)
+//   { search: false }                   → skip search, keep ask
+//   { ask: false }                      → skip ask, keep search
+//   { search: 'foo', ask: 'answerBot' } → custom action names
 function normalizeActionsConfig(input) {
   if (input === false) return false;
-  if (input == null) return { search: 'searchByMeaning' };
+  if (input == null) return { search: 'searchByMeaning', ask: 'askAbout' };
   if (typeof input !== 'object') {
     throw new Error(`@rag.actions must be false or an object, got ${typeof input}`);
   }
   const search = input.search === undefined ? 'searchByMeaning' : input.search;
-  if (search !== false && (typeof search !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(search))) {
-    throw new Error(`@rag.actions.search must be a valid identifier or false, got ${JSON.stringify(search)}`);
+  const ask = input.ask === undefined ? 'askAbout' : input.ask;
+  validateActionName('search', search);
+  validateActionName('ask', ask);
+  return { search, ask };
+}
+
+function validateActionName(kind, value) {
+  if (value === false) return;
+  if (typeof value !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+    throw new Error(`@rag.actions.${kind} must be a valid identifier or false, got ${JSON.stringify(value)}`);
   }
-  return { search };
 }
 
 function resolveService(cds, alias, role) {
@@ -226,67 +234,143 @@ function buildItem(row, config) {
   return { id: String(id), text, metadata: text ? metadata : null };
 }
 
-// Mutate the entity's CSN to declare a collection-bound OData action per
+// Mutate the entity's CSN to declare collection-bound OData actions per
 // @rag config. Runs at `cds.on('loaded')` — before service construction —
-// so the OData adapter sees the action when it builds routes.
-function declareActions(entityName, def, config, log) {
+// so the OData adapter sees the actions when it builds routes.
+//
+// `definitions` is `cds.model.definitions` — the plugin also adds a
+// synthesized `<Entity>AskAboutResult` type there when the ask action is
+// enabled (structured returns need a top-level type definition; inline
+// anonymous structs aren't legal in CSN action returns).
+function declareActions(definitions, entityName, def, config, log) {
   if (config.actions === false) return;
   const searchName = config.actions?.search;
-  if (searchName === false) return;
+  const askName = config.actions?.ask;
+  if (searchName === false && askName === false) return;
 
   def.actions = def.actions ?? {};
-  if (def.actions[searchName]) {
-    log.warn(`@rag: ${entityName}: action '${searchName}' already declared — skipping OData declaration`);
-    return;
+
+  // ---- searchByMeaning (0.6.0) --------------------------------------
+  if (searchName !== false) {
+    if (def.actions[searchName]) {
+      log.warn(`@rag: ${entityName}: action '${searchName}' already declared — skipping OData declaration`);
+    } else {
+      def.actions[searchName] = {
+        kind: 'action',
+        params: {
+          query: { type: 'cds.String' },
+          topK: { type: 'cds.Integer' },
+        },
+        returns: { items: { type: entityName } },
+        '@Common.Label': `Search ${entityName.split('.').pop()} by meaning`,
+      };
+    }
   }
-  def.actions[searchName] = {
-    kind: 'action',
-    params: {
-      query: { type: 'cds.String' },
-      topK: { type: 'cds.Integer' },
-    },
-    returns: { items: { type: entityName } },
-    '@Common.Label': `Search ${entityName.split('.').pop()} by meaning`,
-  };
+
+  // ---- askAbout (0.7.0) ---------------------------------------------
+  if (askName !== false) {
+    if (def.actions[askName]) {
+      log.warn(`@rag: ${entityName}: action '${askName}' already declared — skipping OData declaration`);
+    } else {
+      const resultTypeName = askAboutResultTypeName(entityName);
+      if (definitions && !definitions[resultTypeName]) {
+        definitions[resultTypeName] = {
+          kind: 'type',
+          elements: {
+            answer: { type: 'cds.String' },
+            sources: { items: { type: entityName } },
+          },
+        };
+      }
+      def.actions[askName] = {
+        kind: 'action',
+        params: {
+          query: { type: 'cds.String' },
+          topK: { type: 'cds.Integer' },
+          systemInstructions: { type: 'cds.String' },
+        },
+        returns: { type: resultTypeName },
+        '@Common.Label': `Ask a question about ${entityName.split('.').pop()}`,
+      };
+    }
+  }
 }
 
-// Register the OData action handler on the entity's service. Called at
+function askAboutResultTypeName(entityName) {
+  // 'AppService.Suppliers' → 'AppService.SuppliersAskAboutResult'
+  const idx = entityName.lastIndexOf('.');
+  if (idx === -1) return `${entityName}AskAboutResult`;
+  return `${entityName.slice(0, idx)}.${entityName.slice(idx + 1)}AskAboutResult`;
+}
+
+// Register the OData action handler(s) on the entity's service. Called at
 // `cds.on('served')` after the store is up.
 function wireActionHandlers({ cds, entityName, def, store, config, log, plugin }) {
   if (config.actions === false) return;
   const searchName = config.actions?.search;
-  if (searchName === false) return;
+  const askName = config.actions?.ask;
+  if (searchName === false && askName === false) return;
 
   const svcName = def._service?.name ?? null;
   const service = svcName ? cds.services?.[svcName] : findService(cds, entityName);
   if (!service || typeof service.on !== 'function') {
-    log.warn(`@rag: ${entityName}: no service.on() available (skipping ${searchName} handler)`);
+    log.warn(`@rag: ${entityName}: no service.on() available (skipping action handlers)`);
     return;
   }
 
   const entityRef = def.name ?? entityName;
-  service.on(searchName, entityRef, async (req) => {
-    const query = req?.data?.query;
-    if (!query || typeof query !== 'string') {
-      if (typeof req.reject === 'function') return req.reject(400, 'query is required');
-      throw new Error('query is required');
-    }
-    const topK = req?.data?.topK ?? config.topK;
-    let hits;
-    try {
-      hits = await plugin.searchByMeaning({ entity: entityName, query, topK });
-    } catch (err) {
-      log.error(`@rag: ${entityName}: ${searchName} handler failed: ${err.message}`);
-      if (typeof req.reject === 'function') return req.reject(500, `search failed: ${err.message}`);
-      throw err;
-    }
-    if (!hits.length) return [];
-    const ids = hits.map(h => h.id);
-    const rows = await projectToEntity(cds, entityRef, config.idField, ids);
-    // Preserve hit-rank order (SQL WHERE ID IN (...) doesn't guarantee order).
-    const byId = new Map(rows.map(r => [String(r[config.idField]), r]));
-    return ids.map(id => byId.get(String(id))).filter(Boolean);
-  });
+
+  // ---- searchByMeaning handler --------------------------------------
+  if (searchName !== false) {
+    service.on(searchName, entityRef, async (req) => {
+      const query = req?.data?.query;
+      if (!query || typeof query !== 'string') {
+        if (typeof req.reject === 'function') return req.reject(400, 'query is required');
+        throw new Error('query is required');
+      }
+      const topK = req?.data?.topK ?? config.topK;
+      let hits;
+      try {
+        hits = await plugin.searchByMeaning({ entity: entityName, query, topK });
+      } catch (err) {
+        log.error(`@rag: ${entityName}: ${searchName} handler failed: ${err.message}`);
+        if (typeof req.reject === 'function') return req.reject(500, `search failed: ${err.message}`);
+        throw err;
+      }
+      if (!hits.length) return [];
+      const ids = hits.map(h => h.id);
+      const rows = await projectToEntity(cds, entityRef, config.idField, ids);
+      // Preserve hit-rank order (SQL WHERE ID IN (...) doesn't guarantee order).
+      const byId = new Map(rows.map(r => [String(r[config.idField]), r]));
+      return ids.map(id => byId.get(String(id))).filter(Boolean);
+    });
+  }
+
+  // ---- askAbout handler ---------------------------------------------
+  if (askName !== false) {
+    service.on(askName, entityRef, async (req) => {
+      const query = req?.data?.query;
+      if (!query || typeof query !== 'string') {
+        if (typeof req.reject === 'function') return req.reject(400, 'query is required');
+        throw new Error('query is required');
+      }
+      const topK = req?.data?.topK ?? config.topK;
+      const systemInstructions = req?.data?.systemInstructions;
+      let result;
+      try {
+        result = await plugin.askAbout({ entity: entityName, query, topK, systemInstructions });
+      } catch (err) {
+        log.error(`@rag: ${entityName}: ${askName} handler failed: ${err.message}`);
+        if (typeof req.reject === 'function') return req.reject(500, `ask failed: ${err.message}`);
+        throw err;
+      }
+      const ids = result.hits.map(h => h.id);
+      const rows = ids.length ? await projectToEntity(cds, entityRef, config.idField, ids) : [];
+      const byId = new Map(rows.map(r => [String(r[config.idField]), r]));
+      const sources = ids.map(id => byId.get(String(id))).filter(Boolean);
+      return { answer: result.answer, sources };
+    });
+  }
 }
 
 async function projectToEntity(cds, entityRef, idField, ids) {

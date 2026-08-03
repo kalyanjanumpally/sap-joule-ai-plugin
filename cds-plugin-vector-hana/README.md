@@ -114,9 +114,9 @@ CREATE HNSW VECTOR INDEX "SUPPLIER_CONTRACTS_embedding_HNSW_IDX"
 
 Requires HANA Cloud QRC 2/2024 or later (when HNSW GA'd). Search queries are unchanged — HANA transparently uses the index when `COSINE_SIMILARITY` is in the `ORDER BY`.
 
-### `@rag` action auto-declared on OData (new in v0.6.0)
+### `@rag` actions auto-declared on OData (new in v0.6.0 / v0.7.0)
 
-Every `@rag`-annotated entity gets a collection-bound OData action out of the box — no handler code required:
+Every `@rag`-annotated entity gets **two** collection-bound OData actions out of the box — zero handler code:
 
 ```http
 POST /odata/v4/app/Suppliers/AppService.searchByMeaning
@@ -125,7 +125,16 @@ Content-Type: application/json
 { "query": "steel coils shipped from Europe", "topK": 5 }
 ```
 
-Returns `value: [ <Suppliers row>, ... ]` in relevance order. The plugin runs the vector search, projects hit IDs back to the entity via `SELECT ... WHERE ID IN (...)`, and re-sorts to match the hit ranking (SQL doesn't preserve it).
+→ `value: [ <Suppliers row>, ... ]` in relevance order. The plugin runs the vector search, projects hit IDs back to the entity via `SELECT ... WHERE ID IN (...)`, and re-sorts to match the hit ranking (SQL doesn't preserve it).
+
+```http
+POST /odata/v4/app/Suppliers/AppService.askAbout
+Content-Type: application/json
+
+{ "query": "Which suppliers can ship steel coils to Germany within two weeks?", "topK": 5 }
+```
+
+→ `{ answer: "...", sources: [ <Suppliers row>, ... ] }`. Handler runs the full RAG pipeline (retrieve → augment → chat) and returns both the LLM answer AND the source rows (in hit-rank order) so the caller can render citations. Optional `systemInstructions` field on the request body overrides the default "answer from context only, cite by [id]" instruction per-call.
 
 Opt-outs and overrides via `@rag.actions`:
 
@@ -133,13 +142,17 @@ Opt-outs and overrides via `@rag.actions`:
 } @rag: {
   fields:    ['name', 'description'],
   dimension: 768,
-  actions: false                          // disable all auto-declared actions
-  // or:  actions: { search: false }      // disable just searchByMeaning
-  // or:  actions: { search: 'findSuppliers' }  // custom action name
+  actions: false                                    // disable ALL auto-declared actions
+  // or:  actions: { ask: false }                   // disable just askAbout
+  // or:  actions: { search: false, ask: false }    // disable both
+  // or:  actions: { search: 'findSuppliers',
+                     ask:    'answerAbout' }        // custom action names
 };
 ```
 
-If the entity already declares its own `actions.searchByMeaning` (user-written, or another plugin's), the auto-declaration is skipped with a warning — the plugin never overwrites developer code.
+If the entity already declares its own `actions.searchByMeaning` or `actions.askAbout` (user-written, or another plugin's), the auto-declaration is skipped with a warning — the plugin never overwrites developer code.
+
+The synthesized return type for `askAbout` — `<ServiceName>.<EntityShort>AskAboutResult` — is added to `cds.model.definitions` at load time. Bring your own type by that name if you want a richer shape (e.g., adding a `citations` field); the plugin will re-use it.
 
 ### `@rag` annotation — auto-indexed entities (new in v0.5.0)
 

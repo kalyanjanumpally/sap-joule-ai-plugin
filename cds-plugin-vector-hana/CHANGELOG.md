@@ -4,6 +4,49 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-08-03
+
+### Added
+
+- **`askAbout` as an OData action — RAG conversation over your entity, no glue code.** Completes the `@rag` OData surface started in 0.6.0. Every `@rag`-annotated entity now gets a second auto-declared action alongside `searchByMeaning`: `askAbout(query, topK, systemInstructions)` returning a synthesized `{ answer: String; sources: array of <Entity> }` type. Handler runs the full RAG pipeline (retrieve → augment → chat) and projects hit IDs back to the entity via `SELECT ... WHERE ID IN (...)` in hit-rank order.
+
+  ```http
+  POST /odata/v4/app/Suppliers/AppService.askAbout
+  Content-Type: application/json
+
+  { "query": "Which suppliers can ship steel coils to Germany within two weeks?", "topK": 5 }
+  ```
+
+  Returns:
+
+  ```jsonc
+  {
+    "answer":  "Based on the sources, Acme Steel and Nord Metallwerke can meet that lead time [sup-42], [sup-101].",
+    "sources": [
+      { "ID": "sup-42",  "name": "Acme Steel",       "description": "...", "country": "DE" },
+      { "ID": "sup-101", "name": "Nord Metallwerke", "description": "...", "country": "DE" }
+    ]
+  }
+  ```
+
+- **Synthesized `<Entity>AskAboutResult` types added to `cds.model.definitions` at load time.** Structured returns need a top-level named type in CSN (inline anonymous structs aren't legal in action returns). The plugin adds `<ServiceName>.<EntityShort>AskAboutResult` per annotated entity with `{ answer: cds.String, sources: array of <Entity> }`. Idempotent — pre-existing types are never overwritten.
+
+- **Config knobs (extended `@rag.actions`)**:
+  - `@rag.actions: false` — disable ALL auto-declared actions (still applies).
+  - `@rag.actions.ask: false` — disable just `askAbout` (keep `searchByMeaning`).
+  - `@rag.actions.ask: 'answerAbout'` — custom action name. Validated as a JS identifier at boot.
+  - `@rag.actions.search` (from 0.6.0) — unchanged.
+
+- **Idempotent everywhere.** If the entity already declares its own `actions.askAbout` (user-written, or another plugin), the auto-declaration is skipped with a warning — same policy as `searchByMeaning`. Re-running `declareActions` on an entity where the result type already exists does NOT replace it (protects downstream code that may hold references).
+
+- 15 new tests (104 total): expanded `normalizeActionsConfig` (default shape, per-action false, custom names, invalid name for both), `declareActions` (result type synthesis, action shape, idempotency for search + ask independently, no double-synthesis of the type, custom names, all opt-out combinations), OData handler behavior (registration alongside search, `{ answer, sources }` shape with sources in hit-rank order, empty-query 400, empty hits `{ answer, sources: [] }`, `systemInstructions` pass-through to RAG, per-action opt-out honored, custom name).
+
+### Notes
+
+- Additive — existing `@rag`-annotated entities gain the new action automatically without config changes. If your app already declared its own `askAbout` action on an entity, the plugin sees it and steps aside (logs a warning) — nothing breaks.
+- The synthesized result type name is `<ServiceName>.<EntityShort>AskAboutResult`. Because the full entity name is service-qualified, there's no collision between entities sharing a short name across services. If you already have a type by that name, the plugin will re-use it — bring your own if you want a richer shape (e.g., adding a `citations` field).
+- Handler uses `cds.vectorHana.askAbout()` under the hood, so per-request options that flow through (`systemInstructions`, `topK`) work the same in both APIs. The chatter LLM alias defaults to `@rag.provider` (or `'llm'`); override with `@rag.chatter: '<alias>'` when you want cheap-embed + smart-chat.
+
 ## [0.6.0] — 2026-08-03
 
 ### Added

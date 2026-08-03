@@ -484,9 +484,9 @@ test('askAbout: passes-through model/maxTokens to the chatter', async () => {
 
 // ---- OData action auto-declaration (v0.6.0) ----------------------------
 
-test('normalizeConfig: default actions.search = "searchByMeaning"', () => {
+test('normalizeConfig: default actions = { search: "searchByMeaning", ask: "askAbout" }', () => {
   const c = normalizeConfig({ fields: ['a'], dimension: 4 }, 'X');
-  assert.deepEqual(c.actions, { search: 'searchByMeaning' });
+  assert.deepEqual(c.actions, { search: 'searchByMeaning', ask: 'askAbout' });
 });
 
 test('normalizeConfig: actions === false disables all auto-declaration', () => {
@@ -496,12 +496,22 @@ test('normalizeConfig: actions === false disables all auto-declaration', () => {
 
 test('normalizeConfig: actions.search === false disables just the search action', () => {
   const c = normalizeConfig({ fields: ['a'], dimension: 4, actions: { search: false } }, 'X');
-  assert.deepEqual(c.actions, { search: false });
+  assert.deepEqual(c.actions, { search: false, ask: 'askAbout' });
+});
+
+test('normalizeConfig: actions.ask === false disables just the ask action', () => {
+  const c = normalizeConfig({ fields: ['a'], dimension: 4, actions: { ask: false } }, 'X');
+  assert.deepEqual(c.actions, { search: 'searchByMeaning', ask: false });
 });
 
 test('normalizeConfig: actions.search accepts a valid identifier', () => {
   const c = normalizeConfig({ fields: ['a'], dimension: 4, actions: { search: 'findSuppliers' } }, 'X');
-  assert.deepEqual(c.actions, { search: 'findSuppliers' });
+  assert.deepEqual(c.actions, { search: 'findSuppliers', ask: 'askAbout' });
+});
+
+test('normalizeConfig: actions.ask accepts a valid identifier', () => {
+  const c = normalizeConfig({ fields: ['a'], dimension: 4, actions: { ask: 'answerAbout' } }, 'X');
+  assert.deepEqual(c.actions, { search: 'searchByMeaning', ask: 'answerAbout' });
 });
 
 test('normalizeConfig: actions.search rejects invalid identifier', () => {
@@ -511,11 +521,19 @@ test('normalizeConfig: actions.search rejects invalid identifier', () => {
   );
 });
 
-test('declareActions: adds a bound-to-collection action to the entity CSN', () => {
+test('normalizeConfig: actions.ask rejects invalid identifier', () => {
+  assert.throws(
+    () => normalizeConfig({ fields: ['a'], dimension: 4, actions: { ask: 'no spaces' } }, 'X'),
+    /valid identifier/,
+  );
+});
+
+test('declareActions: adds searchByMeaning bound-to-collection action to the entity CSN', () => {
   const def = makeSuppliersEntity();
+  const definitions = { 'AppService.Suppliers': def };
   const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
   const log = { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} };
-  declareActions('AppService.Suppliers', def, config, log);
+  declareActions(definitions, 'AppService.Suppliers', def, config, log);
   assert.ok(def.actions, 'entity.actions should be created');
   const action = def.actions.searchByMeaning;
   assert.ok(action, 'searchByMeaning action should be declared');
@@ -527,36 +545,114 @@ test('declareActions: adds a bound-to-collection action to the entity CSN', () =
   assert.deepEqual(action.returns, { items: { type: 'AppService.Suppliers' } });
 });
 
-test('declareActions: is idempotent (does not overwrite an existing action)', () => {
+test('declareActions: adds askAbout action AND synthesizes result type in model.definitions', () => {
   const def = makeSuppliersEntity();
-  def.actions = { searchByMeaning: { kind: 'action', /* pretend user-defined */ __marker: 'original' } };
+  const definitions = { 'AppService.Suppliers': def };
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  declareActions(definitions, 'AppService.Suppliers', def, config, { warn: () => {} });
+
+  // Result type synthesized at the model level
+  const resultType = definitions['AppService.SuppliersAskAboutResult'];
+  assert.ok(resultType, 'result type should be added to model.definitions');
+  assert.equal(resultType.kind, 'type');
+  assert.deepEqual(resultType.elements, {
+    answer: { type: 'cds.String' },
+    sources: { items: { type: 'AppService.Suppliers' } },
+  });
+
+  // Action references the synthesized type
+  const askAction = def.actions.askAbout;
+  assert.ok(askAction, 'askAbout action should be declared');
+  assert.deepEqual(askAction.params, {
+    query: { type: 'cds.String' },
+    topK: { type: 'cds.Integer' },
+    systemInstructions: { type: 'cds.String' },
+  });
+  assert.deepEqual(askAction.returns, { type: 'AppService.SuppliersAskAboutResult' });
+});
+
+test('declareActions: is idempotent — searchByMeaning already declared', () => {
+  const def = makeSuppliersEntity();
+  def.actions = { searchByMeaning: { kind: 'action', __marker: 'original' } };
+  const definitions = { 'AppService.Suppliers': def };
   const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
   const warns = [];
   const log = { warn: (m) => warns.push(m), info: () => {}, error: () => {}, debug: () => {} };
-  declareActions('AppService.Suppliers', def, config, log);
+  declareActions(definitions, 'AppService.Suppliers', def, config, log);
   assert.equal(def.actions.searchByMeaning.__marker, 'original');
-  assert.ok(warns.some(m => /already declared/.test(m)));
+  assert.ok(warns.some(m => /searchByMeaning.*already declared/.test(m)));
+  // askAbout should still be added
+  assert.ok(def.actions.askAbout);
 });
 
-test('declareActions: uses a custom action name from @rag.actions.search', () => {
-  const def = makeSuppliersEntity({ actions: { search: 'findSuppliers' } });
+test('declareActions: is idempotent — askAbout already declared', () => {
+  const def = makeSuppliersEntity();
+  def.actions = { askAbout: { kind: 'action', __marker: 'original' } };
+  const definitions = { 'AppService.Suppliers': def };
   const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
-  declareActions('AppService.Suppliers', def, config, { warn: () => {} });
+  const warns = [];
+  const log = { warn: (m) => warns.push(m), info: () => {}, error: () => {}, debug: () => {} };
+  declareActions(definitions, 'AppService.Suppliers', def, config, log);
+  assert.equal(def.actions.askAbout.__marker, 'original');
+  assert.ok(warns.some(m => /askAbout.*already declared/.test(m)));
+});
+
+test('declareActions: does not double-synthesize the result type on re-run', () => {
+  const def = makeSuppliersEntity();
+  const definitions = { 'AppService.Suppliers': def };
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  declareActions(definitions, 'AppService.Suppliers', def, config, { warn: () => {} });
+  const firstType = definitions['AppService.SuppliersAskAboutResult'];
+  // Second call — action already exists so it warns, but the pre-existing
+  // result type must not be replaced.
+  declareActions(definitions, 'AppService.Suppliers', def, config, { warn: () => {} });
+  assert.equal(definitions['AppService.SuppliersAskAboutResult'], firstType);
+});
+
+test('declareActions: uses custom action names from @rag.actions', () => {
+  const def = makeSuppliersEntity({ actions: { search: 'findSuppliers', ask: 'answerAbout' } });
+  const definitions = { 'AppService.Suppliers': def };
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  declareActions(definitions, 'AppService.Suppliers', def, config, { warn: () => {} });
   assert.ok(def.actions.findSuppliers);
+  assert.ok(def.actions.answerAbout);
   assert.equal(def.actions.searchByMeaning, undefined);
+  assert.equal(def.actions.askAbout, undefined);
 });
 
 test('declareActions: skipped entirely when @rag.actions === false', () => {
   const def = makeSuppliersEntity({ actions: false });
+  const definitions = { 'AppService.Suppliers': def };
   const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
-  declareActions('AppService.Suppliers', def, config, { warn: () => {} });
+  declareActions(definitions, 'AppService.Suppliers', def, config, { warn: () => {} });
   assert.equal(def.actions, undefined);
+  assert.equal(definitions['AppService.SuppliersAskAboutResult'], undefined);
 });
 
-test('declareActions: skipped when @rag.actions.search === false', () => {
+test('declareActions: skipped when @rag.actions.search === false (ask still added)', () => {
   const def = makeSuppliersEntity({ actions: { search: false } });
+  const definitions = { 'AppService.Suppliers': def };
   const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
-  declareActions('AppService.Suppliers', def, config, { warn: () => {} });
+  declareActions(definitions, 'AppService.Suppliers', def, config, { warn: () => {} });
+  assert.equal(def.actions.searchByMeaning, undefined);
+  assert.ok(def.actions.askAbout);
+});
+
+test('declareActions: skipped when @rag.actions.ask === false (search still added)', () => {
+  const def = makeSuppliersEntity({ actions: { ask: false } });
+  const definitions = { 'AppService.Suppliers': def };
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  declareActions(definitions, 'AppService.Suppliers', def, config, { warn: () => {} });
+  assert.ok(def.actions.searchByMeaning);
+  assert.equal(def.actions.askAbout, undefined);
+  assert.equal(definitions['AppService.SuppliersAskAboutResult'], undefined);
+});
+
+test('declareActions: does nothing when BOTH search and ask are false', () => {
+  const def = makeSuppliersEntity({ actions: { search: false, ask: false } });
+  const definitions = { 'AppService.Suppliers': def };
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  declareActions(definitions, 'AppService.Suppliers', def, config, { warn: () => {} });
   assert.equal(def.actions, undefined);
 });
 
@@ -692,4 +788,153 @@ test('OData action handler: custom action name from @rag.actions.search', async 
   });
   assert.equal(result.length, 1);
   assert.equal(result[0].ID, 'sup-1');
+});
+
+// ---- OData askAbout action handler (v0.7.0) ---------------------------
+
+function makeChatterEmbedder(answer = 'Refunds are 30 days [sup-1].') {
+  const calls = [];
+  return {
+    calls,
+    async embed({ input }) {
+      const inputs = Array.isArray(input) ? input : [input];
+      return { embeddings: inputs.map(fakeEmbed), model: 'fake' };
+    },
+    async chat(req) { calls.push(req); return answer; },
+  };
+}
+
+test('activate: registers askAbout handler alongside searchByMeaning on served', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: makeChatterEmbedder(), AppService: svc },
+  });
+  activate(cds);
+  await cds.emit('served');
+  const events = svc._on.map(h => h.event).sort();
+  assert.deepEqual(events, ['askAbout', 'searchByMeaning']);
+});
+
+test('askAbout handler: returns { answer, sources } with sources in hit-rank order', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const chatter = makeChatterEmbedder('You have 30 days [sup-1].');
+  const tables = {
+    'AppService.Suppliers': [
+      { ID: 'sup-1', name: 'Refund policy', description: 'Refunds within 30 days.' },
+      { ID: 'sup-2', name: 'Shipping', description: 'Free over 50 EUR.' },
+    ],
+  };
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: chatter, AppService: svc },
+    tables,
+  });
+  const plugin = activate(cds);
+  await cds.emit('served');
+  for (const row of tables['AppService.Suppliers']) {
+    await svc._dispatchAfter('CREATE', 'AppService.Suppliers', row);
+  }
+
+  // Match hit-rank order the plugin will actually produce with the same fake
+  // embedder so we can assert the exact sources array.
+  const expectedHits = await plugin.searchByMeaning({
+    entity: 'AppService.Suppliers', query: 'refund window', topK: 5,
+  });
+  const expectedOrderIds = expectedHits.map(h => h.id);
+
+  const result = await svc._dispatchAction('askAbout', 'AppService.Suppliers', {
+    data: { query: 'refund window' },
+  });
+  assert.equal(result.answer, 'You have 30 days [sup-1].');
+  assert.deepEqual(result.sources.map(r => r.ID), expectedOrderIds);
+});
+
+test('askAbout handler: empty query rejects with 400', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: makeChatterEmbedder(), AppService: svc },
+  });
+  activate(cds);
+  await cds.emit('served');
+  let rejected;
+  await svc._dispatchAction('askAbout', 'AppService.Suppliers', {
+    data: { query: '' },
+    reject(code, msg) { rejected = { code, msg }; },
+  });
+  assert.deepEqual(rejected, { code: 400, msg: 'query is required' });
+});
+
+test('askAbout handler: empty hits returns { answer, sources: [] }', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const chatter = makeChatterEmbedder('I do not know.');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: chatter, AppService: svc },
+    tables: { 'AppService.Suppliers': [] },
+  });
+  activate(cds);
+  await cds.emit('served');
+  const result = await svc._dispatchAction('askAbout', 'AppService.Suppliers', {
+    data: { query: 'anything' },
+  });
+  assert.equal(result.answer, 'I do not know.');
+  assert.deepEqual(result.sources, []);
+});
+
+test('askAbout handler: passes systemInstructions through to the RAG call', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const chatter = makeChatterEmbedder('OK.');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: chatter, AppService: svc },
+    tables: { 'AppService.Suppliers': [{ ID: 'sup-1', name: 'X', description: 'y' }] },
+  });
+  activate(cds);
+  await cds.emit('served');
+  await svc._dispatchAfter('CREATE', 'AppService.Suppliers', { ID: 'sup-1', name: 'X', description: 'y' });
+  await svc._dispatchAction('askAbout', 'AppService.Suppliers', {
+    data: { query: 'q', systemInstructions: 'Answer in French only.' },
+  });
+  assert.equal(chatter.calls.length, 1);
+  assert.equal(chatter.calls[0].system, 'Answer in French only.');
+});
+
+test('askAbout handler: not registered when @rag.actions.ask === false', async () => {
+  const def = makeSuppliersEntity({ actions: { ask: false } });
+  const svc = makeFakeService('AppService');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: makeChatterEmbedder(), AppService: svc },
+  });
+  activate(cds);
+  await cds.emit('served');
+  const askHandlers = svc._on.filter(h => h.event === 'askAbout');
+  assert.equal(askHandlers.length, 0);
+  // search handler still there
+  assert.ok(svc._on.some(h => h.event === 'searchByMeaning'));
+});
+
+test('askAbout handler: custom action name from @rag.actions.ask', async () => {
+  const def = makeSuppliersEntity({ actions: { ask: 'answerAbout' } });
+  const svc = makeFakeService('AppService');
+  const chatter = makeChatterEmbedder('Answer.');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: chatter, AppService: svc },
+    tables: { 'AppService.Suppliers': [{ ID: 'sup-1', name: 'X', description: 'y' }] },
+  });
+  activate(cds);
+  await cds.emit('served');
+  await svc._dispatchAfter('CREATE', 'AppService.Suppliers', { ID: 'sup-1', name: 'X', description: 'y' });
+  const result = await svc._dispatchAction('answerAbout', 'AppService.Suppliers', {
+    data: { query: 'q' },
+  });
+  assert.equal(result.answer, 'Answer.');
 });
