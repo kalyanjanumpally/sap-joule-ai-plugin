@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { activate, normalizeConfig, buildItem } = require('../lib/cdsPlugin');
+const { activate, normalizeConfig, buildItem, declareActions } = require('../lib/cdsPlugin');
 const SqliteVectorStore = require('../lib/backends/sqlite');
 const RAG = require('../lib/rag');
 
@@ -13,6 +13,7 @@ const RAG = require('../lib/rag');
 function makeFakeService(name) {
   const before = [];
   const after = [];
+  const on = [];
   return {
     name,
     entities: {},
@@ -23,6 +24,9 @@ function makeFakeService(name) {
     after(events, entity, handler) {
       const ev = Array.isArray(events) ? events : [events];
       for (const e of ev) after.push({ event: e, entity, handler });
+    },
+    on(event, entity, handler) {
+      on.push({ event, entity, handler });
     },
     // Test helper: dispatch as if the CAP runtime fired the event
     async _dispatchAfter(event, entity, data) {
@@ -39,8 +43,48 @@ function makeFakeService(name) {
         }
       }
     },
+    async _dispatchAction(event, entity, req) {
+      for (const h of on) {
+        if (h.event === event && (h.entity === entity || h.entity === undefined)) {
+          return h.handler(req);
+        }
+      }
+      throw new Error(`no handler for action ${event} on ${entity}`);
+    },
     _before: before,
     _after: after,
+    _on: on,
+  };
+}
+
+// Chainable SELECT builder that captures { from, where } into a plain spec
+// for the fake cds.run() to execute against a synthetic table.
+function makeFakeSelect() {
+  return {
+    from(entity) {
+      const spec = { from: entity };
+      return {
+        _spec: spec,
+        where(clause) { spec.where = clause; return this; },
+      };
+    },
+  };
+}
+
+function makeFakeRun(tables) {
+  return async function run(query) {
+    const spec = query._spec;
+    if (!spec) throw new Error('fake cds.run: query has no _spec');
+    const rows = tables[spec.from] ?? [];
+    if (!spec.where) return rows;
+    return rows.filter(r => {
+      for (const [k, v] of Object.entries(spec.where)) {
+        if (v && typeof v === 'object' && Array.isArray(v.in)) {
+          if (!v.in.includes(r[k])) return false;
+        } else if (r[k] !== v) return false;
+      }
+      return true;
+    });
   };
 }
 
@@ -57,7 +101,7 @@ const fakeEmbedder = {
   },
 };
 
-function makeFakeCds({ definitions = {}, services = { llm: fakeEmbedder } } = {}) {
+function makeFakeCds({ definitions = {}, services = { llm: fakeEmbedder }, tables = {} } = {}) {
   const listeners = { served: [], loaded: [] };
   return {
     model: { definitions },
@@ -78,7 +122,10 @@ function makeFakeCds({ definitions = {}, services = { llm: fakeEmbedder } } = {}
     async emit(event, ...args) {
       for (const fn of listeners[event] ?? []) await fn(...args);
     },
+    SELECT: makeFakeSelect(),
+    run: makeFakeRun(tables),
     _listeners: listeners,
+    _tables: tables,
   };
 }
 
@@ -433,4 +480,216 @@ test('askAbout: passes-through model/maxTokens to the chatter', async () => {
   await plugin.askAbout({ entity: 'AppService.Suppliers', query: 'q', model: 'gpt-4', maxTokens: 128 });
   assert.equal(chatterCalls[0].model, 'gpt-4');
   assert.equal(chatterCalls[0].maxTokens, 128);
+});
+
+// ---- OData action auto-declaration (v0.6.0) ----------------------------
+
+test('normalizeConfig: default actions.search = "searchByMeaning"', () => {
+  const c = normalizeConfig({ fields: ['a'], dimension: 4 }, 'X');
+  assert.deepEqual(c.actions, { search: 'searchByMeaning' });
+});
+
+test('normalizeConfig: actions === false disables all auto-declaration', () => {
+  const c = normalizeConfig({ fields: ['a'], dimension: 4, actions: false }, 'X');
+  assert.equal(c.actions, false);
+});
+
+test('normalizeConfig: actions.search === false disables just the search action', () => {
+  const c = normalizeConfig({ fields: ['a'], dimension: 4, actions: { search: false } }, 'X');
+  assert.deepEqual(c.actions, { search: false });
+});
+
+test('normalizeConfig: actions.search accepts a valid identifier', () => {
+  const c = normalizeConfig({ fields: ['a'], dimension: 4, actions: { search: 'findSuppliers' } }, 'X');
+  assert.deepEqual(c.actions, { search: 'findSuppliers' });
+});
+
+test('normalizeConfig: actions.search rejects invalid identifier', () => {
+  assert.throws(
+    () => normalizeConfig({ fields: ['a'], dimension: 4, actions: { search: 'not valid!' } }, 'X'),
+    /valid identifier/,
+  );
+});
+
+test('declareActions: adds a bound-to-collection action to the entity CSN', () => {
+  const def = makeSuppliersEntity();
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  const log = { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} };
+  declareActions('AppService.Suppliers', def, config, log);
+  assert.ok(def.actions, 'entity.actions should be created');
+  const action = def.actions.searchByMeaning;
+  assert.ok(action, 'searchByMeaning action should be declared');
+  assert.equal(action.kind, 'action');
+  assert.deepEqual(action.params, {
+    query: { type: 'cds.String' },
+    topK: { type: 'cds.Integer' },
+  });
+  assert.deepEqual(action.returns, { items: { type: 'AppService.Suppliers' } });
+});
+
+test('declareActions: is idempotent (does not overwrite an existing action)', () => {
+  const def = makeSuppliersEntity();
+  def.actions = { searchByMeaning: { kind: 'action', /* pretend user-defined */ __marker: 'original' } };
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  const warns = [];
+  const log = { warn: (m) => warns.push(m), info: () => {}, error: () => {}, debug: () => {} };
+  declareActions('AppService.Suppliers', def, config, log);
+  assert.equal(def.actions.searchByMeaning.__marker, 'original');
+  assert.ok(warns.some(m => /already declared/.test(m)));
+});
+
+test('declareActions: uses a custom action name from @rag.actions.search', () => {
+  const def = makeSuppliersEntity({ actions: { search: 'findSuppliers' } });
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  declareActions('AppService.Suppliers', def, config, { warn: () => {} });
+  assert.ok(def.actions.findSuppliers);
+  assert.equal(def.actions.searchByMeaning, undefined);
+});
+
+test('declareActions: skipped entirely when @rag.actions === false', () => {
+  const def = makeSuppliersEntity({ actions: false });
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  declareActions('AppService.Suppliers', def, config, { warn: () => {} });
+  assert.equal(def.actions, undefined);
+});
+
+test('declareActions: skipped when @rag.actions.search === false', () => {
+  const def = makeSuppliersEntity({ actions: { search: false } });
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  declareActions('AppService.Suppliers', def, config, { warn: () => {} });
+  assert.equal(def.actions, undefined);
+});
+
+test('activate: mutates CSN when model is already loaded (immediate pass)', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: fakeEmbedder, AppService: svc },
+  });
+  activate(cds); // model is already in cds.model.definitions — mutate happens synchronously
+  assert.ok(def.actions?.searchByMeaning, 'CSN action should be declared before served');
+});
+
+test('activate: mutates CSN when model loads later (via cds.on(loaded))', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const cds = makeFakeCds({
+    definitions: {}, // start empty
+    services: { llm: fakeEmbedder, AppService: svc },
+  });
+  activate(cds);
+  assert.equal(def.actions, undefined);
+  cds.model.definitions['AppService.Suppliers'] = def;
+  await cds.emit('loaded');
+  assert.ok(def.actions?.searchByMeaning, 'CSN action should be declared after loaded fires');
+});
+
+test('activate: registers OData action handler on served', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: fakeEmbedder, AppService: svc },
+  });
+  activate(cds);
+  await cds.emit('served');
+  const actionHandlers = svc._on.filter(h => h.event === 'searchByMeaning' && h.entity === 'AppService.Suppliers');
+  assert.equal(actionHandlers.length, 1);
+});
+
+test('OData action handler: returns entity rows in hit-rank order', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const tables = {
+    'AppService.Suppliers': [
+      { ID: 'sup-3', name: 'C', description: 'gamma' },
+      { ID: 'sup-1', name: 'A', description: 'alpha' },
+      { ID: 'sup-2', name: 'B', description: 'beta' },
+    ],
+  };
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: fakeEmbedder, AppService: svc },
+    tables,
+  });
+  const plugin = activate(cds);
+  await cds.emit('served');
+  // Prime the vector store — matches what the CRUD handler would have done
+  for (const row of tables['AppService.Suppliers']) {
+    await svc._dispatchAfter('CREATE', 'AppService.Suppliers', row);
+  }
+  // Get the deterministic hit order (fake embedder), then check the action
+  // returns the entity rows in that same order.
+  const hits = await plugin.searchByMeaning({ entity: 'AppService.Suppliers', query: 'alpha' });
+  const expectedOrderIds = hits.map(h => h.id);
+  const result = await svc._dispatchAction('searchByMeaning', 'AppService.Suppliers', {
+    data: { query: 'alpha', topK: 3 },
+  });
+  assert.deepEqual(result.map(r => r.ID), expectedOrderIds);
+});
+
+test('OData action handler: empty query rejects with 400', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: fakeEmbedder, AppService: svc },
+  });
+  activate(cds);
+  await cds.emit('served');
+  let rejected;
+  const req = { data: { query: '' }, reject(code, msg) { rejected = { code, msg }; } };
+  await svc._dispatchAction('searchByMeaning', 'AppService.Suppliers', req);
+  assert.deepEqual(rejected, { code: 400, msg: 'query is required' });
+});
+
+test('OData action handler: empty hits returns []', async () => {
+  const def = makeSuppliersEntity();
+  const svc = makeFakeService('AppService');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: fakeEmbedder, AppService: svc },
+    tables: { 'AppService.Suppliers': [] },
+  });
+  activate(cds);
+  await cds.emit('served');
+  const result = await svc._dispatchAction('searchByMeaning', 'AppService.Suppliers', {
+    data: { query: 'anything' },
+  });
+  assert.deepEqual(result, []);
+});
+
+test('OData action handler: not registered when @rag.actions === false', async () => {
+  const def = makeSuppliersEntity({ actions: false });
+  const svc = makeFakeService('AppService');
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: fakeEmbedder, AppService: svc },
+  });
+  activate(cds);
+  await cds.emit('served');
+  const actionHandlers = svc._on.filter(h => h.event === 'searchByMeaning');
+  assert.equal(actionHandlers.length, 0);
+});
+
+test('OData action handler: custom action name from @rag.actions.search', async () => {
+  const def = makeSuppliersEntity({ actions: { search: 'findSuppliers' } });
+  const svc = makeFakeService('AppService');
+  const tables = {
+    'AppService.Suppliers': [{ ID: 'sup-1', name: 'X', description: 'y' }],
+  };
+  const cds = makeFakeCds({
+    definitions: { 'AppService.Suppliers': def },
+    services: { llm: fakeEmbedder, AppService: svc },
+    tables,
+  });
+  activate(cds);
+  await cds.emit('served');
+  await svc._dispatchAfter('CREATE', 'AppService.Suppliers', tables['AppService.Suppliers'][0]);
+  const result = await svc._dispatchAction('findSuppliers', 'AppService.Suppliers', {
+    data: { query: 'anything' },
+  });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].ID, 'sup-1');
 });

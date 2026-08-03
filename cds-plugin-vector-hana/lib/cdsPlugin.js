@@ -38,6 +38,32 @@ function activate(cds, options = {}) {
   };
   const RAG = options.RAG ?? require('./rag');
 
+  // Phase 1 (model mutation): declare bound OData actions on annotated
+  // entities BEFORE services are built. This has to happen at `loaded` (or
+  // immediately, if the model is already loaded) so the OData adapter sees
+  // the new actions when it constructs each service's routing table.
+  //
+  // Idempotent: if the entity already has an `actions[name]`, we skip.
+  const mutateCsn = () => {
+    if (!cds.model || !cds.model.definitions) return;
+    for (const [name, def] of Object.entries(cds.model.definitions)) {
+      if (!def || def.kind !== 'entity') continue;
+      const rag = def['@rag'];
+      if (!rag || rag.enabled === false) continue;
+      let config;
+      try {
+        config = normalizeConfig(rag, name);
+      } catch { continue; } // errors are reported during phase 2
+      try {
+        declareActions(name, def, config, log);
+      } catch (err) {
+        log.error(`@rag: ${name}: action declaration failed: ${err.message}`);
+      }
+    }
+  };
+  if (cds.model?.definitions) mutateCsn();
+  cds.on('loaded', mutateCsn);
+
   cds.on('served', async () => {
     if (!cds.model || !cds.model.definitions) {
       log.warn('@rag: cds.model.definitions not available at served — skipping');
@@ -88,10 +114,11 @@ function activate(cds, options = {}) {
       log.info(`@rag: ${name} → ${config.store}/${config.table} (dim=${config.dimension}, fields=[${config.fields.join(',')}])`);
 
       wireHandlers({ cds, entityName: name, def, store, config, log });
+      wireActionHandlers({ cds, entityName: name, def, store, config, log, plugin: publicApi });
     }
   });
 
-  return {
+  const publicApi = {
     getStore(entityName) { return stores.get(entityName); },
 
     async searchByMeaning({ entity, query, topK, filter } = {}) {
@@ -123,6 +150,7 @@ function activate(cds, options = {}) {
     _stores: stores,
     _configs: configs,
   };
+  return publicApi;
 }
 
 function normalizeConfig(rag, entityName) {
@@ -148,7 +176,26 @@ function normalizeConfig(rag, entityName) {
     topK: rag.topK ?? 5,
     idField: rag.idField ?? 'ID',
     storeOptions: rag.storeOptions,
+    actions: normalizeActionsConfig(rag.actions),
   };
+}
+
+// `@rag.actions` shapes:
+//   undefined            → { search: 'searchByMeaning' }  (default: on, default name)
+//   false                → false                          (all auto-actions off)
+//   { search: false }    → { search: false }              (skip searchByMeaning)
+//   { search: 'foo' }    → { search: 'foo' }              (custom action name)
+function normalizeActionsConfig(input) {
+  if (input === false) return false;
+  if (input == null) return { search: 'searchByMeaning' };
+  if (typeof input !== 'object') {
+    throw new Error(`@rag.actions must be false or an object, got ${typeof input}`);
+  }
+  const search = input.search === undefined ? 'searchByMeaning' : input.search;
+  if (search !== false && (typeof search !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(search))) {
+    throw new Error(`@rag.actions.search must be a valid identifier or false, got ${JSON.stringify(search)}`);
+  }
+  return { search };
 }
 
 function resolveService(cds, alias, role) {
@@ -177,6 +224,78 @@ function buildItem(row, config) {
   const text = parts.join('\n\n');
   const metadata = { entity: config.entityName ?? undefined };
   return { id: String(id), text, metadata: text ? metadata : null };
+}
+
+// Mutate the entity's CSN to declare a collection-bound OData action per
+// @rag config. Runs at `cds.on('loaded')` — before service construction —
+// so the OData adapter sees the action when it builds routes.
+function declareActions(entityName, def, config, log) {
+  if (config.actions === false) return;
+  const searchName = config.actions?.search;
+  if (searchName === false) return;
+
+  def.actions = def.actions ?? {};
+  if (def.actions[searchName]) {
+    log.warn(`@rag: ${entityName}: action '${searchName}' already declared — skipping OData declaration`);
+    return;
+  }
+  def.actions[searchName] = {
+    kind: 'action',
+    params: {
+      query: { type: 'cds.String' },
+      topK: { type: 'cds.Integer' },
+    },
+    returns: { items: { type: entityName } },
+    '@Common.Label': `Search ${entityName.split('.').pop()} by meaning`,
+  };
+}
+
+// Register the OData action handler on the entity's service. Called at
+// `cds.on('served')` after the store is up.
+function wireActionHandlers({ cds, entityName, def, store, config, log, plugin }) {
+  if (config.actions === false) return;
+  const searchName = config.actions?.search;
+  if (searchName === false) return;
+
+  const svcName = def._service?.name ?? null;
+  const service = svcName ? cds.services?.[svcName] : findService(cds, entityName);
+  if (!service || typeof service.on !== 'function') {
+    log.warn(`@rag: ${entityName}: no service.on() available (skipping ${searchName} handler)`);
+    return;
+  }
+
+  const entityRef = def.name ?? entityName;
+  service.on(searchName, entityRef, async (req) => {
+    const query = req?.data?.query;
+    if (!query || typeof query !== 'string') {
+      if (typeof req.reject === 'function') return req.reject(400, 'query is required');
+      throw new Error('query is required');
+    }
+    const topK = req?.data?.topK ?? config.topK;
+    let hits;
+    try {
+      hits = await plugin.searchByMeaning({ entity: entityName, query, topK });
+    } catch (err) {
+      log.error(`@rag: ${entityName}: ${searchName} handler failed: ${err.message}`);
+      if (typeof req.reject === 'function') return req.reject(500, `search failed: ${err.message}`);
+      throw err;
+    }
+    if (!hits.length) return [];
+    const ids = hits.map(h => h.id);
+    const rows = await projectToEntity(cds, entityRef, config.idField, ids);
+    // Preserve hit-rank order (SQL WHERE ID IN (...) doesn't guarantee order).
+    const byId = new Map(rows.map(r => [String(r[config.idField]), r]));
+    return ids.map(id => byId.get(String(id))).filter(Boolean);
+  });
+}
+
+async function projectToEntity(cds, entityRef, idField, ids) {
+  if (typeof cds.run !== 'function' || !cds.SELECT) {
+    // Older CAP / test doubles that don't expose SELECT — fall back to a
+    // read on the service if available.
+    return [];
+  }
+  return cds.run(cds.SELECT.from(entityRef).where({ [idField]: { in: ids } }));
 }
 
 function wireHandlers({ cds, entityName, def, store, config, log }) {
@@ -227,4 +346,4 @@ function silentLog() {
   return { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 }
 
-module.exports = { activate, normalizeConfig, buildItem };
+module.exports = { activate, normalizeConfig, buildItem, declareActions };

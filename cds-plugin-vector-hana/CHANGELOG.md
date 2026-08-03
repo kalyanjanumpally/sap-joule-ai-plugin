@@ -4,6 +4,49 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-08-03
+
+### Added
+
+- **`@rag` now auto-declares a bound OData action on every annotated entity — zero handler code, callable from Joule / any OData client.** The plugin now mutates the CSN at `cds.on('loaded')` (or immediately if the model is already loaded), adding a collection-bound `searchByMeaning(query: String, topK: Integer)` action that returns `array of <Entity>`. The action handler is registered on `served`: it runs the vector search, projects the hit IDs back to entity rows via `SELECT.from(<Entity>).where({ ID: { in: [...] } })`, and returns them in hit-rank order (SQL `WHERE ID IN` doesn't preserve order, so the handler re-sorts).
+
+  ```cds
+  entity Suppliers {
+    key ID     : UUID;
+    name       : String;
+    description: LargeString;
+  } @rag: {
+    fields:    ['name', 'description'],
+    dimension: 768,
+  };
+  ```
+
+  ```http
+  POST /odata/v4/app/Suppliers/AppService.searchByMeaning
+  Content-Type: application/json
+
+  { "query": "steel coils from Europe", "topK": 5 }
+  ```
+
+  Returns `value: [ <Suppliers row>, <Suppliers row>, ... ]` in relevance order — exactly as if the user had written the action + handler by hand.
+
+- **Configurable via `@rag.actions`**:
+  - `@rag.actions: false` — disable ALL auto-declared actions on this entity.
+  - `@rag.actions.search: false` — disable just `searchByMeaning` (keep the JS API + auto-index alive).
+  - `@rag.actions.search: 'findSuppliers'` — custom action name. Validated as a JS identifier at boot.
+
+- **Idempotent CSN mutation.** If the entity already declares an `actions[<name>]` (user-written, or another plugin), the auto-declaration is skipped with a warning — the plugin never silently overwrites developer code. The mutation runs BOTH immediately (in case the model is already loaded) AND on `cds.on('loaded')` (in case it wasn't); the idempotency guard keeps this safe.
+
+- **New helper exported from `lib/cdsPlugin.js`**: `declareActions(entityName, def, config, log)` — the low-level CSN mutation used internally. Exposed for tests and for embedded scenarios where a plugin author wants to declare the action without running the full `activate()` lifecycle.
+
+- 18 new tests (89 total): `normalizeActionsConfig` (default / false / per-action false / custom name / invalid name), `declareActions` (mutation shape, idempotency, custom name, both opt-out shapes), `activate` (mutation immediate vs deferred), handler registration on served, handler behavior (rank order, empty-query 400, empty hits [], opt-out, custom action name).
+
+### Notes
+
+- Additive — existing `@rag`-annotated entities gain the new action automatically without config changes. If your app already declared its own `searchByMeaning` action on an entity, the plugin sees it and steps aside (logs a warning) — nothing breaks.
+- The action returns `array of <Entity>`, not `SearchHit`. Score / metadata are not exposed via OData in this release — callers who need them use the direct `cds.vectorHana.searchByMeaning()` JS API. A future release may synthesize `<Entity>SearchResult` types that include score.
+- `askAbout` as an OData action is NOT in 0.6.0 (structured return types across N entities add CSN complexity worth scoping separately). Keep using the JS API for now: `cds.vectorHana.askAbout({ entity, query })`.
+
 ## [0.5.0] — 2026-08-03
 
 ### Added

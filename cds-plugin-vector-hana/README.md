@@ -114,6 +114,33 @@ CREATE HNSW VECTOR INDEX "SUPPLIER_CONTRACTS_embedding_HNSW_IDX"
 
 Requires HANA Cloud QRC 2/2024 or later (when HNSW GA'd). Search queries are unchanged — HANA transparently uses the index when `COSINE_SIMILARITY` is in the `ORDER BY`.
 
+### `@rag` action auto-declared on OData (new in v0.6.0)
+
+Every `@rag`-annotated entity gets a collection-bound OData action out of the box — no handler code required:
+
+```http
+POST /odata/v4/app/Suppliers/AppService.searchByMeaning
+Content-Type: application/json
+
+{ "query": "steel coils shipped from Europe", "topK": 5 }
+```
+
+Returns `value: [ <Suppliers row>, ... ]` in relevance order. The plugin runs the vector search, projects hit IDs back to the entity via `SELECT ... WHERE ID IN (...)`, and re-sorts to match the hit ranking (SQL doesn't preserve it).
+
+Opt-outs and overrides via `@rag.actions`:
+
+```cds
+} @rag: {
+  fields:    ['name', 'description'],
+  dimension: 768,
+  actions: false                          // disable all auto-declared actions
+  // or:  actions: { search: false }      // disable just searchByMeaning
+  // or:  actions: { search: 'findSuppliers' }  // custom action name
+};
+```
+
+If the entity already declares its own `actions.searchByMeaning` (user-written, or another plugin's), the auto-declaration is skipped with a warning — the plugin never overwrites developer code.
+
 ### `@rag` annotation — auto-indexed entities (new in v0.5.0)
 
 Skip the boilerplate. Annotate a CDS entity with `@rag` and the plugin builds a vector table, keeps it in sync on every CRUD, and hands you two ergonomic operations on `cds.vectorHana`:
