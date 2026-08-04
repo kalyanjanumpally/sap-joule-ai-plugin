@@ -4,6 +4,62 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] — 2026-08-04
+
+### Added
+
+- **`usageMetering` middleware — per-request token + dollar accounting for every provider.** Attach via `llm.use(meter)` and the plugin automatically records tokens, cost, and provenance for every `chat` / `stream` / `embed` request. Zero-config once attached; the built-in pricing table covers the major shipped models (Anthropic, OpenAI, Gemini, Groq, Bedrock, Cohere).
+
+  ```js
+  const { usageMetering } = require('@saptarishi/cds-plugin-llm');
+
+  const meter = usageMetering({
+    // sensible defaults ship in lib/pricing.js — only list overrides:
+    pricing: { 'claude-opus-4-7': { input: 12, output: 60 } },  // contract discount
+    currency: 'USD',
+    tenantOf:   (ctx) => ctx.raw?.tenant,
+    providerOf: (ctx) => ctx.raw?.providerAlias,
+    onRecord:   async (r) => await INSERT.into(LlmUsage).entries(r),
+  });
+  llm.use(meter);
+
+  // Later:
+  meter.summary();                // { totalCost, byModel, byTenant, byProvider, ... }
+  meter.byTenant('acme');         // { requests, inputTokens, outputTokens, cost }
+  meter.reset();                  // zero everything
+  ```
+
+- **Default pricing table (`DEFAULT_PRICING`, `lib/pricing.js`).** Ships ballpark USD prices per 1M tokens for ~30 shipped models across Anthropic (direct + Bedrock), OpenAI (chat + embeddings + o-series), Gemini, Groq, Bedrock (Nova, Llama, Mistral, Titan embed, Cohere embed), and Ollama (local, $0). Merge your own overrides via `usageMetering({ pricing: {...} })` — only listed models are overridden; everything else falls through to defaults. Unknown models cost $0 but still appear in `byModel` so consumers can spot missing pricing entries.
+
+- **`asMcpResource()` helper on the middleware.** Returns a ready-to-register MCP resource that exposes the live summary at `config://usage`:
+
+  ```js
+  new MCPServer({
+    resources: [meter.asMcpResource(), ...otherResources],
+    tools: [...],
+  });
+  ```
+
+  Clients can `resources/read` at any time to see totals + per-model + per-tenant breakdown. `/mcp` streaming clients (Claude Desktop, Cursor) can bind this to a live cost dashboard.
+
+- **Configurable `pricingUnit`** for contracts denominated per-1K tokens rather than per-1M (default 1_000_000). Set `pricingUnit: 1000` and quote your pricing table in per-1K rates.
+
+- **Fire-and-forget `onRecord` sink** for external persistence — CAP entity inserts, warehouse pushes, Prometheus counters. Runs after in-memory aggregation completes; the request path is never blocked on it. Errors are silently swallowed to protect the request path — consumers who need durability should await their own writes inside.
+
+- **Embed cost approximation.** Since most providers don't return token counts on the embeddings endpoint, the middleware approximates input tokens from the string length (~4 chars/token). Consumers who need precision should hook `onRecord` and swap in a real tokenizer (`tiktoken`) inside.
+
+- **`ctx.raw` on the middleware context (additive).** Every `chat` / `stream` / `embed` call now exposes the original, untouched request object to middleware via `ctx.raw`. `ctx.request` remains the merged/normalized shape as before. Middleware needing arbitrary fields the caller supplied (`tenant`, `correlationId`, `providerAlias`, ...) reads them from `ctx.raw` rather than the stripped `ctx.request`. Fully backwards-compatible — existing middleware that ignores `ctx.raw` behaves exactly as in 1.20.
+
+- **TS defs**: `UsageMeteringOptions`, `UsageMeteringMiddleware`, `UsageSummary`, `UsageBucket`, `UsageRecord`, `ModelPricing`, `DEFAULT_PRICING`. `MiddlewareContext.raw?: any` added.
+
+- **21 new tests (443 total)**: DEFAULT_PRICING lookup + user overrides + fall-through, unknown-model handling, response-without-usage skip, tenant + provider partitioning, currency label preservation, `pricingUnit=1000` custom-scale contracts, stream done-chunk accounting + chunk pass-through, embed approximation with array inputs, `onRecord` sink (basic delivery + `pricingKnown` flag + error swallowing), `reset()` zeroes + preserves currency + accepts new writes, `summary()` returns immutable deep clone, `asMcpResource()` shape, and a sanity check that every shipped provider's default model has a pricing entry.
+
+### Notes
+
+- Additive — `^1.20` consumers bump to `^1.21` with zero code changes. `usageMetering` is opt-in via `llm.use(...)`; nothing changes for callers that don't attach it.
+- Pricing entries in `DEFAULT_PRICING` are ballpark rates as of 2026-08-04. Provider prices change frequently; always override with your contract rates for any model where accuracy matters. Missing models silently cost $0 — not a fatal error, but visible in `byModel` for spotting.
+- The middleware holds counters in-memory. For multi-process deployments (CF, Kyma, K8s), each replica has its own summary. Consumers who want cross-replica aggregation should use `onRecord` to push into a shared store (CAP entity backed by SQLite/HANA, Redis counter, Prometheus scrape, etc.).
+
 ## [1.20.0] — 2026-08-04
 
 ### Added

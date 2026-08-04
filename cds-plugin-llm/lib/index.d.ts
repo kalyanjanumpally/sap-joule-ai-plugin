@@ -247,7 +247,15 @@ export interface ProviderOptions {
  */
 export interface MiddlewareContext {
   method: 'chat' | 'stream' | 'embed';
+  /** Merged, provider-ready request (defaults applied, unknown fields stripped). */
   request: any;
+  /**
+   * The original, untouched request the caller passed in. Middleware that
+   * needs fields we don't merge into `request` (tenant id, correlation id,
+   * request-scoped provider alias, ...) should read them from here. Present
+   * on every call since 1.21.0.
+   */
+  raw?: any;
   meta: Record<string, any>;
 }
 
@@ -656,6 +664,104 @@ export interface RedisRateLimitOptions {
  * the same Redis. See `rateLimit` for the in-process variant.
  */
 export function redisRateLimit(options: RedisRateLimitOptions): Middleware;
+
+// ---------------------------------------------------------------------------
+// Usage metering middleware (new in v1.21.0)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-model pricing: cost in the configured currency per `pricingUnit`
+ * tokens (default 1,000,000). `input` covers prompt tokens, `output`
+ * covers completion tokens; embedding-only models set `output: 0`.
+ */
+export interface ModelPricing {
+  input: number;
+  output: number;
+}
+
+/** Default pricing table shipped in `lib/pricing.js`. Merge with your own overrides via `usageMetering({ pricing: ... })`. */
+export const DEFAULT_PRICING: Record<string, ModelPricing>;
+
+export interface UsageBucket {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+}
+
+export interface UsageSummary {
+  totalRequests: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCost: number;
+  currency: string;
+  byModel:    Record<string, UsageBucket>;
+  byTenant:   Record<string, UsageBucket>;
+  byProvider: Record<string, UsageBucket>;
+}
+
+export interface UsageRecord {
+  timestamp: string;                     // ISO-8601
+  provider:  string | null;
+  model:     string;
+  tenant:    string | null;
+  method:    'chat' | 'stream' | 'embed';
+  inputTokens:  number;
+  outputTokens: number;
+  inputCost:    number;
+  outputCost:   number;
+  totalCost:    number;
+  currency:     string;
+  pricingKnown: boolean;                 // false when the model isn't in the price table
+}
+
+export interface UsageMeteringOptions {
+  /** Per-model prices — merged over `DEFAULT_PRICING`. Only list overrides. */
+  pricing?: Record<string, ModelPricing>;
+  /** ISO-4217 (or free-form) currency label. Default 'USD'. */
+  currency?: string;
+  /** Extract a tenant/customer id from the request context. */
+  tenantOf?: (ctx: MiddlewareContext) => string | null | undefined;
+  /** Extract a provider label (e.g. cds.services alias) from the request context. */
+  providerOf?: (ctx: MiddlewareContext) => string | null | undefined;
+  /**
+   * Optional async sink for persistence (CAP entity insert, warehouse push,
+   * Prometheus counter, ...). Fired fire-and-forget after in-memory
+   * aggregation; the request path is never blocked on it. Consumers who
+   * need durability should await their own writes inside.
+   */
+  onRecord?: (record: UsageRecord) => void | Promise<void>;
+  /** How many tokens the price table is denominated in. Default 1_000_000. */
+  pricingUnit?: number;
+}
+
+export interface UsageMeteringMiddleware extends Middleware {
+  summary(): UsageSummary;
+  byModel(modelId: string): UsageBucket | null;
+  byTenant(tenantId: string): UsageBucket | null;
+  byProvider(providerId: string): UsageBucket | null;
+  reset(): void;
+  /**
+   * Ready-to-register MCP resource that returns the summary as JSON.
+   * Drop into `new MCPServer({ resources: [meter.asMcpResource(), ...] })`.
+   */
+  asMcpResource(): {
+    uri: 'config://usage';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => UsageSummary;
+  };
+}
+
+/**
+ * Wrap `llm.chat` / `llm.stream` / `llm.embed` with token + cost accounting.
+ * Zero cost when the model's usage numbers aren't reported by the provider,
+ * but the request is still counted. Unknown models cost $0 but appear in
+ * `byModel` so you can spot missing pricing entries.
+ * @since 1.21.0
+ */
+export function usageMetering(options?: UsageMeteringOptions): UsageMeteringMiddleware;
 
 // ---------------------------------------------------------------------------
 // Prompt-template registry (new in v1.8.0)

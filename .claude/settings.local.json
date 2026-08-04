@@ -133,7 +133,13 @@
       "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30829024401/jobs\")",
       "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-llm-v1.19.0\" -m \"cds-plugin-llm 1.19.0\" b7b41a1)",
       "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.19.0)",
-      "Bash(node --check /Users/janumpallykalyan/Documents/joule/cds-plugin-llm/lib/mcp/streamableHttpTransport.js)"
+      "Bash(node --check /Users/janumpallykalyan/Documents/joule/cds-plugin-llm/lib/mcp/streamableHttpTransport.js)",
+      "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30879478063\")",
+      "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30879478063/jobs\")",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-llm-v1.20.0\" -m \"cds-plugin-llm 1.20.0\" 7043c1f)",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.20.0)",
+      "Bash(curl -sS \"https://registry.npmjs.org/@saptarishi/cds-plugin-llm/latest\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('registry _id:', d['_id']\\)\")"
     ]
   }
 }

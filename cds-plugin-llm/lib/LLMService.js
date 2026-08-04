@@ -53,6 +53,10 @@ class LLMService extends cds.Service {
     const ctx = {
       method: 'chat',
       request: this._mergeRequest(req),
+      // Raw, untouched request the caller passed. Middleware that needs
+      // fields we don't merge into `request` (tenant id, correlation id,
+      // etc.) reads them from here.
+      raw: req,
       meta: {},
     };
     return this._runMiddleware(ctx, () => this._chatCore(ctx.request, req));
@@ -65,6 +69,7 @@ class LLMService extends cds.Service {
     const ctx = {
       method: 'embed',
       request: { model: req.model ?? this.modelId, input: req.input, retries: req.retries },
+      raw: req,
       meta: {},
     };
     return this._runMiddleware(ctx, () => this._embedCore(ctx.request));
@@ -77,6 +82,7 @@ class LLMService extends cds.Service {
     const ctx = {
       method: 'stream',
       request: this._mergeRequest(req),
+      raw: req,
       meta: {},
     };
     // Middleware wraps around the async iterable. Middleware may inspect or
