@@ -36,4 +36,7 @@ module.exports = {
   uploadPdfFromUrl: require('./openaiFiles').uploadPdfFromUrl,
   // MCP HTTP transport helpers (new in 1.16.0)
   createJwtVerifier: require('./mcp/jwtVerifier').createJwtVerifier,
+  // MCP transport factories (new in 1.20.0 — Streamable HTTP)
+  createHttpTransport: require('./mcp/httpTransport').createHttpTransport,
+  createStreamableHttpTransport: require('./mcp/streamableHttpTransport').createStreamableHttpTransport,
 };

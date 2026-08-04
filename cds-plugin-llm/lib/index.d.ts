@@ -435,6 +435,72 @@ export function createJwtVerifier(options: {
 }): AuthTokenVerifier;
 
 // ---------------------------------------------------------------------------
+// MCP HTTP transports (Streamable HTTP added in 1.20.0)
+// ---------------------------------------------------------------------------
+
+/** Loose type — see `lib/mcp/server.js` for the full MCPServer surface. */
+export interface MCPServerLike {
+  name: string;
+  version: string;
+  handleMessage(msg: unknown, ctx?: unknown): Promise<unknown>;
+  addSubscriber(fn: (notif: unknown) => void): { subscriptions: Set<string> } & (() => void);
+}
+
+export interface TransportHandle {
+  url: string;
+  port: number;
+  close(): Promise<void>;
+}
+
+export interface CreateHttpTransportOptions {
+  server: MCPServerLike;
+  port?: number;
+  host?: string;
+  logger?: (level: 'info' | 'warn' | 'error', msg: string) => void;
+  /** Static bearer token (constant-time comparison). Mutually exclusive with `authTokenVerifier`. */
+  authToken?: string | null;
+  /** Custom async token verifier (e.g. JWT + JWKS). Returns claims for accept, null/false for reject. */
+  authTokenVerifier?: AuthTokenVerifier | null;
+}
+
+/**
+ * MCP HTTP+SSE transport (spec 2024-11-05). Exposes an MCPServer on
+ *   GET  /sse            — server-to-client event stream
+ *   POST /messages       — client-to-server JSON-RPC
+ * Kept for back-compat with older MCP clients.
+ * @since 1.10.0
+ */
+export function createHttpTransport(options: CreateHttpTransportOptions): Promise<TransportHandle>;
+
+export interface CreateStreamableHttpTransportOptions extends CreateHttpTransportOptions {
+  /** Endpoint path. Default '/mcp'. */
+  path?: string;
+  /**
+   * Whitelist of `Origin` headers to accept. Spec-recommended DNS-rebinding
+   * protection. null / [] means accept any origin (dev-friendly default).
+   */
+  allowedOrigins?: string[] | null;
+}
+
+/**
+ * MCP Streamable HTTP transport (spec 2025-03-26). One endpoint speaks the
+ * whole protocol:
+ *   POST   /mcp    — client-to-server JSON-RPC. Server assigns Mcp-Session-Id
+ *                    on the first request and echoes it in subsequent
+ *                    responses. Notifications (no id) return 202 + no body;
+ *                    requests return 200 application/json.
+ *   GET    /mcp    — optional long-lived SSE stream for server-initiated
+ *                    notifications (list_changed, progress) on this session.
+ *   DELETE /mcp    — explicit session termination.
+ * Supported by Claude Desktop, Cursor, VS Code Copilot, and other modern
+ * MCP clients.
+ * @since 1.20.0
+ */
+export function createStreamableHttpTransport(
+  options: CreateStreamableHttpTransportOptions,
+): Promise<TransportHandle>;
+
+// ---------------------------------------------------------------------------
 // Tool runner — automatic multi-turn agent loop (new in v1.1.0)
 // ---------------------------------------------------------------------------
 

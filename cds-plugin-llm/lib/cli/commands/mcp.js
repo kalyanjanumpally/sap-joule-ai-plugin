@@ -1,5 +1,6 @@
 const { MCPServer } = require('../../mcp/server');
 const { createHttpTransport } = require('../../mcp/httpTransport');
+const { createStreamableHttpTransport } = require('../../mcp/streamableHttpTransport');
 const { createJwtVerifier } = require('../../mcp/jwtVerifier');
 const { buildTools, buildResources, buildResourceTemplates } = require('../../mcp/tools');
 const { PromptRegistry, builtInPrompts } = require('../../promptRegistry');
@@ -92,9 +93,24 @@ async function mcp(ctx) {
     if (!authToken && !jwksUrl && host !== '127.0.0.1' && host !== 'localhost') {
       ctx.stderr.write(`[mcp:warn] binding to ${host} with no auth — anyone on the network can call your provider. Set --auth-token, --jwks-url, or the corresponding env var.\n`);
     }
-    const transport = await createHttpTransport({ server, port, host, logger, authToken, authTokenVerifier });
-    ctx.stderr.write(`[mcp] ready (HTTP+SSE) — provider=${kind} model=${model}${authLabel}\n`);
-    ctx.stderr.write(`[mcp] connect an MCP client to ${transport.url}/sse\n`);
+    // Transport selection: default is the older HTTP+SSE (back-compat with
+    // existing clients). --transport streamable-http opts into the newer
+    // 2025-03-26 spec transport (single POST endpoint, Mcp-Session-Id header,
+    // supported by Claude Desktop / Cursor / VS Code Copilot).
+    const kindStr = (ctx.opts.transport ?? 'sse').toLowerCase();
+    const isStreamable = kindStr === 'streamable-http' || kindStr === 'streamable';
+    const originsRaw = ctx.opts['allowed-origins'] ?? ctx.env.SAPTARISHI_LLM_MCP_ALLOWED_ORIGINS ?? null;
+    const allowedOrigins = originsRaw
+      ? originsRaw.split(',').map(s => s.trim()).filter(Boolean)
+      : null;
+    const path = ctx.opts.path ?? '/mcp';
+    const transport = isStreamable
+      ? await createStreamableHttpTransport({ server, port, host, path, logger, authToken, authTokenVerifier, allowedOrigins })
+      : await createHttpTransport({ server, port, host, logger, authToken, authTokenVerifier });
+    const transportLabel = isStreamable ? 'Streamable HTTP' : 'HTTP+SSE';
+    const connectUrl = isStreamable ? `${transport.url}${path}` : `${transport.url}/sse`;
+    ctx.stderr.write(`[mcp] ready (${transportLabel}) — provider=${kind} model=${model}${authLabel}\n`);
+    ctx.stderr.write(`[mcp] connect an MCP client to ${connectUrl}\n`);
     // Keep alive until SIGINT / SIGTERM
     await new Promise((resolve) => {
       const shutdown = () => { transport.close().then(resolve); };
@@ -159,10 +175,21 @@ Load extra prompts from a directory:
 
 Transport:
   (default)                — stdio JSON-RPC (Claude Desktop / Cursor / Zed)
-  --http [--port 3333]     — HTTP+SSE server. GET /sse for the event stream,
-        [--host 127.0.0.1]   POST /messages?sessionId=X for client messages.
-                             Handy for deploying as a network service.
-        [--auth-token <t>]   Static bearer token required on /sse + /messages
+  --http [--port 3333]     — network transport. Default is HTTP+SSE
+        [--host 127.0.0.1]   (2024-11-05 spec): GET /sse + POST /messages.
+        [--transport streamable-http]
+                             Opt into Streamable HTTP (2025-03-26 spec):
+                             single POST /mcp endpoint, Mcp-Session-Id
+                             header, optional GET /mcp long-lived stream
+                             for broadcast notifications, DELETE /mcp for
+                             session termination. Supported by Claude
+                             Desktop / Cursor / VS Code Copilot.
+        [--path /mcp]        Endpoint path for Streamable HTTP (default /mcp).
+        [--allowed-origins   Whitelist of Origin headers to accept (DNS-
+          a.com,b.com]       rebinding protection for Streamable HTTP).
+                             Comma-separated, or set env
+                             SAPTARISHI_LLM_MCP_ALLOWED_ORIGINS.
+        [--auth-token <t>]   Static bearer token required on the endpoint
                              (or set SAPTARISHI_LLM_MCP_TOKEN env var).
         [--jwks-url <url>]   JWT bearer auth: verify against the given JWKS
         [--jwt-issuer <iss>] endpoint (SAP XSUAA, Auth0, Okta, Azure AD,

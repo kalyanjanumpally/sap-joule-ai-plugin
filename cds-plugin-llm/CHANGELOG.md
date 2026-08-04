@@ -4,6 +4,53 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] — 2026-08-04
+
+### Added
+
+- **MCP Streamable HTTP transport (spec 2025-03-26).** The spec-blessed replacement for the older HTTP+SSE transport (2024-11-05). One endpoint speaks the whole protocol; broadly compatible with Claude Desktop, Cursor, VS Code Copilot, and every modern MCP client.
+
+  ```sh
+  saptarishi-llm mcp --http --transport streamable-http \
+    --port 3333 --host 0.0.0.0 \
+    --allowed-origins https://app.example.com \
+    --auth-token $SAPTARISHI_LLM_MCP_TOKEN
+  ```
+
+- **Wire protocol** (default path: `/mcp`):
+  - `POST /mcp` — client sends a single JSON-RPC message.
+    - Notification (no `id`) → `202 Accepted` with empty body.
+    - Request (with `id`) → `200 application/json` with the reply.
+    - Parse error → `400`.
+    - First request (initialize) with no session id: server assigns a UUID and returns it via the `Mcp-Session-Id` **response header**; client echoes it on every subsequent request.
+    - Non-initialize request with no session id → `400`.
+    - Any request with an unknown session id → `404` (spec-conforming signal for the client to re-initialize).
+  - `GET /mcp` — optional long-lived SSE stream for server-initiated notifications (list_changed, resources_updated, in-flight tool-call progress). Requires `Mcp-Session-Id`. Unknown session → `405`.
+  - `DELETE /mcp` — explicit session termination. Returns `204`. Unknown session → `404`.
+
+- **Origin validation (DNS-rebinding protection).** New `allowedOrigins: string[]` option — the server rejects requests with `Origin` headers not in the whitelist (`403 Forbidden`). Requests without an `Origin` header (native / server-to-server clients, curl) are allowed. Not set = accept any origin (dev-friendly default). CLI flag: `--allowed-origins a.com,b.com` (or env `SAPTARISHI_LLM_MCP_ALLOWED_ORIGINS`).
+
+- **Session state carries the same shape as the HTTP+SSE transport.** Per-session subscriptions (from `resources/subscribe`), per-session provider alias (from `initialize._meta.provider`), and per-session GET-stream fan-out for broadcast + progress notifications. Tool handlers see `ctx.sessionState.provider` regardless of which transport the client used to connect.
+
+- **Configurable endpoint path via `path` option** (default `/mcp`). Multiple transports can share one process by pointing them at different paths.
+
+- **Pluggable bearer-token auth**: same `authToken` (constant-time compare) and `authTokenVerifier` (async, returns claims or null) as `createHttpTransport`, so a JWKS-based `createJwtVerifier` works on both transports unchanged. `/health` remains public.
+
+- **CLI additions on `saptarishi-llm mcp --http`**:
+  - `--transport streamable-http` — opt into the new transport (default remains `sse` for back-compat).
+  - `--path /some/other/path` — custom endpoint path (Streamable HTTP only).
+  - `--allowed-origins a.com,b.com` — origin whitelist.
+
+- **Exports**: `createStreamableHttpTransport` and `createHttpTransport` are now both re-exported from `lib/index.js` for programmatic use. TS defs added — `CreateStreamableHttpTransportOptions`, `TransportHandle`, `MCPServerLike` — with `@since` tags.
+
+- 27 new tests (422 total): health + basic routing, session assignment on initialize, session reuse via `Mcp-Session-Id` header, non-initialize with no session → 400, unknown session → 404 / 405, parse error → 400, notification → 202, GET stream with broadcast + progress fan-out, DELETE lifecycle, session-state isolation across N sessions, three auth surfaces (missing / matching / verifier), Origin whitelist (accept / reject / missing-is-OK), custom path, close() cleanup.
+
+### Notes
+
+- Additive — the existing `createHttpTransport` (HTTP+SSE) is unchanged. `^1.19` consumers can bump to `^1.20` with zero code changes. Migrate at your leisure; older MCP clients that only speak HTTP+SSE stay on `--http` alone.
+- Same session-lifecycle model as HTTP+SSE: session state (subscriptions, provider alias, streams) cleaned up on DELETE, on `close()`, or when the last GET stream drops for a session that has no in-flight POST requests. Explicit DELETE from the client is the intended shutdown path.
+- Progress notifications for a POST tool-call are delivered to the session's open GET stream (if any). If the client hasn't opened one, notifications are dropped — matches the HTTP+SSE trade-off. Clients that care about progress should keep a GET stream open for the session's lifetime.
+
 ## [1.19.0] — 2026-08-03
 
 ### Added
