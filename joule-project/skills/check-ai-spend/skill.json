@@ -1,0 +1,73 @@
+{
+  "$schema": "https://sap.com/schemas/joule/skill/v1.json",
+  "name": "check-ai-spend",
+  "displayName": "Check AI spend",
+  "description": "Answers 'how much did we spend on AI' questions by querying the FinanceService.LlmSpend OData entity — auto-populated by the usageMeteringToCap middleware on every LLM call. Filter by tenant, model, or time window.",
+  "category": "finance",
+  "version": "1.0.0",
+  "language": "en",
+  "confirmationRequired": false,
+  "utterances": [
+    "How much did we spend on AI this week",
+    "AI cost per model this month",
+    "What is our LLM spend for acme",
+    "Show the most expensive AI calls today",
+    "Break down AI cost by provider"
+  ],
+  "parameters": [
+    {
+      "name": "tenant",
+      "type": "string",
+      "required": false,
+      "description": "Filter by tenant/customer id. Omit for all-tenant aggregate."
+    },
+    {
+      "name": "topK",
+      "type": "integer",
+      "required": false,
+      "default": 25,
+      "description": "How many rows to fetch for the aggregation (1-500)."
+    }
+  ],
+  "actions": [
+    {
+      "actionRef": "FinanceCopilot.listSpend",
+      "input": {
+        "$orderby": "timestamp desc",
+        "$top": "{{ topK | default: 25 }}",
+        "$filter": "{% if tenant %}tenant eq '{{ tenant }}'{% endif %}"
+      }
+    }
+  ],
+  "prompt": {
+    "$ref": "./prompt.md"
+  },
+  "responseTemplate": {
+    "$ref": "./response-template.md"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "value": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "timestamp":    { "type": "string", "format": "date-time" },
+            "provider":     { "type": "string" },
+            "model":        { "type": "string" },
+            "tenant":       { "type": "string" },
+            "method":       { "type": "string" },
+            "inputTokens":  { "type": "integer" },
+            "outputTokens": { "type": "integer" },
+            "totalCost":    { "type": "number" },
+            "currency":     { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "requiredScopes": [
+    "Finance:AISpend:Read"
+  ]
+}

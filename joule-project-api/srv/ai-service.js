@@ -2,6 +2,7 @@ const cds = require('@sap/cds');
 const {
   imageFromBase64, imageFromUrl,
   pdfFromBase64, pdfFromUrl,
+  usageMeteringToCap,
 } = require('@saptarishi/cds-plugin-llm');
 
 const PO_SYSTEM = `You summarize S/4HANA purchase orders for procurement approvers.
@@ -28,9 +29,22 @@ Rationale must cite the specific field(s) driving the rating.`;
 
 // Module-scoped lazy singleton so the streaming Express route (registered in
 // AIService.init below) and the OData handlers share one LLM instance.
+//
+// On first connect, we attach the usageMeteringToCap middleware — every
+// chat/stream/embed call is now auto-persisted to FinanceService.LlmSpend
+// (projected from LlmUsage). Tenants come from cds.context.tenant when
+// XSUAA is bound; falls back to 'default' for local dev.
 let _llmPromise;
 function getLLM() {
-  if (!_llmPromise) _llmPromise = cds.connect.to('llm');
+  if (!_llmPromise) {
+    _llmPromise = cds.connect.to('llm').then((llm) => {
+      llm.use(usageMeteringToCap(cds, {
+        tenantOf:   (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
+        providerOf: (ctx) => ctx.raw?.providerAlias ?? cds.env.requires?.llm?.kind ?? null,
+      }));
+      return llm;
+    });
+  }
   return _llmPromise;
 }
 

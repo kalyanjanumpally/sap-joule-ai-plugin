@@ -1,0 +1,68 @@
+openapi: 3.0.3
+info:
+  title: Finance Copilot — LLM cost accounting (joule-project-api)
+  description: |
+    OData v4 read-only surface for the LlmSpend entity, projected from the
+    shipped `saptarishi.llm.usage.LlmUsage` entity (from
+    `@saptarishi/cds-plugin-llm@1.22+`). Rows are auto-persisted by the
+    `usageMeteringToCap` middleware wired into `srv/ai-service.js` — every
+    LLM call anywhere in the CAP app writes one row here.
+
+    Standard OData query options apply: `$filter`, `$orderby`, `$top`,
+    `$skip`, `$select`, `$count`.
+  version: 1.0.0
+servers:
+  - url: /finance
+    description: CAP service root (see destinations/cap-ai-backend.json)
+security:
+  - XsUaaBearer: []
+paths:
+  /LlmSpend:
+    get:
+      operationId: FinanceCopilot.listSpend
+      summary: List LLM cost rows (per-call breakdown)
+      parameters:
+        - { name: "$filter",  in: query, schema: { type: string } }
+        - { name: "$orderby", in: query, schema: { type: string } }
+        - { name: "$top",     in: query, schema: { type: integer, default: 25 } }
+        - { name: "$skip",    in: query, schema: { type: integer } }
+        - { name: "$select",  in: query, schema: { type: string } }
+        - { name: "$count",   in: query, schema: { type: boolean } }
+      responses:
+        "200":
+          description: List of LLM spend rows in OData v4 envelope
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  "@odata.context": { type: string }
+                  "@odata.count":   { type: integer }
+                  value:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LlmSpend'
+
+components:
+  schemas:
+    LlmSpend:
+      type: object
+      properties:
+        ID:            { type: string, format: uuid }
+        timestamp:     { type: string, format: date-time }
+        provider:      { type: string, description: "cds.services alias, e.g. 'llm' or 'llm-cheap'" }
+        model:         { type: string, description: "e.g. 'claude-opus-4-7', 'gpt-4o'" }
+        tenant:        { type: string, description: "XSUAA-derived tenant id; 'default' locally" }
+        method:        { type: string, enum: [chat, stream, embed] }
+        inputTokens:   { type: integer }
+        outputTokens:  { type: integer }
+        inputCost:     { type: number, format: double }
+        outputCost:    { type: number, format: double }
+        totalCost:     { type: number, format: double }
+        currency:      { type: string, description: "ISO 4217 (typically 'USD')" }
+        pricingKnown:  { type: boolean, description: "false when the model isn't in the price table (cost=0)" }
+  securitySchemes:
+    XsUaaBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

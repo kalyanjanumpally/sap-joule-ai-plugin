@@ -11,8 +11,9 @@ CAP backend for the **Procurement Copilot** Joule agent. Hosts LLM-backed action
 | `POST /ai/extractInvoiceLineItems` | Structured extraction from an invoice image or PDF |
 | `POST /procurement/SupplierContracts/ProcurementService.searchByMeaning` | **Semantic search over supplier contracts (auto-declared by `@rag`)** |
 | `POST /procurement/SupplierContracts/ProcurementService.askAbout` | **Q&A with cited sources over supplier contracts (auto-declared by `@rag`)** |
+| `GET  /finance/LlmSpend` | **Per-request LLM cost accounting — auto-persisted by `usageMeteringToCap` middleware. Queryable via OData: `$filter=tenant eq 'acme'`, `$orderby=totalCost desc`, etc.** |
 
-The `/ai/*` actions delegate to whichever LLM provider is configured under `cds.requires.llm` (see [`../cds-plugin-llm`](../cds-plugin-llm/README.md)). The `/procurement/*` actions are auto-declared by [`@saptarishi/cds-plugin-vector-hana`](../cds-plugin-vector-hana/README.md) from the `@rag` annotation on `SupplierContracts` — **zero handler code lives in this project for them**.
+The `/ai/*` actions delegate to whichever LLM provider is configured under `cds.requires.llm` (see [`../cds-plugin-llm`](../cds-plugin-llm/README.md)). The `/procurement/*` actions are auto-declared by [`@saptarishi/cds-plugin-vector-hana`](../cds-plugin-vector-hana/README.md) from the `@rag` annotation on `SupplierContracts` — **zero handler code lives in this project for them**. The `/finance/LlmSpend` entity is a projection of the shipped `saptarishi.llm.usage.LlmUsage` (from `@saptarishi/cds-plugin-llm@1.22+`); rows are auto-inserted by the `usageMeteringToCap` middleware wired inside `srv/ai-service.js`.
 
 ### Try the RAG endpoints
 
@@ -29,6 +30,23 @@ curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementServ
 ```
 
 The first request seeds the vector index from the CSV automatically (via the plugin's `after CREATE` handler when CAP loads the seed data). Subsequent runs are cached in the SQLite vector table.
+
+### Query LLM spend
+
+Every `/ai/*` and `/procurement/*` call that hits the LLM writes a row to `FinanceService.LlmSpend`:
+
+```sh
+# Full spend history (newest first)
+curl -sS 'http://localhost:4004/finance/LlmSpend?$orderby=timestamp%20desc&$top=20' | jq
+
+# Per-tenant totals (client-side aggregation for the demo — replace with a $apply group query in prod)
+curl -sS "http://localhost:4004/finance/LlmSpend?\$filter=tenant%20eq%20'acme'&\$select=model,totalCost,timestamp" | jq
+
+# Most expensive requests
+curl -sS 'http://localhost:4004/finance/LlmSpend?$orderby=totalCost%20desc&$top=10' | jq
+```
+
+The middleware picks tenant from `cds.context.tenant` (populated by XSUAA on BTP) with a `'default'` fallback for local dev. Model prices come from the shipped `DEFAULT_PRICING` table — override in `srv/ai-service.js` if you have contract discounts.
 
 ## Provider by profile
 

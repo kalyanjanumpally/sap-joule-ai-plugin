@@ -144,7 +144,13 @@
       "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-llm-v1.21.0\" -m \"cds-plugin-llm 1.21.0\" 29d089c)",
       "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.21.0)",
       "Bash(node --check lib/middleware/usageMeteringToCap.js)",
-      "Bash(node --check lib/index.js)"
+      "Bash(node --check lib/index.js)",
+      "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30881003200\")",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-llm-v1.22.0\" -m \"cds-plugin-llm 1.22.0\" 6a8d1a0)",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.22.0)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('_id:', d['_id']\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('installed llm:', d['dependencies']['@saptarishi/cds-plugin-llm']\\)\")",
+      "Bash(node -e \"console.log\\('installed:', require\\('@saptarishi/cds-plugin-llm/package.json'\\).version\\)\")"
     ]
   }
 }
