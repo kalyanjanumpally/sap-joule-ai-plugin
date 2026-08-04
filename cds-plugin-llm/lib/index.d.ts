@@ -763,6 +763,44 @@ export interface UsageMeteringMiddleware extends Middleware {
  */
 export function usageMetering(options?: UsageMeteringOptions): UsageMeteringMiddleware;
 
+export interface UsageMeteringToCapOptions extends Omit<UsageMeteringOptions, 'onRecord'> {
+  /**
+   * Fully qualified entity name to INSERT into. Default:
+   * `'saptarishi.llm.usage.LlmUsage'` — matches the shipped
+   * `lib/usageEntity.cds`. Bring your own entity with a superset of these
+   * fields to add tenancy columns, per-team cost centers, etc.
+   */
+  entity?: string;
+  /** Optional error hook called when a persist fails. Default: logs a warn. */
+  onError?: (err: Error, record: UsageRecord) => void | Promise<void>;
+}
+
+/**
+ * Wraps `usageMetering` with an `onRecord` handler that INSERTs each record
+ * into a CAP entity via `cds.run(INSERT.into(entity).entries(...))`. The
+ * canonical entity definition ships at `lib/usageEntity.cds` — import via
+ * `using { LlmUsage } from '@saptarishi/cds-plugin-llm/lib/usageEntity';`
+ * and project it into your OData service.
+ *
+ * The wrapper delegates aggregation + `summary()` to `usageMetering`; the
+ * only added behavior is fire-and-forget persistence. Errors are swallowed
+ * (logged via `cds.log('llm:usage').warn`) so the request path is never
+ * blocked by a database hiccup.
+ *
+ *   const cds = require('@sap/cds');
+ *   const { usageMeteringToCap } = require('@saptarishi/cds-plugin-llm');
+ *   llm.use(usageMeteringToCap(cds, {
+ *     tenantOf:   (ctx) => ctx.raw?.tenant,
+ *     providerOf: (ctx) => ctx.raw?.providerAlias,
+ *   }));
+ *
+ * @since 1.22.0
+ */
+export function usageMeteringToCap(cds: unknown, options?: UsageMeteringToCapOptions): UsageMeteringMiddleware;
+
+/** Default entity name — matches `saptarishi.llm.usage.LlmUsage` in `lib/usageEntity.cds`. */
+export const DEFAULT_LLM_USAGE_ENTITY: string;
+
 // ---------------------------------------------------------------------------
 // Prompt-template registry (new in v1.8.0)
 // ---------------------------------------------------------------------------

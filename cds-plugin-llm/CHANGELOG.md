@@ -4,6 +4,53 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.0] — 2026-08-04
+
+### Added
+
+- **Canonical `LlmUsage` CDS entity + `usageMeteringToCap` auto-persist wrapper.** The 1.21.0 metering middleware exposed an in-memory summary and a `onRecord` sink hook; this release adds the "obvious next step" — a shipped CDS entity you can import into your model and a one-line wrapper that INSERTs every metering record into it. Result: LLM cost accounting persisted to HANA (or SQLite in dev), queryable via OData, with zero glue code.
+
+  ```cds
+  // srv/finance-service.cds
+  using { saptarishi.llm.usage.LlmUsage } from '@saptarishi/cds-plugin-llm/lib/usageEntity';
+  service FinanceService @(path: '/finance') {
+    entity LlmSpend as projection on LlmUsage;
+  }
+  ```
+
+  ```js
+  // srv/handlers.js
+  const cds = require('@sap/cds');
+  const { usageMeteringToCap } = require('@saptarishi/cds-plugin-llm');
+  const llm = await cds.connect.to('llm');
+  llm.use(usageMeteringToCap(cds, {
+    tenantOf:   (ctx) => ctx.raw?.tenant ?? cds.context?.tenant,
+    providerOf: (ctx) => ctx.raw?.providerAlias,
+  }));
+  ```
+
+  Now `GET /finance/LlmSpend?$filter=tenant eq 'acme'&$orderby=timestamp desc` returns every LLM call charged to Acme with model, tokens, and cost breakdown. Fits directly into a Fiori cost dashboard.
+
+- **`lib/usageEntity.cds`** — the shipped entity. Columns: `ID` (UUID), `timestamp`, `provider`, `model`, `tenant`, `method`, `inputTokens`, `outputTokens`, `inputCost`, `outputCost`, `totalCost`, `currency`, `pricingKnown`. Bring your own entity name via `entity: 'MyApp.Finance.LlmSpend'` on the wrapper — the middleware only needs a superset of these columns, so consumers can extend the entity with cost centers, correlation ids, region flags, etc.
+
+- **`usageMeteringToCap(cds, options)`** — wrapper around `usageMetering` that installs an `onRecord` handler doing `cds.run(INSERT.into(entity).entries(...))`. Delegates aggregation, `summary()`, and `byModel` / `byTenant` / `byProvider` / `reset()` / `asMcpResource()` to the base middleware unchanged. `onError` hook receives `(err, record)` on persist failures; defaults to `cds.log('llm:usage').warn(...)`. Persist errors NEVER propagate to the request path — same policy as 1.21.0.
+
+- **Robust INSERT resolution.** The wrapper walks `cds.ql.INSERT` → `cds.INSERT` → `global.INSERT` at first call, so it works across CAP versions where the builder lives in different places. Missing entirely → a clear one-time warn (still doesn't block the request).
+
+- **UUID sourcing**: prefers `cds.utils.uuid()` when present, falls back to `crypto.randomUUID()`. No behavioral difference in CAP apps; the fallback is for embedded/test scenarios.
+
+- **Ignores `options.onRecord`** with a warning — since the wrapper installs its own persister, passing a custom sink would silently no-op the persistence. Consumers who want a custom sink call `usageMetering()` directly.
+
+- Exports: `usageMeteringToCap`, `DEFAULT_LLM_USAGE_ENTITY` (the string `'saptarishi.llm.usage.LlmUsage'`).
+
+- **14 new tests (457 total)**: constructor validation (bad cds arg), default entity persist path (record shape + cost math + INSERT payload), custom entity name, `cds.utils.uuid` preference + `crypto.randomUUID` fallback, INSERT-lookup fallbacks (`cds.ql.INSERT` → `cds.INSERT` → `global.INSERT` → clear warn if missing), persist-error swallowing + warn logging + `onError` hook (including onError-throws-too case), `onRecord` warning when caller supplies one, end-to-end aggregation surface still works (summary + byTenant + reset), user-supplied currency + pricing passed through to persisted rows.
+
+### Notes
+
+- Additive — `^1.21` consumers bump to `^1.22` with zero code changes. `usageMeteringToCap` is opt-in via `llm.use(...)`; nothing changes for callers still using `usageMetering()` directly.
+- The wrapper is 100% composition — `require('./middleware/usageMetering').usageMetering` with an `onRecord` slotted in. If you want custom persistence (batching, cross-tenancy sinks, warehouse export), stay on `usageMetering()` and write your own `onRecord`.
+- The shipped `LlmUsage` entity is versioned in `lib/usageEntity.cds`. Consumers who import it directly get whatever version they installed; those who copied it into their own model won't be affected by future column additions.
+
 ## [1.21.0] — 2026-08-04
 
 ### Added

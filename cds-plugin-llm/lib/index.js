@@ -32,6 +32,9 @@ module.exports = {
   // Per-request cost + token metering (new in 1.21.0)
   usageMetering: require('./middleware/usageMetering').usageMetering,
   DEFAULT_PRICING: require('./pricing').DEFAULT_PRICING,
+  // Auto-persist metering records to a CAP entity (new in 1.22.0)
+  usageMeteringToCap: require('./middleware/usageMeteringToCap').usageMeteringToCap,
+  DEFAULT_LLM_USAGE_ENTITY: require('./middleware/usageMeteringToCap').DEFAULT_ENTITY,
   // Prompt-template registry (new in 1.8.0)
   PromptRegistry: require('./promptRegistry').PromptRegistry,
   builtInPrompts: require('./promptRegistry').builtInPrompts,
