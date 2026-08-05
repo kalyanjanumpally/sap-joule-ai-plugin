@@ -4,6 +4,50 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-08-05
+
+### Added
+
+- **`llmRerank({ llm, model?, batchSize?, systemInstructions?, buildUserPrompt? })` — built-in LLM reranker factory.** 0.8.0 shipped the `RAG.rerank` hook as pluggable infrastructure with no built-in impl; this fills the gap. Given a query and a list of retrieved hits, the returned `Reranker` asks the LLM to score each hit on a 0-10 scale via structured output, then re-sorts descending and attaches a `rerankScore` field.
+
+  ```js
+  const { llmRerank, RAG } = require('@saptarishi/cds-plugin-vector-hana');
+
+  const rerank = llmRerank({
+    llm,                         // required — any LLMService with chat()
+    model: 'claude-haiku-4-5',   // optional — cheap fast model recommended for reranking
+    batchSize: 20,               // optional — hits per LLM call (default 20)
+  });
+
+  const rag = new RAG({ llm, store, mode: 'hybrid', rerank });
+  const { answer, hits } = await rag.answer({ query: 'refund policy?', topK: 5 });
+  // hits sorted by LLM relevance score; each hit gains a rerankScore field
+  ```
+
+- **Robust to LLM failures.** Malformed JSON, throwing calls, or partial responses never regress the answer path below "vanilla hybrid":
+  - LLM throws → all hits get the neutral score 5 (original order preserved).
+  - Malformed JSON → parse falls back to the original order.
+  - Indices missing from the response → those hits get the neutral score 5.
+  - Scores outside `[0, 10]` are clamped.
+
+- **Batching** for long candidate lists — hits are split into `batchSize`-sized slices and scored in parallel Promise.all calls. Default 20 fits comfortably in most models' structured-output limits and keeps per-batch latency low.
+
+- **Structured output.** Every rerank call sets `format` to a `{ scores: [{ index, score }] }` schema, so providers that support strict JSON mode (OpenAI, Anthropic, Gemini) never need lenient parsing. The plugin's `data`-shape output from Anthropic is honored on the fast path.
+
+- **Custom prompt hook.** `buildUserPrompt: ({ query, hits, startIndex }) => string` for domain-specific scoring criteria — e.g. "prefer contracts still valid this quarter" or "weight the terms column more than the supplier name". `systemInstructions` overrides the default scoring rubric.
+
+- **Passage truncation** to 500 chars per hit inside the default prompt so a large `hit.text` doesn't blow the context window. Consumers with longer passages can override `buildUserPrompt` to control this precisely.
+
+- Exports: `llmRerank` + `DEFAULT_BATCH_SIZE`. TS defs added — `LlmRerankOptions` — with `@since 0.9.0`.
+
+- 19 new tests (161 total): construction validation (llm requirement, batchSize bounds), happy path (score-based sorting + `rerankScore` field + single LLM call for small batches + model/maxTokens forwarding + structured-output schema shape), batching (multiple LLM calls with correct global-index translation), robustness (missing indices default to 5 with original order preserved, LLM throw → fallback, malformed JSON → fallback, JSON embedded in a plain-string reply parsed, scores clamped to [0,10], empty hits + empty query short-circuit before the LLM call), prompt shape (default lists passages by index, systemInstructions override, custom buildUserPrompt gets `{ query, hits, startIndex }`), RAG integration (rerank sorts hits + the answer prompt then cites the re-sorted top).
+
+### Notes
+
+- Additive — `^0.8` consumers bump to `^0.9` with zero code changes. `llmRerank` is opt-in via `new RAG({ ..., rerank: llmRerank({ llm }) })`; nothing changes for callers not using it.
+- Recommended pairing: **hybrid retrieval → llmRerank(cheap model)**. Hybrid pulls a wider candidate set with `candidateK` (default 4×topK); reranker scores them and picks the winners. Latency stays manageable if you point the reranker at a fast small model (Haiku, Gemini Flash, `llama-3.1-8b-instant`) — the rerank prompt is short and structured.
+- The `llmRerank` hook shipped here is for post-retrieval reranking. Query reformulation ("HyDE" / multi-query expansion) is a separate concern, not included in this release — write your own preprocessing step if you need it.
+
 ## [0.8.1] — 2026-08-05
 
 ### Fixed

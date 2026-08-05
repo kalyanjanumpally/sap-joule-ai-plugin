@@ -5,4 +5,5 @@ module.exports = {
   RAG: require('./rag'),
   activateCdsPlugin: require('./cdsPlugin').activate,
   reciprocalRankFusion: require('./rrf').reciprocalRankFusion,
+  llmRerank: require('./llmRerank').llmRerank,
 };

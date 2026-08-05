@@ -223,6 +223,38 @@ export function reciprocalRankFusion<M = Record<string, unknown>>(params: {
   k?: number;
 }): (SearchHit<M> & { fusionScore: number })[];
 
+// ---- Built-in LLM reranker (0.9.0) --------------------------------------
+
+export interface LlmRerankOptions {
+  /** LLM used to score passages. Must implement `chat()`. */
+  llm: ChatLLM;
+  /** Optional model override; defaults to the LLM's configured model. */
+  model?: string;
+  /** How many hits to score per LLM call. Default 20. */
+  batchSize?: number;
+  /** Override the default system prompt. */
+  systemInstructions?: string;
+  /** Max tokens per LLM call. Default 512. */
+  maxTokens?: number;
+  /**
+   * Custom user-prompt builder. Called with `{ query, hits, startIndex }`
+   * once per batch. Return the user-message string. Use for domain-
+   * specific scoring criteria (e.g. "prefer contracts still valid").
+   */
+  buildUserPrompt?: (params: { query: string; hits: SearchHit[]; startIndex: number }) => string;
+}
+
+/**
+ * Factory that returns a `Reranker` compatible with `RAG.rerank`. Scores
+ * each retrieved hit on a 0-10 scale via a structured-output LLM call and
+ * re-sorts descending. Robust to malformed / partial LLM responses —
+ * missing indices fall back to a neutral score of 5, malformed JSON
+ * returns the input order unchanged so nothing worse than "vanilla
+ * hybrid" ever ships. Hits gain a `rerankScore` field on success.
+ * @since 0.9.0
+ */
+export function llmRerank<M = Record<string, unknown>>(options: LlmRerankOptions): Reranker<M>;
+
 // ---- CDS @rag annotation plugin (0.5.0) --------------------------------
 
 /** Handle returned by `activateCdsPlugin(cds)` and also attached at `cds.vectorHana`. */
