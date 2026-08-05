@@ -1257,6 +1257,84 @@ export class RedisCounterStore implements CounterStore {
   clear(): Promise<void>;
 }
 
+// ---- Prompt injection guard middleware (new in 1.31.0) ---------------
+
+export type InjectionDetector =
+  | 'regex'
+  | 'base64'
+  | 'unicode'
+  | 'delimiters'
+  | 'roleAttempt'
+  | 'lengthAnomaly';
+
+export interface PromptInjectionHit {
+  detector: InjectionDetector;
+  hit: true;
+  confidence: number;
+  evidence: string;
+}
+
+export interface PromptInjectionGuardOptions {
+  /** 'block' (default) → PromptInjectionError. 'sanitize' → mutate & proceed. 'warn' → log only. */
+  action?: 'block' | 'sanitize' | 'warn';
+  /** Combined score in (0, 1] at which the action fires. Default 0.6. */
+  threshold?: number;
+  /** Which detectors to run. Default: all six. */
+  detectors?: InjectionDetector[];
+  /** Max user-message length before the lengthAnomaly detector fires. Default 8000. */
+  maxUserMessageChars?: number;
+  /** Extra regex patterns to check on top of the built-ins. */
+  extraPatterns?: RegExp[];
+  onDetect?: (info: {
+    action: 'block' | 'sanitize' | 'warn';
+    score: number;
+    threshold: number;
+    hits: PromptInjectionHit[];
+    evidence: string[];
+  }) => void | Promise<void>;
+}
+
+export interface PromptInjectionGuardStats {
+  scanned:   number;
+  blocked:   number;
+  sanitized: number;
+  warned:    number;
+  byDetector: Record<InjectionDetector, number>;
+}
+
+export interface PromptInjectionGuardMiddleware extends Middleware {
+  readonly stats: PromptInjectionGuardStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://prompt-injection-guard';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => {
+      action: string;
+      threshold: number;
+      detectors: InjectionDetector[];
+      maxUserMessageChars: number;
+      stats: PromptInjectionGuardStats;
+    };
+  };
+}
+
+/**
+ * Dedicated prompt-injection detection middleware. Layers regex,
+ * base64-decode, unicode/homoglyph, delimiter smuggling, role-attempt,
+ * and length-anomaly detectors; combines their confidences and blocks /
+ * sanitizes / warns based on the aggregate score.
+ * @since 1.31.0
+ */
+export function promptInjectionGuard(options?: PromptInjectionGuardOptions): PromptInjectionGuardMiddleware;
+
+export class PromptInjectionError extends Error {
+  readonly code: 'PROMPT_INJECTION';
+  readonly score: number;
+  readonly evidence: string[];
+}
+
 // ---- Built-in filters ---------------------------------------------------
 
 export interface BlocklistOptions {

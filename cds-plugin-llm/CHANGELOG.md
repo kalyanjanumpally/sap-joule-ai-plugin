@@ -4,6 +4,50 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.31.0] — 2026-08-05
+
+### Added
+
+- **`promptInjectionGuard({ action, threshold, detectors, maxUserMessageChars, extraPatterns, onDetect })` — dedicated prompt-injection detection middleware.** Where `filters.promptInjection()` is a single regex layer for the shipped `guardrails()` middleware, `promptInjectionGuard()` is a top-level middleware that layers **six** detectors, aggregates their confidences, and picks an action based on the combined score. Runs outer of everything else so the sanitized (or blocked) payload is what cache keys, metering, and the provider see.
+
+  ```js
+  const { promptInjectionGuard } = require('@saptarishi/cds-plugin-llm');
+
+  const guard = promptInjectionGuard({
+    action:    'sanitize',            // 'block' | 'sanitize' | 'warn'
+    threshold: 0.6,                    // combined confidence (0, 1]
+    detectors: ['regex', 'base64', 'unicode', 'delimiters', 'roleAttempt', 'lengthAnomaly'],
+    maxUserMessageChars: 8000,
+    onDetect: (info) => cds.log('llm:injection').warn(info),
+  });
+  llm.use(guard);
+  ```
+
+- **Six detectors, each returning a confidence weight:**
+  - **`regex`** (0.7) — override phrases (`ignore previous instructions`, `disregard prior prompts`), role-play manipulation (`you are now DAN`, `pretend to be`, `act as`), prompt exfiltration (`reveal your system prompt`, `print your instructions`), delimiter smuggling (`[INST]`, `<|im_start|>`, `<system>`, `### System`), and data-exfil framing (`send the conversation to`). ~20 patterns; `extraPatterns` augments.
+  - **`base64`** (0.85) — scans for base64 chunks ≥ 40 chars, decodes to UTF-8, re-runs the regex battery on the decoded text. Skips binary blobs (< 30% printable). Catches smuggled payloads that would otherwise slip past a regex-only layer.
+  - **`unicode`** (0.4 / 0.35) — flags zero-width & bidi control chars (U+200B..U+200F, U+202A..U+202E, U+FEFF), plus Cyrillic/Latin homoglyph mixes (Cyrillic `а` in an otherwise-Latin word).
+  - **`delimiters`** (0.6) — fake conversation turn markers (`--- ASSISTANT TURN ---`, `=== SYSTEM ===`, `~~~ USER ~~~`).
+  - **`roleAttempt`** (0.5) — broader role-manipulation phrasing the regex layer misses (`from now on`, `starting now, you are`, `new role:`).
+  - **`lengthAnomaly`** (0.25) — user messages > `maxUserMessageChars`. Weak signal alone; combines with others to push a mixed attack over threshold.
+
+- **Three actions:**
+  - **`block`** (default) → throws `PromptInjectionError` with `.code = 'PROMPT_INJECTION'`, `.score`, `.evidence`. Provider never called.
+  - **`sanitize`** → mutates the request in place: strips zero-width / bidi controls, NFKC-normalizes homoglyphs, replaces fake-turn / `<|im_start|>` / `<system>` markers with `[...-removed]` placeholders, truncates to `maxUserMessageChars`. Detector output logged via `onDetect`. Then the request proceeds.
+  - **`warn`** → `onDetect` fires; request proceeds unmodified. Zero-blocking observability mode.
+
+- **`.stats`** surface — `{ scanned, blocked, sanitized, warned, byDetector: { regex, base64, unicode, delimiters, roleAttempt, lengthAnomaly } }` for /prompt-injection-stats dashboards. **`.reset()`** and **`.asMcpResource()`** (`config://prompt-injection-guard`) match the pattern used by the other observability primitives.
+
+- **27 new tests** (656 total): validation, clean-input passthrough, regex family (classic override, DAN, reveal-prompt, extraPatterns), base64 (encoded injection, benign decode, binary skip), unicode (zero-width, homoglyphs), delimiter smuggling, length anomaly (alone-vs-combined threshold behavior), sanitize path (zero-width strip, fake-turn replace, truncation), warn path (`onDetect` fires + request proceeds + errors swallowed), detector opt-out, stream pre-check, multi-content structured messages, and stats+reset+asMcpResource.
+
+- **TS defs:** `InjectionDetector`, `PromptInjectionHit`, `PromptInjectionGuardOptions`, `PromptInjectionGuardStats`, `PromptInjectionGuardMiddleware`, `PromptInjectionError`.
+
+### Notes
+
+- **Recommended chain:** `promptInjectionGuard → guardrails → costBudget → usageMetering → responseCache → provider`. Placing the guard OUTER of `guardrails` means it runs before PII scrubbing — that's intentional: injection detection wants to see the raw payload so it can spot zero-width chars and homoglyphs before NFKC normalization erases them.
+- **`guardrails` + `promptInjectionGuard` compose cleanly** — they operate on different signals. `guardrails.filters.promptInjection()` stays useful as a fast first-line filter; `promptInjectionGuard()` adds depth. Deployments running both incur ~2 regex passes on user text; the incremental cost is negligible vs. a provider round-trip.
+- Confidence weights are tunable at threshold time, not per-detector today. If you want a detector to only warn (not block), disable it in `detectors: [...]` and add an `onDetect` upstream — or file an issue.
+
 ## [1.30.0] — 2026-08-05
 
 ### Added
