@@ -629,6 +629,17 @@ test('declareActions: adds searchByMeaning bound-to-collection action to the ent
     topK: { type: 'cds.Integer' },
   });
   assert.deepEqual(action.returns, { items: { type: 'AppService.Suppliers' } });
+  // Collection-bound (not instance-bound) so `POST /Entity/Action` works
+  // without callers supplying a dummy id.
+  assert.equal(action['@cds.odata.bindingparameter.collection'], true);
+});
+
+test('declareActions: askAbout also carries the @cds.odata.bindingparameter.collection annotation', () => {
+  const def = makeSuppliersEntity();
+  const definitions = { 'AppService.Suppliers': def };
+  const config = normalizeConfig(def['@rag'], 'AppService.Suppliers');
+  declareActions(definitions, 'AppService.Suppliers', def, config, { warn: () => {} });
+  assert.equal(def.actions.askAbout['@cds.odata.bindingparameter.collection'], true);
 });
 
 test('declareActions: adds askAbout action AND synthesizes result type in model.definitions', () => {

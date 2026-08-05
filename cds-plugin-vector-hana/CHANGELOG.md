@@ -4,6 +4,18 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-08-05
+
+### Fixed
+
+- **Auto-declared OData actions (`searchByMeaning`, `askAbout`) were emitted as instance-bound** — the EDMX had `Parameter Name="in" Type="ProcurementService.SupplierContracts"` (single entity) instead of `Collection(...)`. Callers who tried the collection URL (`POST /Suppliers/Service.searchByMeaning`) got `Error: Action ... must be called on a single instance`; the actions only worked via `POST /Suppliers(<dummy-id>)/Service.searchByMeaning` — a UX regression nobody caught because the plugin's own tests only checked the CSN mutation, not what CAP compiled to EDMX.
+- Fix: add `'@cds.odata.bindingparameter.collection': true` to both auto-declared actions. Verified via `cds.compile.to.edmx()` — the parameter now becomes `Type="Collection(...)"` and both URL patterns work. This was already the intent in 0.6.0 (see the CHANGELOG entry there — "collection-bound `searchByMeaning`"); the CSN just missed the specific annotation CAP requires to emit `Collection`.
+- 1 new test (142 total) pinning the annotation on both `searchByMeaning` and `askAbout`.
+
+### Notes
+
+- Behavior on the CAP handler side is unchanged — the handler always looked up the store by entity name (ignoring the instance id). This fix only changes what CAP compiles into the OData metadata + which URL pattern it accepts. Existing consumers who worked around the bug by supplying a dummy id will still work after this fix; the collection URL now also works.
+
 ## [0.8.0] — 2026-08-05
 
 ### Added

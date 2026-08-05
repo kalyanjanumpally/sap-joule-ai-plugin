@@ -322,6 +322,12 @@ function declareActions(definitions, entityName, def, config, log) {
           topK: { type: 'cds.Integer' },
         },
         returns: { items: { type: entityName } },
+        // Bind to the collection, not a single instance. Without this
+        // CAP defaults actions inside `entity.actions` to instance-bound
+        // (URL pattern: `POST /Entity(<id>)/Action`), which forces callers
+        // to supply a dummy id. Setting this yields `Collection(...)` in
+        // the EDMX so the collection URL (`POST /Entity/Action`) works.
+        '@cds.odata.bindingparameter.collection': true,
         '@Common.Label': `Search ${entityName.split('.').pop()} by meaning`,
       };
     }
@@ -350,6 +356,7 @@ function declareActions(definitions, entityName, def, config, log) {
           systemInstructions: { type: 'cds.String' },
         },
         returns: { type: resultTypeName },
+        '@cds.odata.bindingparameter.collection': true,
         '@Common.Label': `Ask a question about ${entityName.split('.').pop()}`,
       };
     }
