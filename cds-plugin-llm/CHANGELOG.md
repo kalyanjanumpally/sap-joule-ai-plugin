@@ -4,6 +4,52 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.28.0] — 2026-08-05
+
+### Added
+
+- **`guardrails({ inputFilters, outputFilters, onBlock, onRedact })` — pluggable input/output filter middleware for `llm.use()`.** Filters can allow, block (throws `GuardrailBlockedError`), or redact (mutates the payload). Input filters run BEFORE the request reaches the provider; output filters run BEFORE the response is returned to the caller. Fits SAP procurement pitches where data-handling compliance is a hard requirement.
+
+  ```js
+  const { guardrails, filters } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(guardrails({
+    inputFilters: [
+      filters.blocklist(['password', /internal-only-\\d+/i]),
+      filters.pii({ redact: true }),
+      filters.promptInjection(),
+    ],
+    outputFilters: [
+      filters.pii({ redact: true }),
+    ],
+    onBlock: (info) => cds.log('llm:guardrails').warn(info),
+  }));
+  ```
+
+- **Filter signature**: `async (payload, ctx) => { action: 'allow' | 'block' | 'redact', reason?, payload? }`. Input side sees `{ system, messages }`; output side sees the full chat response. Returning `undefined` is treated as `allow`. Redactions mirror back into `ctx.request` (input) or become the return value (output).
+
+- **`GuardrailBlockedError`** — thrown when any filter blocks. Has `.code = 'GUARDRAIL_BLOCKED'`, `.reason`, and `.details = { stage, filterIndex }` for observability.
+
+- **Built-in filters** shipped in `filters`:
+  - **`filters.blocklist(patterns, { mode?, replacement? })`** — string/regex blocklist. `mode: 'block'` (default) throws on match; `mode: 'redact'` replaces matches. Strings are literal substring; regexes are used verbatim.
+  - **`filters.pii({ redact?, types?, replacement? })`** — PII regex detector for `ssn` (US), `creditCard`, `email`, `phone` (US). Redacts by default; `redact: false` blocks. `types` restricts scope.
+  - **`filters.promptInjection({ extraPatterns? })`** — heuristic detector for common prompt-injection patterns ("ignore previous instructions", "you are now DAN", fake `<system>` role tags, etc.). Examines only `user` + `tool` messages — never the system prompt itself.
+
+- **`onBlock` + `onRedact` hooks** for CAP logging, Prometheus counters, Alertmanager escalations. Hook errors are swallowed to protect the request path.
+
+- **Stats surface** — `guardrails.stats` exposes `{ inputBlocks, outputBlocks, inputRedacts, outputRedacts }` counters.
+
+- **TS defs**: `GuardrailFilter`, `GuardrailVerdict`, `GuardrailsOptions`, `GuardrailsStats`, `GuardrailsMiddleware`, `GuardrailBlockedError`, `BlocklistOptions`, `PiiOptions`, `PromptInjectionOptions`. `filters` namespace exported.
+
+- **29 new tests (593 total)**: construction validation, allow-passthrough, input/output block, stats + hooks, input/output redact composition, blocklist (strings/regex/redact/errors), pii (all types + custom replacement + block mode + output-side + errors), promptInjection (four attack patterns, system-prompt trust boundary, extra patterns, benign queries), filter ordering + composition.
+
+### Notes
+
+- Additive — `^1.27` consumers bump to `^1.28` with zero code changes.
+- Heuristic prompt-injection detection is deliberately shallow — it catches common patterns fast but is NOT defense-in-depth. Layer with least-privilege tool access, output constraints (structured JSON), and stakeholder review before letting an LLM interact with sensitive systems.
+- Filters run in list order; the first block wins. Expensive filters (external moderation APIs, cross-encoder classifiers) should come last so cheap wins short-circuit.
+- Streams: input filters run before the stream opens; per-chunk output filtering is NOT in scope for this release. Collect and filter at the end if you need it.
+
 ## [1.27.0] — 2026-08-05
 
 ### Added

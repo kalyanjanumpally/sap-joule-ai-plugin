@@ -45,6 +45,10 @@ module.exports = {
   // Response cache middleware — memoizes identical chat() calls (new in 1.26.0)
   responseCache: require('./middleware/responseCache').responseCache,
   InMemoryLRU: require('./middleware/responseCache').InMemoryLRU,
+  // Guardrails — input/output filters for PII, injection, blocklists (new in 1.28.0)
+  guardrails: require('./middleware/guardrails').guardrails,
+  GuardrailBlockedError: require('./middleware/guardrails').GuardrailBlockedError,
+  filters: require('./filters'),
   // Prompt-template registry (new in 1.8.0)
   PromptRegistry: require('./promptRegistry').PromptRegistry,
   builtInPrompts: require('./promptRegistry').builtInPrompts,

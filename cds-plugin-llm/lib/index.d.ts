@@ -1061,6 +1061,107 @@ export class InMemoryLRU implements ResponseCacheStore {
   has(key: string): boolean;
 }
 
+// ---- Guardrails middleware (new in 1.28.0) ------------------------------
+
+export type GuardrailVerdict =
+  | { action: 'allow' }
+  | { action: 'block'; reason?: string }
+  | { action: 'redact'; payload: unknown };
+
+/**
+ * Guardrails filter. Called with `payload` (input side: `{ system, messages }`;
+ * output side: the chat response) and the middleware `ctx`. Return one of
+ * the three verdicts. Returning `undefined` / `null` is equivalent to
+ * `{ action: 'allow' }`.
+ */
+export type GuardrailFilter = (
+  payload: unknown,
+  ctx: MiddlewareContext,
+) => GuardrailVerdict | undefined | null | Promise<GuardrailVerdict | undefined | null>;
+
+export interface GuardrailsOptions {
+  inputFilters?: GuardrailFilter[];
+  outputFilters?: GuardrailFilter[];
+  /** Fired when any filter blocks. Good for logging + alerting. */
+  onBlock?: (info: { stage: 'input' | 'output'; filterIndex: number; reason?: string; ctx: MiddlewareContext }) => void | Promise<void>;
+  /** Fired when any filter redacts. */
+  onRedact?: (info: { stage: 'input' | 'output'; filterIndex: number; ctx: MiddlewareContext }) => void | Promise<void>;
+}
+
+export interface GuardrailsStats {
+  inputBlocks: number;
+  outputBlocks: number;
+  inputRedacts: number;
+  outputRedacts: number;
+}
+
+export interface GuardrailsMiddleware extends Middleware {
+  stats: GuardrailsStats;
+}
+
+/**
+ * Pluggable input/output filters. Input filters see `{ system, messages }`
+ * before the request reaches the provider. Output filters see the chat
+ * response before it's returned to the caller. Filters can allow, block
+ * (throws `GuardrailBlockedError`), or redact (mutates the payload for
+ * downstream middleware).
+ * @since 1.28.0
+ */
+export function guardrails(options?: GuardrailsOptions): GuardrailsMiddleware;
+
+export class GuardrailBlockedError extends Error {
+  readonly code: 'GUARDRAIL_BLOCKED';
+  readonly reason: string;
+  readonly details: { stage: 'input' | 'output'; filterIndex: number };
+}
+
+// ---- Built-in filters ---------------------------------------------------
+
+export interface BlocklistOptions {
+  /** 'block' (default) → GuardrailBlockedError on match. 'redact' → replace matches with `replacement`. */
+  mode?: 'block' | 'redact';
+  /** Substitute for 'redact' mode. Default '[REDACTED]'. */
+  replacement?: string;
+}
+
+export interface PiiOptions {
+  /** true (default) → replace PII with tags. false → block on detection. */
+  redact?: boolean;
+  /** Which PII types to detect. Default: all. */
+  types?: Array<'ssn' | 'creditCard' | 'email' | 'phone'>;
+  /** Custom substitute for redactions. Default `(type) => '[REDACTED-' + type + ']'`. */
+  replacement?: (type: string) => string;
+}
+
+export interface PromptInjectionOptions {
+  /** Extra regex patterns to check alongside the shipped defaults. */
+  extraPatterns?: RegExp[];
+}
+
+/** Built-in filter factories. */
+export const filters: {
+  /**
+   * String / regex blocklist. Default mode blocks; pass `mode: 'redact'`
+   * to replace matches instead.
+   */
+  blocklist(patterns: Array<string | RegExp>, options?: BlocklistOptions): GuardrailFilter;
+  /**
+   * PII detector. Ships regexes for US SSN, common credit-card BINs,
+   * standard email format, and US phone numbers. Redacts by default;
+   * pass `redact: false` to block on detection.
+   */
+  pii(options?: PiiOptions): GuardrailFilter;
+  /**
+   * Heuristic prompt-injection detector. Matches well-known patterns
+   * ("ignore previous instructions", "you are now DAN", fake role tags,
+   * "reveal the system prompt", etc.). Only examines user + tool
+   * messages — never the system prompt itself. Blocks on match.
+   */
+  promptInjection(options?: PromptInjectionOptions): GuardrailFilter;
+  PII_REGEXES: Record<string, RegExp>;
+  DEFAULT_INJECTION_PATTERNS: RegExp[];
+};
+
 // ---------------------------------------------------------------------------
 // Prompt-template registry (new in v1.8.0)
 // ---------------------------------------------------------------------------
