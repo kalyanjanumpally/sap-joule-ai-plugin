@@ -48,6 +48,25 @@ const DEFAULT_PRICING = {
   'llama-3.1-8b-instant':    { input: 0.05, output: 0.08 },
   'mixtral-8x7b-32768':      { input: 0.24, output: 0.24 },
 
+  // ---- Fireworks (per fireworks.ai/pricing as of 2026-08) -------------
+  'accounts/fireworks/models/llama-v3p3-70b-instruct':  { input: 0.90, output: 0.90 },
+  'accounts/fireworks/models/llama-v3p1-70b-instruct':  { input: 0.90, output: 0.90 },
+  'accounts/fireworks/models/qwen2p5-72b-instruct':     { input: 0.90, output: 0.90 },
+  'accounts/fireworks/models/deepseek-v3':              { input: 0.90, output: 0.90 },
+  'accounts/fireworks/models/mixtral-8x22b-instruct':   { input: 1.20, output: 1.20 },
+  'nomic-ai/nomic-embed-text-v1.5':                     { input: 0.008, output: 0 },
+
+  // ---- DeepSeek (per platform.deepseek.com/api-docs/pricing as of 2026-08)
+  'deepseek-chat':     { input: 0.27, output: 1.10 },
+  'deepseek-reasoner': { input: 0.55, output: 2.19 },
+
+  // ---- Mistral (per mistral.ai/pricing as of 2026-08) -----------------
+  'mistral-large-latest':  { input: 2,    output: 6 },
+  'mistral-large-2411':    { input: 2,    output: 6 },
+  'mistral-small-latest':  { input: 0.20, output: 0.60 },
+  'codestral-latest':      { input: 0.30, output: 0.90 },
+  'mistral-embed':         { input: 0.10, output: 0 },
+
   // ---- Bedrock (non-Claude) -------------------------------------------
   'amazon.nova-pro-v1:0':       { input: 0.80, output: 3.20 },
   'amazon.nova-lite-v1:0':      { input: 0.06, output: 0.24 },

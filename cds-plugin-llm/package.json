@@ -1,7 +1,7 @@
 {
   "name": "@saptarishi/cds-plugin-llm",
-  "version": "1.22.0",
-  "description": "LLM-agnostic AI service for SAP CAP. Speaks Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI, Ollama, Groq, any OpenAI-compatible endpoint, and SAP Generative AI Hub behind one API. Supports vision / multimodal input, streaming responses, structured outputs, tool use / function calling, and automatic retries with exponential backoff.",
+  "version": "1.23.0",
+  "description": "LLM-agnostic AI service for SAP CAP. Speaks Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI, Ollama, Groq, Fireworks, DeepSeek, Mistral, any OpenAI-compatible endpoint, and SAP Generative AI Hub behind one API. Supports vision / multimodal input, streaming responses, structured outputs, tool use / function calling, and automatic retries with exponential backoff.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kalyanjanumpally/sap-joule-ai-plugin.git",
@@ -40,6 +40,9 @@
     "gemini",
     "bedrock",
     "aws-bedrock",
+    "fireworks",
+    "deepseek",
+    "mistral",
     "ollama",
     "groq",
     "openai-compatible",
@@ -84,6 +87,18 @@
         },
         "llm-bedrock": {
           "impl": "@saptarishi/cds-plugin-llm/lib/providers/bedrock.js",
+          "external": true
+        },
+        "llm-fireworks": {
+          "impl": "@saptarishi/cds-plugin-llm/lib/providers/fireworks.js",
+          "external": true
+        },
+        "llm-deepseek": {
+          "impl": "@saptarishi/cds-plugin-llm/lib/providers/deepseek.js",
+          "external": true
+        },
+        "llm-mistral": {
+          "impl": "@saptarishi/cds-plugin-llm/lib/providers/mistral.js",
           "external": true
         }
       }

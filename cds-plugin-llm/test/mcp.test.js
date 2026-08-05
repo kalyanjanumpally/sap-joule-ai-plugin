@@ -437,7 +437,7 @@ test('buildResources: returns active-provider + supported-providers + providers 
   assert.equal(active.defaultMaxTokens, 512);
 
   const supported = await resources[1].read();
-  assert.equal(supported.supported.length, 8);
+  assert.equal(supported.supported.length, 11);
 
   const aliases = await resources[2].read();
   assert.equal(aliases.default.kind, 'groq');
@@ -966,7 +966,7 @@ test('buildTools list_providers: includes activeProvider + all provider kinds', 
   const res = await t.handler({});
   assert.equal(res.activeProvider, 'groq');
   assert.equal(res.activeModel, 'llama-3.3-70b-versatile');
-  assert.equal(res.supported.length, 8);
+  assert.equal(res.supported.length, 11);
   assert.deepEqual(res.aliases, []);
 });
 
@@ -1048,7 +1048,7 @@ test('CLI mcp: subprocess handshake works over stdio', async () => {
     assert.equal(lp.result.isError, false);
     const payload = JSON.parse(lp.result.content[0].text);
     assert.equal(payload.activeProvider, 'ollama');
-    assert.equal(payload.supported.length, 8);
+    assert.equal(payload.supported.length, 11);
 
     // resources/list should include the three config:// resources
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'resources/list' }) + '\n');

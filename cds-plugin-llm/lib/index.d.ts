@@ -310,6 +310,28 @@ export class OpenAICompatibleLLMService extends LLMService {
 export class GroqLLMService extends OpenAICompatibleLLMService {}
 
 /**
+ * Fireworks AI — hosted OSS models (Llama, Qwen, Mixtral, DeepSeek, ...) behind
+ * an OpenAI-compatible endpoint. Configure via `credentials.{apiKey, baseUrl?}`
+ * or `FIREWORKS_API_KEY` env.
+ * @since 1.23.0
+ */
+export class FireworksLLMService extends OpenAICompatibleLLMService {}
+
+/**
+ * DeepSeek — direct API access to DeepSeek-V3 (chat) and DeepSeek-R1 (reasoning).
+ * Configure via `credentials.{apiKey, baseUrl?}` or `DEEPSEEK_API_KEY` env.
+ * @since 1.23.0
+ */
+export class DeepSeekLLMService extends OpenAICompatibleLLMService {}
+
+/**
+ * Mistral AI — direct API access to Mistral Large, Codestral, and the open-weights
+ * family. Configure via `credentials.{apiKey, baseUrl?}` or `MISTRAL_API_KEY` env.
+ * @since 1.23.0
+ */
+export class MistralLLMService extends OpenAICompatibleLLMService {}
+
+/**
  * Azure OpenAI provider. Same request/response shapes as OpenAI, but URL
  * scheme is per-deployment and auth is `api-key` header (not Bearer).
  * Configure via `credentials.{endpoint, apiKey, deployment, embeddingDeployment?, apiVersion?}`.

@@ -160,7 +160,10 @@
       "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-vector-hana-v0.9.0\" -m \"cds-plugin-vector-hana 0.9.0\" 0e760f5)",
       "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-vector-hana-v0.9.0)",
       "Bash(curl -sS \"https://registry.npmjs.org/@saptarishi/cds-plugin-vector-hana/latest\")",
-      "Bash(git -C /Users/janumpallykalyan/Documents/joule add joule-project-api/ .claude/settings.local.json)"
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule add joule-project-api/ .claude/settings.local.json)",
+      "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30981546362\")",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-vector-hana-v0.10.0\" -m \"cds-plugin-vector-hana 0.10.0\" bf4e002)",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-vector-hana-v0.10.0)"
     ]
   }
 }

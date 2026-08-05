@@ -34,6 +34,18 @@ const PROVIDER_ENV_VARS = {
     '# AWS_SESSION_TOKEN=<for temporary credentials only>',
     '# BEDROCK_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0         # or cohere.embed-english-v3',
   ],
+  fireworks: [
+    'FIREWORKS_API_KEY=fw_...',
+    '# Base URL rarely needs overriding; defaults to https://api.fireworks.ai/inference/v1',
+  ],
+  deepseek: [
+    'DEEPSEEK_API_KEY=sk-...',
+    '# Base URL rarely needs overriding; defaults to https://api.deepseek.com',
+  ],
+  mistral: [
+    'MISTRAL_API_KEY=<your Mistral console key>',
+    '# Base URL rarely needs overriding; defaults to https://api.mistral.ai/v1',
+  ],
 };
 
 function llmConfigFor(kind, model) {
@@ -79,6 +91,15 @@ function llmConfigFor(kind, model) {
         accessKeyId: '${AWS_ACCESS_KEY_ID}',
         secretAccessKey: '${AWS_SECRET_ACCESS_KEY}',
       };
+      break;
+    case 'fireworks':
+      base.credentials = { apiKey: '${FIREWORKS_API_KEY}' };
+      break;
+    case 'deepseek':
+      base.credentials = { apiKey: '${DEEPSEEK_API_KEY}' };
+      break;
+    case 'mistral':
+      base.credentials = { apiKey: '${MISTRAL_API_KEY}' };
       break;
   }
   return base;

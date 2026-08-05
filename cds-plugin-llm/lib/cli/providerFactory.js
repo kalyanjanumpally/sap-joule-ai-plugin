@@ -1,4 +1,7 @@
-const PROVIDER_KINDS = ['anthropic', 'ollama', 'groq', 'openai-compatible', 'azure-openai', 'gemini', 'bedrock', 'genai-hub'];
+const PROVIDER_KINDS = [
+  'anthropic', 'ollama', 'groq', 'openai-compatible', 'azure-openai',
+  'gemini', 'bedrock', 'fireworks', 'deepseek', 'mistral', 'genai-hub',
+];
 
 const PROVIDER_DEFAULTS = {
   anthropic:          { model: 'claude-opus-4-7', envKey: 'ANTHROPIC_API_KEY' },
@@ -8,6 +11,9 @@ const PROVIDER_DEFAULTS = {
   'azure-openai':     { model: '(deployment-pinned)' },
   gemini:             { model: 'gemini-1.5-flash', envKey: 'GOOGLE_API_KEY' },
   bedrock:            { model: 'anthropic.claude-opus-4-20250514-v1:0' },
+  fireworks:          { model: 'accounts/fireworks/models/llama-v3p3-70b-instruct', envKey: 'FIREWORKS_API_KEY' },
+  deepseek:           { model: 'deepseek-chat', envKey: 'DEEPSEEK_API_KEY' },
+  mistral:            { model: 'mistral-large-latest', envKey: 'MISTRAL_API_KEY' },
   'genai-hub':        { model: 'gpt-4o' },
 };
 
@@ -99,6 +105,33 @@ async function buildProvider({ opts, env }) {
     if (env.BEDROCK_EMBEDDING_MODEL) providerOpts.credentials.embeddingModel = env.BEDROCK_EMBEDDING_MODEL;
     const BedrockLLMService = require('../providers/bedrock');
     return { provider: makeProvider(BedrockLLMService, providerOpts), kind, model };
+  }
+
+  if (kind === 'fireworks') {
+    const apiKey = env.FIREWORKS_API_KEY;
+    if (!apiKey) throw new Error("missing FIREWORKS_API_KEY env var (get one at fireworks.ai/account/api-keys)");
+    providerOpts.credentials.apiKey = apiKey;
+    if (opts['base-url']) providerOpts.credentials.baseUrl = opts['base-url'];
+    const FireworksLLMService = require('../providers/fireworks');
+    return { provider: makeProvider(FireworksLLMService, providerOpts), kind, model };
+  }
+
+  if (kind === 'deepseek') {
+    const apiKey = env.DEEPSEEK_API_KEY;
+    if (!apiKey) throw new Error("missing DEEPSEEK_API_KEY env var (get one at platform.deepseek.com/api_keys)");
+    providerOpts.credentials.apiKey = apiKey;
+    if (opts['base-url']) providerOpts.credentials.baseUrl = opts['base-url'];
+    const DeepSeekLLMService = require('../providers/deepseek');
+    return { provider: makeProvider(DeepSeekLLMService, providerOpts), kind, model };
+  }
+
+  if (kind === 'mistral') {
+    const apiKey = env.MISTRAL_API_KEY;
+    if (!apiKey) throw new Error("missing MISTRAL_API_KEY env var (get one at console.mistral.ai)");
+    providerOpts.credentials.apiKey = apiKey;
+    if (opts['base-url']) providerOpts.credentials.baseUrl = opts['base-url'];
+    const MistralLLMService = require('../providers/mistral');
+    return { provider: makeProvider(MistralLLMService, providerOpts), kind, model };
   }
 
   if (kind === 'genai-hub') {

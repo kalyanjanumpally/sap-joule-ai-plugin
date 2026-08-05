@@ -4,6 +4,43 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] — 2026-08-05
+
+### Added
+
+- **Three new OpenAI-compatible provider kinds** — light subclasses of `OpenAICompatibleLLMService` (same shape as `llm-groq`). Each inherits full chat + streaming + tools + vision + structured-outputs + embed support from the base class; the subclass only pins the base URL, env var name, and default model.
+
+  ```jsonc
+  // cds.requires.llm
+  { "kind": "llm-fireworks",
+    "modelId": "accounts/fireworks/models/llama-v3p3-70b-instruct",
+    "credentials": { "apiKey": "..." } }
+  { "kind": "llm-deepseek", "modelId": "deepseek-chat",
+    "credentials": { "apiKey": "..." } }
+  { "kind": "llm-mistral",  "modelId": "mistral-large-latest",
+    "credentials": { "apiKey": "..." } }
+  ```
+
+  | Kind | Default base URL | Env var | Default model |
+  |---|---|---|---|
+  | `llm-fireworks` | `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` | `accounts/fireworks/models/llama-v3p3-70b-instruct` |
+  | `llm-deepseek` | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` | `deepseek-chat` (V3; use `deepseek-reasoner` for R1) |
+  | `llm-mistral` | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` | `mistral-large-latest` (or `codestral-latest`, `mistral-embed`) |
+
+- **CLI support**: `--provider fireworks|deepseek|mistral` on `chat` / `stream` / `embed` / `verify`. `saptarishi-llm init <dir> --provider fireworks|deepseek|mistral` scaffolds a CAP app pre-wired to any of the three with the right env-var template. `providers` and the MCP `list_providers` tool + `config://supported-providers` resource now enumerate 11 kinds (was 8 in 1.19.0).
+
+- **Pricing entries** in `DEFAULT_PRICING` covering all three default models plus their common alternates — Fireworks Llama-3.3/3.1/Qwen/Mixtral/DeepSeek-V3 + nomic embed, DeepSeek-chat + DeepSeek-reasoner, Mistral Large + Small + Codestral + mistral-embed. `usageMetering` picks these up automatically; contract discounts can override per model.
+
+- **TS defs**: `FireworksLLMService`, `DeepSeekLLMService`, `MistralLLMService` classes exported from `lib/index.d.ts` with `@since 1.23.0`.
+
+- **30 new tests (487 total)**: per-provider — extends `OpenAICompatibleLLMService`, default baseUrl, default modelId, caller override wins, env-var pickup, missing-key error, `POST /chat/completions` with `Bearer` auth. CLI factory integration for all three + `--base-url` override propagation. `DEFAULT_PRICING` coverage check. Adjusted 5 pre-existing tests that hard-coded `supported.length: 8` and the sorted provider-kind list (now 11).
+
+### Notes
+
+- Additive — every existing kind (`llm-anthropic`, `llm-ollama`, `llm-groq`, `llm-openai-compatible`, `llm-azure-openai`, `llm-gemini`, `llm-bedrock`, `llm-genai-hub`) is unchanged. `^1.22` consumers bump to `^1.23` with zero code changes.
+- No new required dependencies. All three providers speak the OpenAI shape so no SDKs are pulled in — same fetch path as `llm-groq`.
+- Pricing values in `DEFAULT_PRICING` are ballpark rates as of 2026-08-05 from each provider's public pricing page. Override in `usageMetering({ pricing: {...} })` if you have a contract rate.
+
 ## [1.22.0] — 2026-08-04
 
 ### Added

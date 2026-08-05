@@ -13,6 +13,9 @@ module.exports = {
   AzureOpenAILLMService: require('./providers/azure-openai'),
   GeminiLLMService: require('./providers/gemini'),
   BedrockLLMService: require('./providers/bedrock'),
+  FireworksLLMService: require('./providers/fireworks'),
+  DeepSeekLLMService: require('./providers/deepseek'),
+  MistralLLMService: require('./providers/mistral'),
   GroqLLMService: require('./providers/groq'),
   // Vision helpers
   imageFromFile,

@@ -29,7 +29,7 @@ const providersCmd = require('../lib/cli/commands/providers');
 // ---- providerFactory ------------------------------------------------------
 
 test('providerFactory: knows every provider kind', () => {
-  assert.deepEqual(PROVIDER_KINDS.sort(), ['anthropic', 'azure-openai', 'bedrock', 'gemini', 'genai-hub', 'groq', 'ollama', 'openai-compatible']);
+  assert.deepEqual(PROVIDER_KINDS.sort(), ['anthropic', 'azure-openai', 'bedrock', 'deepseek', 'fireworks', 'gemini', 'genai-hub', 'groq', 'mistral', 'ollama', 'openai-compatible']);
 });
 
 test('providerFactory: rejects unknown provider', async () => {
@@ -269,8 +269,8 @@ test('providers: --json returns structured rows', async () => {
   const ctx = makeCtx({ opts: { json: true } });
   await providersCmd(ctx);
   const parsed = JSON.parse(ctx._read().stdout);
-  assert.equal(parsed.length, 8);
-  assert.deepEqual(parsed.map(r => r.kind).sort(), ['anthropic', 'azure-openai', 'bedrock', 'gemini', 'genai-hub', 'groq', 'ollama', 'openai-compatible']);
+  assert.equal(parsed.length, 11);
+  assert.deepEqual(parsed.map(r => r.kind).sort(), ['anthropic', 'azure-openai', 'bedrock', 'deepseek', 'fireworks', 'gemini', 'genai-hub', 'groq', 'mistral', 'ollama', 'openai-compatible']);
 });
 
 // ---- end-to-end via node subprocess ---------------------------------------

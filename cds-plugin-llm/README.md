@@ -89,6 +89,9 @@ Set the appropriate env var (see `.env.example`):
 | `llm-azure-openai` | Azure OpenAI Service (per-deployment URL + `api-key` header) | Paid via Azure subscription | Working (mock-verified end-to-end) |
 | `llm-gemini` (new in 1.19.0) | Google Gemini via Google AI Studio (chat, streaming, tools, vision, embeddings) | Free tier + paid per token | Working (mock-verified end-to-end) |
 | `llm-bedrock` (new in 1.19.0) | AWS Bedrock Converse API (chat, streaming, tools, vision) + Titan/Cohere embed. Uses `@aws-sdk/client-bedrock-runtime` (optional peer). | Paid via AWS Bedrock | Working (mock-verified end-to-end) |
+| `llm-fireworks` (new in 1.23.0) | Fireworks AI — hosted OSS models (Llama, Qwen, Mixtral, DeepSeek) behind an OpenAI-compatible endpoint | Pay-per-token via Fireworks | Working (mock-verified end-to-end) |
+| `llm-deepseek` (new in 1.23.0) | DeepSeek — direct API access to DeepSeek-V3 (chat) and DeepSeek-R1 (reasoning) | Very cheap per-token | Working (mock-verified end-to-end) |
+| `llm-mistral` (new in 1.23.0) | Mistral AI — Mistral Large, Codestral, and the open-weights family | Pay-per-token via Mistral | Working (mock-verified end-to-end) |
 | `llm-genai-hub` | SAP AI Core / Generative AI Hub | Paid (extended plan) | Spec-compliant · mock-verified end-to-end · live verify open (community help welcome) |
 
 ## Stability
