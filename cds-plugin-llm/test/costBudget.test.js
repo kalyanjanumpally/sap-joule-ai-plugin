@@ -283,7 +283,8 @@ test('costBudget: asMcpResource returns config://budget', async () => {
   await svc.chat({ messages: [{ role: 'user', content: 'a' }] });
   const r = budget.asMcpResource();
   assert.equal(r.uri, 'config://budget');
-  const payload = r.handler();
+  // Handler is async since 1.30.0 (must await store I/O).
+  const payload = await r.handler();
   assert.equal(payload.limits.total, 10);
   assert.ok(payload.current.total >= 0);
 });

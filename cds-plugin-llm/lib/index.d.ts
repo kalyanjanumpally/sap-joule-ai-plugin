@@ -1146,6 +1146,13 @@ export interface CostBudgetOptions {
    * `'block'` = pre-call refusal; `'exceeded'` = post-call crossing.
    */
   onExceeded?: (info: { scope: BudgetScope; key: string; current: number; limit: number; currency: string; action: 'block' | 'exceeded' }) => void | Promise<void>;
+  /**
+   * Pluggable counter store. Default is per-process in-memory. Pass a
+   * `RedisCounterStore` (or any object matching the {@link CounterStore}
+   * contract) to share counters across multiple app instances.
+   * @since 1.30.0
+   */
+  store?: CounterStore;
 }
 
 export interface BudgetSnapshot {
@@ -1156,18 +1163,39 @@ export interface BudgetSnapshot {
   currency: string;
 }
 
+/**
+ * Pluggable counter storage for costBudget. Every method may return either
+ * a plain value or a Promise — synchronous stores (InMemoryCounterStore)
+ * return values directly; async stores (RedisCounterStore) return promises.
+ * @since 1.30.0
+ */
+export interface CounterStore {
+  /** Current spend for (scope, key) in the given bucket. */
+  get(scope: BudgetScope, key: string, bucket: string): number | Promise<number>;
+  /** Atomically add `amount` to (scope, key) in the given bucket. */
+  add(scope: BudgetScope, key: string, bucket: string, amount: number): void | Promise<void>;
+  /** All counters in the given bucket, grouped by scope. */
+  snapshot(bucket: string): { total: number; perTenant: Record<string, number>; perModel: Record<string, number> }
+                          | Promise<{ total: number; perTenant: Record<string, number>; perModel: Record<string, number> }>;
+  /** Drop everything. Used by tests / manual admin. */
+  clear(): void | Promise<void>;
+}
+
 export interface CostBudgetMiddleware extends Middleware {
-  spent(scope: BudgetScope, key: string): number;
-  spentTotal(): number;
-  snapshot(): BudgetSnapshot;
+  /** Sync return when using default store; Promise when using an async store. */
+  spent(scope: BudgetScope, key: string): number | Promise<number>;
+  spentTotal(): number | Promise<number>;
+  snapshot(): BudgetSnapshot | Promise<BudgetSnapshot>;
   limitFor(scope: BudgetScope, key: string): number | null;
-  reset(): void;
+  reset(): void | Promise<void>;
+  /** The underlying counter store (default in-memory, or user-supplied). */
+  readonly store: CounterStore;
   asMcpResource(): {
     uri: 'config://budget';
     name: string;
     description: string;
     mimeType: 'application/json';
-    handler: () => { window: BudgetWindow; limits: BudgetLimits; currency: string; current: BudgetSnapshot };
+    handler: () => Promise<{ window: BudgetWindow; limits: BudgetLimits; currency: string; current: BudgetSnapshot }>;
   };
 }
 
@@ -1186,6 +1214,47 @@ export class BudgetExceededError extends Error {
   readonly current: number;
   readonly limit: number;
   readonly currency: string;
+}
+
+/**
+ * Default per-process in-memory counter store. Fast, zero-dep, but does
+ * NOT survive restarts and does NOT share across processes.
+ * @since 1.30.0
+ */
+export class InMemoryCounterStore implements CounterStore {
+  get(scope: BudgetScope, key: string, bucket: string): number;
+  add(scope: BudgetScope, key: string, bucket: string, amount: number): void;
+  snapshot(bucket: string): { total: number; perTenant: Record<string, number>; perModel: Record<string, number> };
+  clear(): void;
+}
+
+export interface RedisCounterStoreOptions {
+  /** Redis key prefix. Default `'llm:budget'`. */
+  namespace?: string;
+  /**
+   * TTL applied to each key on every write. Default 40 days — safely covers
+   * the widest 'month' window. Old-window keys age out on their own.
+   */
+  keyTtlSeconds?: number;
+  /** SCAN COUNT hint. Default 200. */
+  scanCount?: number;
+}
+
+/**
+ * Redis-backed counter store for costBudget. Multi-instance safe: uses
+ * atomic INCRBYFLOAT so concurrent requests from different app instances
+ * agree on totals.
+ *
+ * Accepts any ioredis-shaped client (also works with `node-redis` v4
+ * once its API is wrapped to ioredis conventions).
+ * @since 1.30.0
+ */
+export class RedisCounterStore implements CounterStore {
+  constructor(client: unknown, options?: RedisCounterStoreOptions);
+  get(scope: BudgetScope, key: string, bucket: string): Promise<number>;
+  add(scope: BudgetScope, key: string, bucket: string, amount: number): Promise<void>;
+  snapshot(bucket: string): Promise<{ total: number; perTenant: Record<string, number>; perModel: Record<string, number> }>;
+  clear(): Promise<void>;
 }
 
 // ---- Built-in filters ---------------------------------------------------

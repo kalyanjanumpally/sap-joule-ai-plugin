@@ -31,9 +31,20 @@
 //   'process'— never resets (until process restart)
 //   <number> — treat as a per-N-second sliding bucket (numeric ms)
 //
-// Storage is in-memory Maps. Per-process by default; for multi-instance
-// deployments plug the same accounting logic against Redis via `store`
-// (same shape as responseCache).
+// Multi-instance deployments: pass a `store` implementing the
+// CounterStore contract (see InMemoryCounterStore below). The default
+// is per-process in-memory. Redis is a natural fit — the store
+// contract maps directly to INCRBYFLOAT + SCAN.
+//
+// CounterStore contract — the ONE method a Redis adapter needs to
+// implement is atomic increment via `add(scope, key, bucket, amount)`.
+// Everything else (get, snapshot, clear) can be plain reads.
+//   {
+//     get      (scope, key, bucket)               → number   | Promise<number>
+//     add      (scope, key, bucket, amount)       → void     | Promise<void>
+//     snapshot (bucket)                           → { total, perTenant, perModel } | Promise<...>
+//     clear    ()                                 → void     | Promise<void>
+//   }
 
 const { DEFAULT_PRICING } = require('../pricing');
 
@@ -63,6 +74,7 @@ function costBudget(options = {}) {
     tenantOf = () => null,
     providerOf = () => null,
     onExceeded = null,
+    store: userStore,
   } = options;
 
   if (action !== 'throw' && action !== 'warn') {
@@ -75,13 +87,11 @@ function costBudget(options = {}) {
   }
 
   const priceTable = { ...DEFAULT_PRICING, ...pricing };
-  // key: `${bucket}|${scope}|${key}` -> accumulated spend in USD (or currency).
-  const counters = new Map();
+  const store = userStore ?? new InMemoryCounterStore();
 
   function currentBucket() {
     if (window === 'process') return 'process';
     if (typeof window === 'number') {
-      // Sliding N-second window bucket
       return String(Math.floor(Date.now() / (window * 1000)));
     }
     const now = new Date();
@@ -91,13 +101,6 @@ function costBudget(options = {}) {
     return iso.slice(0, 10);
   }
 
-  function get(scope, key) {
-    return counters.get(`${currentBucket()}|${scope}|${key}`) ?? 0;
-  }
-  function add(scope, key, cost) {
-    const k = `${currentBucket()}|${scope}|${key}`;
-    counters.set(k, (counters.get(k) ?? 0) + cost);
-  }
   // Resolve a limit for a given scope+key, with a `default` fallback lookup
   // for perTenant/perModel maps.
   function limitFor(scope, key) {
@@ -109,10 +112,10 @@ function costBudget(options = {}) {
     return null;
   }
 
-  function checkAndMaybeThrow(scope, key) {
+  async function checkAndMaybeThrow(scope, key) {
     const limit = limitFor(scope, key);
     if (limit == null) return;
-    const spent = get(scope, key);
+    const spent = await store.get(scope, key, currentBucket());
     if (spent >= limit) {
       const err = new BudgetExceededError(scope, key, spent, limit, currency);
       if (onExceeded) {
@@ -130,24 +133,28 @@ function costBudget(options = {}) {
          + ((outputTokens ?? 0) / pricingUnit) * p.output;
   }
 
-  function record({ tenant, model, cost }) {
-    add('total', 'total', cost);
-    if (tenant) add('perTenant', tenant, cost);
-    if (model)  add('perModel',  model,  cost);
+  async function record({ tenant, model, cost }) {
+    const bucket = currentBucket();
+    await store.add('total', 'total', bucket, cost);
+    if (tenant) await store.add('perTenant', tenant, bucket, cost);
+    if (model)  await store.add('perModel',  model,  bucket, cost);
     // Post-record violation check — fires onExceeded for the crossing tick
     // even if the pre-call check hadn't caught it (this call is what pushed
     // us over the line).
     const violations = [];
     if (limitFor('total', 'total') != null) {
-      const s = get('total', 'total'); const l = limitFor('total', 'total');
+      const s = await store.get('total', 'total', bucket);
+      const l = limitFor('total', 'total');
       if (s > l) violations.push({ scope: 'total', key: 'total', current: s, limit: l });
     }
     if (tenant && limitFor('perTenant', tenant) != null) {
-      const s = get('perTenant', tenant); const l = limitFor('perTenant', tenant);
+      const s = await store.get('perTenant', tenant, bucket);
+      const l = limitFor('perTenant', tenant);
       if (s > l) violations.push({ scope: 'perTenant', key: tenant, current: s, limit: l });
     }
     if (model && limitFor('perModel', model) != null) {
-      const s = get('perModel', model); const l = limitFor('perModel', model);
+      const s = await store.get('perModel', model, bucket);
+      const l = limitFor('perModel', model);
       if (s > l) violations.push({ scope: 'perModel', key: model, current: s, limit: l });
     }
     for (const v of violations) {
@@ -165,9 +172,9 @@ function costBudget(options = {}) {
     const model  = ctx.request.model ?? null;
 
     // Pre-call check — refuse if we're already over any applicable limit.
-    checkAndMaybeThrow('total',    'total');
-    if (tenant) checkAndMaybeThrow('perTenant', tenant);
-    if (model)  checkAndMaybeThrow('perModel',  model);
+    await checkAndMaybeThrow('total',    'total');
+    if (tenant) await checkAndMaybeThrow('perTenant', tenant);
+    if (model)  await checkAndMaybeThrow('perModel',  model);
 
     if (ctx.method === 'stream') {
       const iter = await next();
@@ -175,7 +182,7 @@ function costBudget(options = {}) {
         for await (const chunk of iter) {
           if (chunk?.type === 'done' && chunk.usage) {
             const usedModel = chunk.model ?? model;
-            record({
+            await record({
               tenant, model: usedModel,
               cost: costOf({
                 inputTokens: chunk.usage.input_tokens,
@@ -192,7 +199,7 @@ function costBudget(options = {}) {
     const result = await next();
     if (result?.usage && ctx.method === 'chat') {
       const usedModel = result.model ?? model;
-      record({
+      await record({
         tenant, model: usedModel,
         cost: costOf({
           inputTokens: result.usage.input_tokens,
@@ -204,37 +211,156 @@ function costBudget(options = {}) {
     return result;
   };
 
-  mw.spent = (scope, key) => get(scope, key);
-  mw.spentTotal = () => get('total', 'total');
-  // Full snapshot of the CURRENT window across all known scopes/keys.
-  // Uses the bucket prefix to filter to the active window.
+  // Introspection methods — thin passthroughs to the store. Return
+  // whatever the store returns: sync value for InMemoryCounterStore,
+  // Promise for async stores like Redis. Callers on async stores must
+  // await; callers on the default in-memory store may use sync.
+  mw.spent = (scope, key) => store.get(scope, key, currentBucket());
+  mw.spentTotal = () => store.get('total', 'total', currentBucket());
   mw.snapshot = () => {
     const bucket = currentBucket();
-    const out = { window: bucket, total: 0, perTenant: {}, perModel: {}, currency };
-    for (const [k, v] of counters) {
-      if (!k.startsWith(bucket + '|')) continue;
-      const [, scope, key] = k.split('|');
-      if (scope === 'total')     out.total = v;
-      else if (scope === 'perTenant') out.perTenant[key] = v;
-      else if (scope === 'perModel')  out.perModel[key]  = v;
+    const inner = store.snapshot(bucket);
+    // Wrap synchronous stores' output; pass promises through unchanged.
+    if (inner && typeof inner.then === 'function') {
+      return inner.then((s) => ({ window: bucket, currency, ...s }));
     }
-    return out;
+    return { window: bucket, currency, ...inner };
   };
-  mw.reset = () => { counters.clear(); };
+  mw.reset = () => store.clear();
   mw.limitFor = (scope, key) => limitFor(scope, key);
+  mw.store = store;
   mw.asMcpResource = () => ({
     uri: 'config://budget',
     name: 'LLM cost budget',
     description: 'Current-window spend + configured limits.',
     mimeType: 'application/json',
-    handler: () => ({
+    handler: async () => ({
       window,
       limits,
       currency,
-      current: mw.snapshot(),
+      current: await mw.snapshot(),
     }),
   });
   return mw;
 }
 
-module.exports = { costBudget, BudgetExceededError };
+// ---- default in-memory store -------------------------------------------
+
+class InMemoryCounterStore {
+  constructor() {
+    // key: `${bucket}|${scope}|${key}` -> accumulated spend in USD.
+    this.counters = new Map();
+  }
+  get(scope, key, bucket) {
+    return this.counters.get(`${bucket}|${scope}|${key}`) ?? 0;
+  }
+  add(scope, key, bucket, amount) {
+    const k = `${bucket}|${scope}|${key}`;
+    this.counters.set(k, (this.counters.get(k) ?? 0) + amount);
+  }
+  snapshot(bucket) {
+    const out = { total: 0, perTenant: {}, perModel: {} };
+    const prefix = bucket + '|';
+    for (const [k, v] of this.counters) {
+      if (!k.startsWith(prefix)) continue;
+      const [, scope, key] = k.split('|');
+      if (scope === 'total')          out.total = v;
+      else if (scope === 'perTenant') out.perTenant[key] = v;
+      else if (scope === 'perModel')  out.perModel[key]  = v;
+    }
+    return out;
+  }
+  clear() { this.counters.clear(); }
+}
+
+// ---- Redis-backed store ------------------------------------------------
+//
+// Works with any ioredis-shaped client exposing:
+//   client.get(key)                     → Promise<string|null>
+//   client.incrbyfloat(key, amount)     → Promise<string>
+//   client.expire(key, seconds)         → Promise<any>
+//   client.scan(cursor, ...args)        → Promise<[cursor, keys[]]>
+//   client.mget(...keys)                → Promise<(string|null)[]>
+//   client.del(...keys)                 → Promise<number>
+//
+// Redis key layout: `${namespace}:${bucket}|${scope}|${key}` — identical
+// to the in-memory bucket-prefixed key format, so SCAN with pattern
+// `${namespace}:${bucket}|*` cleanly returns only the active window.
+//
+//   const redis = new Redis(process.env.REDIS_URL);
+//   const budget = costBudget({
+//     limits: { perTenant: { default: 100 } },
+//     store: new RedisCounterStore(redis, { namespace: 'llm:budget', keyTtlSeconds: 86400 * 40 }),
+//   });
+//
+// keyTtlSeconds ensures old-window keys age out on their own — set it
+// to comfortably longer than your window (default 40 days, which covers
+// the widest 'month' window with margin).
+class RedisCounterStore {
+  constructor(client, options = {}) {
+    if (!client) throw new Error('RedisCounterStore: client is required.');
+    this.client = client;
+    this.namespace   = options.namespace   ?? 'llm:budget';
+    this.keyTtlSeconds = options.keyTtlSeconds ?? 60 * 60 * 24 * 40;
+    this.scanCount   = options.scanCount   ?? 200;
+  }
+  _key(bucket, scope, key) {
+    return `${this.namespace}:${bucket}|${scope}|${key}`;
+  }
+  async get(scope, key, bucket) {
+    const v = await this.client.get(this._key(bucket, scope, key));
+    return v == null ? 0 : parseFloat(v);
+  }
+  async add(scope, key, bucket, amount) {
+    if (amount === 0) return;
+    const k = this._key(bucket, scope, key);
+    await this.client.incrbyfloat(k, amount);
+    // Refresh TTL so a long-lived bucket doesn't stick around forever
+    // once nobody's writing to it.
+    if (this.keyTtlSeconds > 0) {
+      await this.client.expire(k, this.keyTtlSeconds);
+    }
+  }
+  async snapshot(bucket) {
+    const pattern = `${this.namespace}:${bucket}|*`;
+    const keys = [];
+    let cursor = '0';
+    do {
+      // ioredis: client.scan(cursor, 'MATCH', pattern, 'COUNT', count) → [next, keys[]]
+      const res = await this.client.scan(cursor, 'MATCH', pattern, 'COUNT', this.scanCount);
+      cursor = Array.isArray(res) ? res[0] : res.cursor;
+      const batch = Array.isArray(res) ? res[1] : res.keys;
+      for (const k of batch) keys.push(k);
+    } while (cursor !== '0' && cursor !== 0);
+
+    const out = { total: 0, perTenant: {}, perModel: {} };
+    if (keys.length === 0) return out;
+    const values = await this.client.mget(...keys);
+    for (let i = 0; i < keys.length; i++) {
+      const stripped = keys[i].slice(this.namespace.length + 1); // drop "ns:"
+      const parts = stripped.split('|');
+      if (parts.length !== 3) continue;
+      const [, scope, subkey] = parts;
+      const v = parseFloat(values[i] ?? '0');
+      if (!Number.isFinite(v)) continue;
+      if (scope === 'total')          out.total = v;
+      else if (scope === 'perTenant') out.perTenant[subkey] = v;
+      else if (scope === 'perModel')  out.perModel[subkey]  = v;
+    }
+    return out;
+  }
+  async clear() {
+    // Delete every key under the namespace — used for tests / manual admin.
+    // Scans in batches to avoid blocking Redis on large keyspaces.
+    const pattern = `${this.namespace}:*`;
+    let cursor = '0';
+    do {
+      const res = await this.client.scan(cursor, 'MATCH', pattern, 'COUNT', this.scanCount);
+      cursor = Array.isArray(res) ? res[0] : res.cursor;
+      const batch = Array.isArray(res) ? res[1] : res.keys;
+      if (batch.length > 0) await this.client.del(...batch);
+    } while (cursor !== '0' && cursor !== 0);
+  }
+}
+
+module.exports = { costBudget, BudgetExceededError, InMemoryCounterStore, RedisCounterStore };

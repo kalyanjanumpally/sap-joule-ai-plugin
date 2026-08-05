@@ -4,6 +4,46 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.30.0] — 2026-08-05
+
+### Added
+
+- **Pluggable counter storage for `costBudget` — `store` option + `RedisCounterStore` + `InMemoryCounterStore`.** Closes the single-process disclaimer from 1.29.0. Multiple app instances (Kubernetes replicas, blue/green deploys, etc.) can now share a single spend ledger via Redis so per-tenant / per-model / total ceilings hold across the fleet.
+
+  ```js
+  const Redis = require('ioredis');
+  const { costBudget, RedisCounterStore } = require('@saptarishi/cds-plugin-llm');
+
+  const redis = new Redis(process.env.REDIS_URL);
+  const budget = costBudget({
+    limits: { total: 1000, perTenant: { default: 100 } },
+    window: 'day',
+    store: new RedisCounterStore(redis, {
+      namespace:     'llm:budget',
+      keyTtlSeconds: 60 * 60 * 24 * 40,   // covers month windows with margin
+    }),
+  });
+  llm.use(budget);
+  ```
+
+  - **`RedisCounterStore(client, { namespace, keyTtlSeconds, scanCount })`** — accepts any ioredis-shaped client. Uses `INCRBYFLOAT` for atomic increments (multi-instance safe), `SCAN + MGET` for snapshots, and `EXPIRE` on every write so old-window keys age out on their own (no cron / manual cleanup).
+  - **`InMemoryCounterStore`** — the default per-process store, now exported so consumers can subclass it or use it as the reference impl for their own adapter.
+  - **`CounterStore` contract** — four methods: `get(scope, key, bucket)`, `add(scope, key, bucket, amount)`, `snapshot(bucket)`, `clear()`. Each may return sync or `Promise` — the middleware `await`s uniformly. HANA / DynamoDB / Postgres adapters plug in the same way.
+
+- **15 new tests** covering `InMemoryCounterStore` (add / get / snapshot / clear), the async-store contract path (proves `spent()`, `snapshot()`, `reset()` accept promises), `RedisCounterStore` against a mock ioredis client (INCRBYFLOAT, namespaced keys, TTL refresh, add(0) no-op, empty snapshot, SCAN-based clear, cross-bucket isolation), and end-to-end integration (two independent budget middlewares sharing a Redis store agree on total spend and refuse over-limit calls on either instance).
+
+### Changed
+
+- **BREAKING (minor):** `costBudget` introspection methods (`spent`, `spentTotal`, `snapshot`, `reset`) now delegate to the store. With the default `InMemoryCounterStore` they remain synchronous; with an async store (e.g. `RedisCounterStore`) they return `Promise`s. Callers using the default store don't need code changes; callers passing a custom store must `await` these methods.
+- **BREAKING (minor):** `asMcpResource().handler` is now `async` (must `await` store I/O). Existing MCP integrations already await handlers so no code changes are needed there; direct sync callers must add `await`.
+- Recommended chain ordering unchanged: `guardrails → costBudget → usageMetering → responseCache → provider`.
+
+### Notes
+
+- `RedisCounterStore.clear()` uses `SCAN + DEL` in batches (not `FLUSHDB`) — safe to share Redis with other apps, only touches keys under the configured `namespace`.
+- The Redis store's per-key TTL is refreshed on every `add()`. Buckets that stop receiving writes will expire naturally after `keyTtlSeconds`; there's no background sweeper.
+- Race window: pre-call check + record are still non-atomic across instances — a small number of concurrent requests may all pass the check-and-then-record boundary before any of them records their cost. Acceptable for soft cost-control ceilings; use a tighter limit if strict.
+
 ## [1.29.0] — 2026-08-05
 
 ### Added

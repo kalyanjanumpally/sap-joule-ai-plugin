@@ -52,6 +52,9 @@ module.exports = {
   // Cost budgets + alerts — per-tenant/model/total ceilings (new in 1.29.0)
   costBudget: require('./middleware/costBudget').costBudget,
   BudgetExceededError: require('./middleware/costBudget').BudgetExceededError,
+  // Pluggable budget counter stores — Redis for multi-instance (new in 1.30.0)
+  InMemoryCounterStore: require('./middleware/costBudget').InMemoryCounterStore,
+  RedisCounterStore: require('./middleware/costBudget').RedisCounterStore,
   // Prompt-template registry (new in 1.8.0)
   PromptRegistry: require('./promptRegistry').PromptRegistry,
   builtInPrompts: require('./promptRegistry').builtInPrompts,
