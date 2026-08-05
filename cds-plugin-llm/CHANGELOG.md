@@ -4,6 +4,62 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0] — 2026-08-05
+
+### Added
+
+- **`Agent` class + `runAgents({ coordinator, agents, input, ... })` — multi-agent orchestration on top of `runTools()`.** Wire multiple specialist agents (each with its own LLM + tools + system prompt) behind a supervisor coordinator that routes tasks to the right specialist. Fits SAP procurement workflows where a supervisor routes to contract-lookup, price-analyst, compliance-checker specialists — each backed by whichever LLM (cheap vs smart) suits its role.
+
+  ```js
+  const { Agent, runAgents } = require('@saptarishi/cds-plugin-llm');
+
+  const contractLookup = new Agent({
+    name: 'contract-lookup', llm: cheapLlm,
+    description: "Answers questions about supplier contracts.",
+    system: 'You are a procurement specialist. Use the tools to look up contracts.',
+    tools: [/* hybridSearchTool, ... */],
+  });
+  const priceAnalyst = new Agent({ name: 'price-analyst', llm: smartLlm, description: '...', tools: [...] });
+  const compliance   = new Agent({ name: 'compliance-checker', llm: smartLlm, description: '...' });
+
+  const { text, trace } = await runAgents({
+    coordinator: smartLlm,
+    agents: [contractLookup, priceAnalyst, compliance],
+    input: 'For PO 4500000123 draft a compliance memo including price analysis.',
+  });
+  // trace: [{ agent: 'contract-lookup', question, answer, isError }, ...]
+  ```
+
+- **How it works.** `runAgents` synthesizes one tool per agent (`invoke_<name>`) with a single `question: string` parameter, then runs `runTools()` on the coordinator with those tools. Each specialist call goes through the tool's `run()`, which forwards the coordinator's question to the agent's own `run({ input })` method — and that in turn calls `runTools()` internally if the agent has its own tools. So it's tool-loops all the way down; every existing runTools guarantee (usage aggregation, `maxSteps` cap, error surfacing) still holds.
+
+- **`Agent` class** — named specialist wrapping an LLM + optional tools + system prompt:
+  - `name` must match `/^[a-zA-Z0-9_-]+$/` (LLM tool-name rules).
+  - `description` shown to the coordinator — used to decide when to invoke.
+  - `tools` optional — a tool-less agent just does a single `chat()` with the input as the user message.
+  - `maxSteps` bounds the agent's own tool loop (default 10).
+  - `model` overrides the agent's LLM's default model per-agent.
+
+- **Duck-typed agents welcome** — anything with `{ name, description, run({ input }) => Promise<string | { text }> }` counts as an agent. Plug in non-LLM workers (a SQL query engine, a rules engine, a webhook caller) alongside real `Agent` instances. `runAgents` unwraps `.text` if the run returns an object.
+
+- **Coordinator system prompt** — the default `DEFAULT_COORDINATOR_SYSTEM` is exported so callers can compose. Override per call via `system`. Emphasizes: pick the right specialist, don't answer the specialist's question yourself, admit when no specialist fits.
+
+- **`onAgentInvocation` hook** — fires with `{ agent, question }` every time the coordinator invokes a specialist. Perfect for observability (tracing, OTel spans, per-agent cost lines in `usageMetering`).
+
+- **Compact trace** — the returned `result.trace` is one entry per specialist call in invocation order: `{ agent, question, answer, isError }`. Callers who want the raw `runTools`-style tool-call array can read `result.toolCalls` on individual `Agent.run` returns.
+
+- **Errors surface cleanly** — a specialist throwing → `trace[i].isError: true` with the exception message; the coordinator sees the same message as tool-result content and can decide whether to try another specialist or produce a fallback answer.
+
+- **TS defs**: `Agent`, `AgentOptions`, `AgentRunResult`, `AgentLike` (duck-typed), `RunAgentsOptions`, `RunAgentsResult`, `DEFAULT_COORDINATOR_SYSTEM` string constant.
+
+- **22 new tests (564 total)**: `Agent` construction validation (name regex, required description, LLM, tools shape, maxSteps bounds), tool-less agent single-chat path, non-string input rejection, model override propagation, tool-loop happy path via delegation to `runTools()`. `runAgents` validation (coordinator, agents array, input, per-agent required fields, duplicate name detection), single-specialist happy path with trace assertion, multi-step routing across two specialists in sequence, duck-typed non-Agent workers, `onAgentInvocation` firing, custom + default coordinator system prompt, specialist throwing surfaces as `isError: true`, coordinator supplying bad tool-call args → clean error not crash.
+
+### Notes
+
+- Additive — `^1.26` consumers bump to `^1.27` with zero code changes. Nothing changes for callers who don't use `Agent` / `runAgents`.
+- Coordinator choice matters: use a smart model (Claude Opus, GPT-4o, Gemini Pro) for the supervisor because the routing decision benefits from strong tool-selection reasoning. Specialists can use cheap models (Haiku, Gemini Flash, Groq's `llama-3.1-8b`) where their scope is narrow.
+- Latency is additive — each specialist invocation adds one full tool-loop plus one coordinator turn. For latency-sensitive paths, use `runTools` directly with all specialist tools flattened onto a single LLM instead. `runAgents` shines when specialists' contexts, models, or tools legitimately differ.
+- Every layer respects the existing `usageMetering` + `responseCache` middleware since both agent and coordinator LLMs are regular `LLMService` instances — coordinator + specialist requests all get metered and cached separately.
+
 ## [1.26.0] — 2026-08-05
 
 ### Added

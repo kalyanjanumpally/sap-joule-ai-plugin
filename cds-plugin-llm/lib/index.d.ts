@@ -664,6 +664,100 @@ export interface RunToolsResult {
 export function runTools(options: RunToolsOptions): Promise<RunToolsResult>;
 
 // ---------------------------------------------------------------------------
+// Multi-agent orchestration (new in v1.27.0)
+// ---------------------------------------------------------------------------
+
+export interface AgentOptions {
+  /** Short slug used by the coordinator to route (matches `/^[a-zA-Z0-9_-]+$/`). */
+  name: string;
+  /** One-line hint for the coordinator explaining when to invoke this agent. */
+  description: string;
+  /** LLM used by this specialist. May differ per-agent (cheap workers, smart supervisor). */
+  llm: LLMService;
+  /** System prompt for the agent's own tool-use loop. */
+  system?: string;
+  /** Tools this agent can call. Same shape as runTools' tools. Omit for a tool-less agent. */
+  tools?: RunnableTool[];
+  /** Safety cap on the agent's tool-loop turns. Default 10. */
+  maxSteps?: number;
+  /** Optional model override. */
+  model?: string;
+}
+
+export interface AgentRunResult {
+  text: string;
+  steps: number;
+  toolCalls: Array<{ id: string; name: string; input: unknown; result: string; isError: boolean }>;
+  usage: { input_tokens?: number; output_tokens?: number };
+  model?: string;
+}
+
+/**
+ * Named specialist wrapping an LLM + optional tools + system prompt into a
+ * unit the coordinator can invoke. See `runAgents` for the supervisor loop.
+ * @since 1.27.0
+ */
+export class Agent {
+  constructor(options: AgentOptions);
+  readonly name: string;
+  readonly description: string;
+  readonly llm: LLMService;
+  readonly system: string | null;
+  readonly tools: RunnableTool[];
+  readonly maxSteps: number;
+  readonly model: string | null;
+  run(params: { input: string }): Promise<AgentRunResult>;
+}
+
+/** Duck-typed agent — anything with `{ name, description, run(input) => Promise<string | { text }> }` is a valid worker. */
+export interface AgentLike {
+  name: string;
+  description: string;
+  run(params: { input: string }): Promise<string | { text: string }>;
+}
+
+export interface RunAgentsOptions {
+  /** LLM used to coordinate the specialists. Usually a smarter/pricier model. */
+  coordinator: LLMService;
+  /** Array of Agent instances or duck-typed { name, description, run }. */
+  agents: Array<Agent | AgentLike>;
+  /** The top-level user task. */
+  input: string;
+  /** Override the default coordinator system prompt. */
+  system?: string;
+  /** Safety cap on coordinator turns. Default 20. */
+  maxSteps?: number;
+  /** Optional per-turn observer (mirrors runTools' `onStep`). */
+  onStep?: (info: { step: number; response: ChatResponse }) => void | Promise<void>;
+  /** Fired every time the coordinator invokes a specialist — good for observability. */
+  onAgentInvocation?: (info: { agent: string; question: string }) => void | Promise<void>;
+  /** Any other chat-request options (model, maxTokens, cache, ...) applied to coordinator calls. */
+  [k: string]: unknown;
+}
+
+export interface RunAgentsResult {
+  text: string;
+  steps: number;
+  /** One entry per specialist call, in invocation order. */
+  trace: Array<{ agent: string; question: string | null; answer: string; isError: boolean }>;
+  usage: { input_tokens?: number; output_tokens?: number };
+  model?: string;
+  stopReason?: string;
+}
+
+/**
+ * Supervisor pattern — each agent is presented to the coordinator as a
+ * tool (`invoke_<name>`), and `runTools` on the coordinator handles the
+ * routing loop. Returns the coordinator's final text plus a compact trace
+ * of every specialist invocation.
+ * @since 1.27.0
+ */
+export function runAgents(options: RunAgentsOptions): Promise<RunAgentsResult>;
+
+/** The default coordinator system prompt shipped with runAgents(). Override via options.system. */
+export const DEFAULT_COORDINATOR_SYSTEM: string;
+
+// ---------------------------------------------------------------------------
 // Built-in middleware helpers (new in v1.3.0)
 // ---------------------------------------------------------------------------
 

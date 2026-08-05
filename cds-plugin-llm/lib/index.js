@@ -27,6 +27,10 @@ module.exports = {
   pdfFromBase64,
   // Tool runner — automatic multi-turn agent loop (new in 1.1.0)
   runTools,
+  // Multi-agent orchestration (new in 1.27.0)
+  Agent: require('./agents').Agent,
+  runAgents: require('./agents').runAgents,
+  DEFAULT_COORDINATOR_SYSTEM: require('./agents').DEFAULT_COORDINATOR_SYSTEM,
   // Built-in middleware helpers (new in 1.3.0)
   rateLimit: require('./middleware/rateLimit').rateLimit,
   otel: require('./middleware/otel').otel,
