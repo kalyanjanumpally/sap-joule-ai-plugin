@@ -4,6 +4,66 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.29.0] — 2026-08-05
+
+### Added
+
+- **`costBudget({ limits, window, action, currency, tenantOf, providerOf, onExceeded })` — cost-budget enforcement middleware.** Reads per-model pricing (same table as `usageMetering`), maintains per-window spend counters, and throws / warns / hooks when a limit is crossed. Ties directly into the existing `FinanceService.LlmSpend` accounting story from 1.22.0.
+
+  ```js
+  const { costBudget } = require('@saptarishi/cds-plugin-llm');
+
+  const budget = costBudget({
+    limits: {
+      total:     1000,                            // $1000/day across everything
+      perTenant: { default: 100, 'acme': 500 },   // $100/day/tenant; Acme gets $500
+      perModel:  { 'claude-opus-4-7': 50 },       // Opus capped at $50/day
+    },
+    window: 'day',
+    action: 'throw',                              // or 'warn'
+    tenantOf:  (ctx) => ctx.raw?.tenant,
+    onExceeded: (info) => cds.log('llm:budget').warn(info),
+  });
+  llm.use(budget);
+  ```
+
+- **`BudgetExceededError`** — thrown by pre-call refusal. Has `.code = 'BUDGET_EXCEEDED'`, `.scope`, `.key`, `.current`, `.limit`, `.currency`. Actionable: the CAP handler can `req.error(429, err.message)` to surface a clean 429 to the client.
+
+- **Two enforcement points**:
+  1. **Pre-call** — before the LLM request is dispatched, current window spend is compared against the limit. If already over, `BudgetExceededError` is thrown (or `onExceeded` fires with `action: 'block'`). The provider is never called.
+  2. **Post-call** — response's `usage` is priced via `DEFAULT_PRICING` (merged with `pricing` overrides) and added to counters. If this call pushed us over, `onExceeded` fires with `action: 'exceeded'` so downstream systems (Alertmanager, Slack, PagerDuty) know a threshold was crossed.
+
+- **Window rotations** — counters bucketed by ISO string prefix so they reset naturally:
+  - `'hour'` → `YYYY-MM-DDTHH`
+  - `'day'` (default) → `YYYY-MM-DD`
+  - `'month'` → `YYYY-MM`
+  - `'process'` → never resets (until process restart)
+  - `<n: number>` → per-N-second sliding window
+  No cron jobs needed; the next call in a new window sees a fresh bucket.
+
+- **Actions**:
+  - `'throw'` (default) — pre-call check throws `BudgetExceededError`; post-call `onExceeded` fires with `action: 'exceeded'`.
+  - `'warn'` — never blocks. `onExceeded` fires for both pre-call (`action: 'block'`) and post-call (`action: 'exceeded'`) so consumers can decide policy externally (Prometheus counter, Alertmanager, degraded-mode routing).
+
+- **Scopes**: `total`, `perTenant`, `perModel`. `perTenant.default` and `perModel.default` act as catch-alls when a specific key isn't listed. Named entries override the default.
+
+- **`.snapshot()`, `.spent()`, `.spentTotal()`, `.limitFor()`, `.reset()`** on the middleware for observability + tests. `.asMcpResource()` returns a `config://budget` MCP resource dumping `{ window, limits, currency, current: snapshot }` — mirrors `usageMetering.asMcpResource()`.
+
+- **Pricing** — same shape as `usageMetering`. Merges user overrides into `DEFAULT_PRICING`. Unknown models cost $0 but the request is still counted. `pricingUnit` defaults to 1M tokens; per-1K contract prices set `pricingUnit: 1000`.
+
+- **Streams counted** — the `done` chunk on `stream()` carries usage; the middleware records it same as chat.
+
+- **TS defs**: `BudgetLimits`, `BudgetWindow`, `BudgetScope`, `BudgetSnapshot`, `CostBudgetOptions`, `CostBudgetMiddleware`, `BudgetExceededError`.
+
+- **21 new tests (614 total)**: validation (bad action + bad window), basic pricing sums via `DEFAULT_PRICING` + overrides + unknown-model $0 fallback, pre-call refusal (total limit, perTenant scoping, `perTenant.default` catch-all, perModel scoping, LLM not called on refusal), warn mode (never blocks + `onExceeded` fires + `onExceeded` errors swallowed), `action: 'block' | 'exceeded'` distinction in the hook, `window: 'process'` never resets, `reset()` zeroes counters, `.snapshot()` shape, `.spent()` per-key, `.limitFor()` resolves named → default → null, `.asMcpResource()` shape, stream done-chunk accounting, clean composition with `usageMetering` in the same chain.
+
+### Notes
+
+- Additive — `^1.28` consumers bump to `^1.29` with zero code changes. `costBudget` is opt-in via `llm.use(...)`; nothing changes for callers not attaching it.
+- **Ordering**: recommended chain is `guardrails → costBudget → usageMetering → responseCache → provider`. costBudget should sit OUTER of the metering + cache so the refusal fires before either does bookkeeping. Cache hits still count against the budget (same cost as an uncached call) — swap that behavior by putting the cache OUTER of the budget if desired.
+- Per-process by default — for multi-instance CF / K8s deployments, aggregate the per-replica counters upstream (Prometheus + PromQL sum, or wire a shared Redis backend). The middleware is designed to be adapter-friendly; a Redis backend can ship in a future release without changing the API.
+- Budget checks are stateful and NOT strictly transactional — race conditions may allow one extra request through on the boundary of the check-and-record window. This is acceptable given the enforcement is a soft ceiling for cost control, not a per-transaction security guarantee.
+
 ## [1.28.0] — 2026-08-05
 
 ### Added

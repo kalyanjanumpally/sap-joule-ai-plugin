@@ -1115,6 +1115,79 @@ export class GuardrailBlockedError extends Error {
   readonly details: { stage: 'input' | 'output'; filterIndex: number };
 }
 
+// ---- Cost budget middleware (new in 1.29.0) -----------------------------
+
+export type BudgetWindow = 'hour' | 'day' | 'month' | 'process' | number;
+export type BudgetScope = 'total' | 'perTenant' | 'perModel';
+
+export interface BudgetLimits {
+  /** Aggregate ceiling across everything, in `currency`. */
+  total?: number;
+  /** Per-tenant limits. Use `default` for the catch-all; named keys for overrides. */
+  perTenant?: Record<string, number>;
+  /** Per-model limits, same shape as perTenant. */
+  perModel?: Record<string, number>;
+}
+
+export interface CostBudgetOptions {
+  limits?: BudgetLimits;
+  /** How often the counters reset. Default 'day'. */
+  window?: BudgetWindow;
+  /** 'throw' (default) → BudgetExceededError. 'warn' → onExceeded fires; request proceeds. */
+  action?: 'throw' | 'warn';
+  currency?: string;
+  /** Per-model prices — merged over `DEFAULT_PRICING`. Same shape as usageMetering. */
+  pricing?: Record<string, ModelPricing>;
+  pricingUnit?: number;
+  tenantOf?: (ctx: MiddlewareContext) => string | null | undefined;
+  providerOf?: (ctx: MiddlewareContext) => string | null | undefined;
+  /**
+   * Fires with `{ scope, key, current, limit, currency, action: 'block' | 'exceeded' }`.
+   * `'block'` = pre-call refusal; `'exceeded'` = post-call crossing.
+   */
+  onExceeded?: (info: { scope: BudgetScope; key: string; current: number; limit: number; currency: string; action: 'block' | 'exceeded' }) => void | Promise<void>;
+}
+
+export interface BudgetSnapshot {
+  window: string;
+  total: number;
+  perTenant: Record<string, number>;
+  perModel: Record<string, number>;
+  currency: string;
+}
+
+export interface CostBudgetMiddleware extends Middleware {
+  spent(scope: BudgetScope, key: string): number;
+  spentTotal(): number;
+  snapshot(): BudgetSnapshot;
+  limitFor(scope: BudgetScope, key: string): number | null;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://budget';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => { window: BudgetWindow; limits: BudgetLimits; currency: string; current: BudgetSnapshot };
+  };
+}
+
+/**
+ * Cost-budget enforcement middleware. Reads per-model pricing (same table as
+ * `usageMetering`), maintains per-window spend counters, and throws /
+ * warns / hooks when a limit is crossed.
+ * @since 1.29.0
+ */
+export function costBudget(options?: CostBudgetOptions): CostBudgetMiddleware;
+
+export class BudgetExceededError extends Error {
+  readonly code: 'BUDGET_EXCEEDED';
+  readonly scope: BudgetScope;
+  readonly key: string;
+  readonly current: number;
+  readonly limit: number;
+  readonly currency: string;
+}
+
 // ---- Built-in filters ---------------------------------------------------
 
 export interface BlocklistOptions {

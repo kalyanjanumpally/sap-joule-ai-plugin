@@ -49,6 +49,9 @@ module.exports = {
   guardrails: require('./middleware/guardrails').guardrails,
   GuardrailBlockedError: require('./middleware/guardrails').GuardrailBlockedError,
   filters: require('./filters'),
+  // Cost budgets + alerts — per-tenant/model/total ceilings (new in 1.29.0)
+  costBudget: require('./middleware/costBudget').costBudget,
+  BudgetExceededError: require('./middleware/costBudget').BudgetExceededError,
   // Prompt-template registry (new in 1.8.0)
   PromptRegistry: require('./promptRegistry').PromptRegistry,
   builtInPrompts: require('./promptRegistry').builtInPrompts,
