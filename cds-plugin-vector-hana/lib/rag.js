@@ -15,7 +15,7 @@
  */
 class RAG {
   constructor(options = {}) {
-    const { llm, store, systemInstructions, promptTemplate, mode, rerank } = options;
+    const { llm, store, systemInstructions, promptTemplate, mode, rerank, expand } = options;
     if (!llm || typeof llm.chat !== 'function') {
       throw new Error('RAG requires an `llm` option — an LLMService with a chat() method.');
     }
@@ -31,12 +31,16 @@ class RAG {
     if (rerank !== undefined && typeof rerank !== 'function') {
       throw new Error('RAG: rerank must be a function (hits, query) => Promise<hits> — or omit it.');
     }
+    if (expand !== undefined && typeof expand !== 'function') {
+      throw new Error('RAG: expand must be a function (query) => Promise<string[]> — or omit it.');
+    }
     this.llm = llm;
     this.store = store;
     this.systemInstructions = systemInstructions ?? DEFAULT_SYSTEM_INSTRUCTIONS;
     this.promptTemplate = promptTemplate ?? defaultPromptTemplate;
     this.mode = mode ?? 'vector';
     this.rerank = rerank ?? null;
+    this.expand = expand ?? null;
   }
 
   async retrieve({ query, topK = 5, filter, mode } = {}) {
@@ -44,23 +48,46 @@ class RAG {
       throw new Error('retrieve() requires { query: non-empty string }');
     }
     const effectiveMode = mode ?? this.mode;
-    let hits;
-    if (effectiveMode === 'hybrid') {
-      if (typeof this.store.hybridSearch !== 'function') {
-        throw new Error(
-          "RAG: mode='hybrid' requires a VectorStore with a hybridSearch() method (added in " +
-          "cds-plugin-vector-hana 0.8.0). Older stores fall back with mode='vector'.",
-        );
+
+    // Query expansion — call expand() once, get back a list of queries
+    // (original + hypothetical answer for HyDE, or original + paraphrases
+    // for multi-query). Retrieve for each in parallel, fuse via RRF.
+    const queries = this.expand
+      ? await this.expand(query).catch(() => [query])
+      : [query];
+    const effectiveQueries = Array.isArray(queries) && queries.length > 0 ? queries : [query];
+
+    // For fusion to have room to work, over-fetch candidateK per query.
+    // If there's just one query (no expansion), skip fusion and go direct.
+    const perQueryK = effectiveQueries.length > 1 ? Math.max(topK * 4, 10) : topK;
+
+    const searchOne = async (q) => {
+      if (effectiveMode === 'hybrid') {
+        if (typeof this.store.hybridSearch !== 'function') {
+          throw new Error(
+            "RAG: mode='hybrid' requires a VectorStore with a hybridSearch() method (added in " +
+            "cds-plugin-vector-hana 0.8.0). Older stores fall back with mode='vector'.",
+          );
+        }
+        return this.store.hybridSearch({ text: q, topK: perQueryK, filter });
       }
-      hits = await this.store.hybridSearch({ text: query, topK, filter });
+      return this.store.search({ text: q, topK: perQueryK, filter });
+    };
+
+    let hits;
+    if (effectiveQueries.length === 1) {
+      hits = await searchOne(effectiveQueries[0]);
     } else {
-      hits = await this.store.search({ text: query, topK, filter });
+      const lists = await Promise.all(effectiveQueries.map(searchOne));
+      const { reciprocalRankFusion } = require('./rrf');
+      hits = reciprocalRankFusion({ lists }).slice(0, Math.max(topK, perQueryK));
     }
+
     if (this.rerank) {
       hits = await this.rerank(hits, query);
-      // Rerankers are expected to return hits in the desired final order —
-      // trim to topK in case they return more (some LLM rerankers over-fetch).
       if (Array.isArray(hits) && hits.length > topK) hits = hits.slice(0, topK);
+    } else if (hits && hits.length > topK) {
+      hits = hits.slice(0, topK);
     }
     return hits ?? [];
   }

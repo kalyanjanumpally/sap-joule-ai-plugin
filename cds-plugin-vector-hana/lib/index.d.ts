@@ -163,6 +163,13 @@ export interface RAGOptions {
   mode?: RetrievalMode;
   /** Optional post-retrieval reranker. Runs on the top-K hits before augment. Since 0.8.0. */
   rerank?: Reranker;
+  /**
+   * Optional query-side expander. Called with the raw query; must return a
+   * list of related queries (typically 2-4 including the original). Each
+   * is retrieved for in parallel and results fused via RRF, then optionally
+   * reranked. Since 0.10.0. See `createQueryExpander`.
+   */
+  expand?: QueryExpander;
 }
 
 export interface RAGAnswerParams {
@@ -196,6 +203,7 @@ export class RAG {
   readonly promptTemplate: (hits: SearchHit[]) => string;
   readonly mode: RetrievalMode;
   readonly rerank: Reranker | null;
+  readonly expand: QueryExpander | null;
   retrieve<M = Record<string, unknown>>(p: {
     query: string;
     topK?: number;
@@ -254,6 +262,48 @@ export interface LlmRerankOptions {
  * @since 0.9.0
  */
 export function llmRerank<M = Record<string, unknown>>(options: LlmRerankOptions): Reranker<M>;
+
+// ---- Query expansion (0.10.0) -------------------------------------------
+
+/** Expander function — takes a query, returns 1+ related queries to run in parallel + fuse. */
+export type QueryExpander = (query: string) => Promise<string[]>;
+
+export interface QueryExpanderOptions {
+  /** LLM used to synthesize the expansion. Must implement `chat()`. */
+  llm: ChatLLM;
+  /**
+   * `'hyde'` — Hypothetical Document Embeddings: the LLM writes a short
+   * plausible answer to the question; both the question and the
+   * hypothetical answer are embedded and retrieved on. Boosts recall on
+   * abstract / under-specified queries.
+   *
+   * `'multi-query'` — Generate N distinct paraphrases and retrieve for
+   * each. Boosts recall on ambiguous queries by covering multiple
+   * phrasings the user might not have used.
+   *
+   * Default `'hyde'`.
+   */
+  strategy?: 'hyde' | 'multi-query';
+  /** For `multi-query`: number of paraphrases to generate. Default 3. */
+  n?: number;
+  /** Optional model override. */
+  model?: string;
+  /** Max tokens per LLM call. Default 200. */
+  maxTokens?: number;
+  /** Override the default system prompt (which encodes the strategy's instructions). */
+  systemInstructions?: string;
+  /** Custom user-prompt builder. Called with `{ query, n }`. */
+  buildUserPrompt?: (params: { query: string; n: number }) => string;
+}
+
+/**
+ * Factory that returns a `QueryExpander` compatible with `RAG.expand`.
+ * Robust to LLM failures — throws / malformed replies collapse back to
+ * `[originalQuery]` so nothing regresses below "no expansion". Nothing
+ * worse than the baseline ever ships.
+ * @since 0.10.0
+ */
+export function createQueryExpander(options: QueryExpanderOptions): QueryExpander;
 
 // ---- CDS @rag annotation plugin (0.5.0) --------------------------------
 

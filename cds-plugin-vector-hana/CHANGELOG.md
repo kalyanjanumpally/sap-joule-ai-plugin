@@ -4,6 +4,56 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-08-05
+
+### Added
+
+- **`createQueryExpander({ llm, strategy, n?, ... })` — query-side amplification.** The 0.9.0 CHANGELOG explicitly noted "query reformulation is not included" — this fills the gap. Two strategies:
+
+  - `'hyde'` (default) — **Hypothetical Document Embeddings.** The LLM writes a plausible short answer to the question; both the question AND the hypothetical answer get embedded and retrieved on. Works because a plausible answer clusters near real source documents in embedding space even when the question doesn't. Boosts recall on abstract / under-specified queries where the vocabulary gap between question and source is large.
+  - `'multi-query'` — Generate N distinct paraphrases of the question, retrieve for each in parallel, fuse via RRF. Boosts recall on ambiguous queries by covering multiple phrasings the user might not have used.
+
+  ```js
+  const { createQueryExpander, llmRerank, RAG } = require('@saptarishi/cds-plugin-vector-hana');
+
+  const rag = new RAG({
+    llm, store,
+    mode:   'hybrid',
+    expand: createQueryExpander({ llm, strategy: 'hyde' }),
+    rerank: llmRerank({ llm }),
+  });
+  const { answer, hits } = await rag.answer({ query: 'refund policy?', topK: 5 });
+  ```
+
+- **RAG.expand hook**. New `expand?: QueryExpander` option on the `RAG` constructor. `retrieve()` now:
+  1. Calls `expand(query)` → gets `string[]` of related queries (typically 2-4).
+  2. Runs each through `store.search()` or `store.hybridSearch()` in parallel with `candidateK = max(topK * 4, 10)`.
+  3. Fuses all lists via RRF.
+  4. Optionally reranks with `rerank`.
+  5. Returns top-K.
+
+  Per-query `candidateK` is only expanded when there's more than one query — the single-query fast path (no expander) is unchanged from 0.9.0.
+
+- **Robust to LLM failures.** Any error / empty reply from the expander collapses back to `[originalQuery]`. Malformed multi-query responses (< N valid lines) still produce the original + whatever parsed. Nothing worse than "no expansion" ever ships.
+
+- **Customization**:
+  - `model`, `maxTokens` — passed through to the expansion LLM call.
+  - `systemInstructions` — override the strategy's default rubric.
+  - `buildUserPrompt: ({ query, n }) => string` — write your own template.
+
+- **Line-cleaning for multi-query**: leading `1.`, `2)`, `-`, `*`, `•`, and similar markers are stripped from each paraphrase. Users don't need to add "no numbering" to their custom system prompts.
+
+- Exports: `createQueryExpander`. TS defs added: `QueryExpander`, `QueryExpanderOptions`, plus `expand?: QueryExpander` on `RAGOptions` and `readonly expand: QueryExpander | null` on the `RAG` class.
+
+- **21 new tests (182 total)**: construction validation (llm/strategy/n bounds), HyDE (returns `[query, hypothetical]`, LLM error fallback, empty-reply fallback, system-prompt shape), multi-query (parse N lines, strip bullets/numbering, cap at N even when LLM over-produces, LLM error fallback), customization (model + maxTokens forwarding, systemInstructions override, buildUserPrompt receives `{ query, n }`), RAG integration (expand called once per retrieve, results fused across queries, expand=null skips fusion, expand + rerank compose, expander throw → falls back cleanly, empty-array reply → falls back), constructor rejection of non-function expand, and one end-to-end integration test wiring HyDE → hybrid → llmRerank → answer with a real SqliteVectorStore + mock LLM.
+
+### Notes
+
+- Additive — `^0.9` consumers bump to `^0.10` with zero code changes. `expand` is opt-in; nothing changes for callers not using it.
+- The full recommended pipeline is now: **expand (HyDE or multi-query) → hybrid retrieve per query → RRF fuse → llmRerank → augment prompt → LLM answer**. Every stage is a separately shipped primitive that you can enable or disable independently.
+- Latency-wise: HyDE adds one LLM call (the hypothetical answer). Multi-query adds one LLM call PLUS N-fold retrieval fan-out. Point the expander at a fast small model (Haiku, Gemini Flash, Groq's `llama-3.1-8b-instant`) and the added latency stays under a second even in the worst case.
+- HyDE and multi-query are complementary; a future release may add `strategy: 'both'` that runs both and fuses everything. For now, pick one — HyDE typically wins on abstract/conceptual queries, multi-query on entity/keyword queries.
+
 ## [0.9.0] — 2026-08-05
 
 ### Added

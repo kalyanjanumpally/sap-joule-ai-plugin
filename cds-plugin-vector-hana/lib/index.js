@@ -6,4 +6,5 @@ module.exports = {
   activateCdsPlugin: require('./cdsPlugin').activate,
   reciprocalRankFusion: require('./rrf').reciprocalRankFusion,
   llmRerank: require('./llmRerank').llmRerank,
+  createQueryExpander: require('./queryExpander').createQueryExpander,
 };
