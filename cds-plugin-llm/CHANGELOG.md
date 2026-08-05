@@ -4,6 +4,66 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.25.0] — 2026-08-05
+
+### Added
+
+- **Batch API — bulk-async provider endpoints for cost-optimized offline workloads.** Anthropic's Message Batches and OpenAI's Batch API both ship at ~50% of sync-API prices with a 24h SLA. Ideal for nightly-scoring pipelines: bulk classification over invoices, offline enrichment of supplier records, overnight summarization jobs.
+
+  ```js
+  // Submit
+  const handle = await llm.batch({
+    requests: [
+      { customId: 'inv-1', system: 'Extract invoice line items...', messages: [...], maxTokens: 400 },
+      { customId: 'inv-2', system: 'Extract invoice line items...', messages: [...], maxTokens: 400 },
+      // ...
+    ],
+    completionWindow: '24h', // OpenAI only; Anthropic ignores this
+  });
+  // → { id, provider: 'anthropic'|'openai', status: 'in_progress', submittedAt, counts, raw }
+
+  // Poll
+  let status = handle;
+  while (status.status === 'in_progress') {
+    await new Promise(r => setTimeout(r, 30_000));
+    status = await llm.getBatch(handle.id);
+  }
+
+  // Retrieve
+  const results = await llm.getBatchResults(handle.id);
+  // → [{ customId, text, usage, model, ... } | { customId, error, errorType, ... }, ...]
+
+  // Cancel (if you need to)
+  await llm.cancelBatch(handle.id);
+  ```
+
+- **Unified `BatchRequest` / `BatchHandle` / `BatchResult` shapes** — same handles work regardless of provider. `handle.status` collapses each provider's finer states to `'in_progress' | 'completed' | 'failed' | 'canceled'`; `handle.counts` reports processing / succeeded / errored / canceled / expired.
+
+  Anthropic status mapping: `processing_status: 'in_progress'` → `'in_progress'`; `'ended'` → `'completed'`.
+
+  OpenAI status mapping: `validating` / `in_progress` / `finalizing` → `'in_progress'`; `completed` → `'completed'`; `failed` / `expired` → `'failed'`; `cancelling` / `cancelled` → `'canceled'`.
+
+- **Implemented on `AnthropicLLMService` (Message Batches)** — uses the official `@anthropic-ai/sdk` `messages.batches.{create, retrieve, results, cancel}`. `results()` returns an async iterable; entries are translated into unified `BatchResult`s with text extracted from `content: [{ type: 'text', text }]` blocks, `tool_use` blocks becoming `toolCalls`, `errored`/`canceled`/`expired` entries becoming `{ error, errorType }`.
+
+- **Implemented on `OpenAICompatibleLLMService` (OpenAI Batch API)** — the two-step flow: upload JSONL via `POST /v1/files` with `purpose: batch`, then `POST /v1/batches` with the `input_file_id`. `getBatchResults()` downloads `output_file_id`'s content, parses JSONL, and normalizes each line. Providers using this base but WITHOUT the batch endpoints (Groq, DeepSeek, Fireworks, Mistral) get the upstream 404/400 clearly. Users on those providers should stick to `chat()`.
+
+- **Argument validation on the `LLMService` base** — `batch({})` rejects empty request lists; each `requests[i]` must have a non-empty `customId` and non-empty `messages`. `getBatch('')` / `cancelBatch(null)` reject with clear errors.
+
+- **Clear "not supported" errors on providers without batch** — `Ollama`, `Gemini`, `Bedrock`, `GenAIHub`, and any subclass not overriding the internal `_batchSubmit` etc. throw a specific message pointing at the two supported providers and suggesting `chat()` instead.
+
+- **Middleware does NOT wrap batch calls** — the request lifecycle is fundamentally async. Per-request cost accounting fires when `getBatchResults()` runs (the sync `usageMetering` middleware won't see individual batch items). Consumers who need per-item accounting should iterate results and record manually.
+
+- **TS defs**: `BatchRequest`, `BatchHandle`, `BatchStatus`, `BatchItemRequest`, `BatchResult<D>`. Base class extended with `batch`, `getBatch`, `getBatchResults`, `cancelBatch`.
+
+- **15 new tests (517 total)**: argument validation (missing/empty requests, missing customId, missing messages, non-string id), "not supported" error on the base class, Anthropic (unified → Message Batches shape translation with system + maxTokens + model overrides, status normalization ended → completed, results with succeeded + errored, retrieve-before-ended → clear error, cancel), OpenAI-compatible (two-step submit: files then batches, status mapping across all 8 upstream states, retrieve-before-completed → clear error, JSONL parse with success + error entries, cancel POSTs to `/batches/{id}/cancel`).
+
+### Notes
+
+- Additive — `^1.24` consumers bump to `^1.25` with zero code changes. `batch()` is opt-in; nothing changes for callers not using it.
+- Anthropic Message Batches (2024-10) and OpenAI Batch API (2024-04) are provider-native features. The unified `BatchRequest` / `BatchHandle` / `BatchResult` shapes make provider-swap painless: your app writes to the unified API, and swapping `cds.requires.llm.kind` between `llm-anthropic` and `llm-openai-compatible` continues to work.
+- Batch pricing (per provider docs as of 2026-08): Anthropic ~50% of the equivalent sync `chat()` prices; OpenAI ~50% off. The exact discount varies per model — check the provider's pricing page for the specific model you're batching.
+- Batch results delivery is up to the provider's SLA: Anthropic's stated 24h has typically been minutes to hours in practice; OpenAI's varies from minutes to the full window depending on system load.
+
 ## [1.24.0] — 2026-08-05
 
 ### Added

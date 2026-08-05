@@ -292,6 +292,72 @@ export class LLMService {
   chat<D = unknown>(req: ChatRequest): Promise<ChatResponse<D>>;
   stream(req: ChatRequest): AsyncGenerator<StreamChunk, void, void>;
   embed(req: EmbedRequest): Promise<EmbedResponse>;
+  /**
+   * Submit a bulk-async batch to the provider's batch endpoint (~50% cheaper,
+   * 24h SLA). Returns a `BatchHandle` — poll `getBatch(id)` until
+   * `status === 'completed'`, then `getBatchResults(id)` returns the parsed
+   * results. Only implemented on Anthropic (Message Batches) and OpenAI-
+   * compatible providers whose endpoint speaks the OpenAI Batch API.
+   * @since 1.25.0
+   */
+  batch(req: BatchRequest): Promise<BatchHandle>;
+  getBatch(id: string): Promise<BatchHandle>;
+  getBatchResults<D = unknown>(id: string): Promise<BatchResult<D>[]>;
+  cancelBatch(id: string): Promise<BatchHandle>;
+}
+
+// ---- Batch API shapes (new in 1.25.0) ------------------------------------
+
+export interface BatchItemRequest {
+  /** Caller-assigned id — echoed back on every result. Unique within the batch. */
+  customId: string;
+  messages: Message[];
+  system?: string;
+  model?: string;
+  maxTokens?: number;
+  tools?: Tool[];
+  format?: unknown;
+  /** Anthropic thinking config; ignored on OpenAI. */
+  thinking?: unknown;
+}
+
+export interface BatchRequest {
+  requests: BatchItemRequest[];
+  /** OpenAI only. Default '24h'. Anthropic ignores this. */
+  completionWindow?: string;
+}
+
+export type BatchStatus = 'in_progress' | 'completed' | 'failed' | 'canceled';
+
+export interface BatchHandle {
+  id: string;
+  provider: 'anthropic' | 'openai';
+  status: BatchStatus;
+  submittedAt: string | number;
+  endedAt: string | number | null;
+  counts: {
+    processing: number;
+    succeeded: number;
+    errored: number;
+    canceled: number;
+    expired: number;
+  };
+  /** Raw provider response — inspect if you need something the unified shape doesn't cover. */
+  raw: unknown;
+}
+
+export interface BatchResult<D = unknown> {
+  customId: string;
+  text?: string;
+  data?: D;
+  toolCalls?: Array<{ id: string; name: string; input: unknown }>;
+  usage?: { input_tokens?: number; output_tokens?: number };
+  stopReason?: string;
+  model?: string;
+  /** Set when this specific item errored. `text` and other fields are absent. */
+  error?: string;
+  errorType?: 'errored' | 'canceled' | 'expired';
+  raw: unknown;
 }
 
 export class AnthropicLLMService extends LLMService {

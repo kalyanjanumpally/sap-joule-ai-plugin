@@ -338,4 +338,169 @@ OpenAICompatibleLLMService.prototype._embed = async function _embed({ model, inp
   return { embeddings, model: data.model ?? model };
 };
 
+// ---- Batch API (2024-04) -----------------------------------------------
+//
+// https://platform.openai.com/docs/api-reference/batch
+//
+// OpenAI's batch flow needs two calls: upload a JSONL file (each line is a
+// full /v1/chat/completions request with a custom_id) via POST /v1/files,
+// then create a batch pointing at that file via POST /v1/batches. Poll
+// GET /v1/batches/{id} until status='completed', then download the output
+// via the returned output_file_id from GET /v1/files/{id}/content.
+//
+// This code path uses the OpenAI URL scheme rooted at `this.baseUrl` — Groq
+// / Together / Fireworks / DeepSeek / Mistral currently do NOT support the
+// batch endpoints, so calling batch() there will surface the upstream 404
+// or 400 clearly. Users on those providers should stick to chat().
+
+OpenAICompatibleLLMService.prototype._batchSubmit = async function _batchSubmit(req) {
+  const url = this.baseUrl;
+  const headers = await this._headers();
+  const bearerHeaders = { ...headers };
+  delete bearerHeaders['content-type'];
+
+  // ---- 1. Upload JSONL --------------------------------------------------
+  const jsonl = req.requests.map(r => JSON.stringify({
+    custom_id: r.customId,
+    method: 'POST',
+    url: '/v1/chat/completions',
+    body: {
+      model: r.model ?? this.modelId,
+      messages: r.messages,
+      ...(r.system ? { messages: [{ role: 'system', content: r.system }, ...r.messages] } : {}),
+      ...(r.maxTokens ? { max_tokens: r.maxTokens } : {}),
+      ...(r.tools ? { tools: r.tools.map(t => ({ type: 'function', function: t })) } : {}),
+      ...(r.format ? { response_format: { type: 'json_object' } } : {}),
+    },
+  })).join('\n');
+
+  const form = new FormData();
+  form.append('purpose', 'batch');
+  form.append('file', new Blob([jsonl], { type: 'application/jsonl' }), 'batch.jsonl');
+
+  const filesRes = await fetch(`${url}/files`, {
+    method: 'POST',
+    headers: bearerHeaders,
+    body: form,
+  });
+  if (!filesRes.ok) {
+    await throwFromResponse(filesRes, `${this.options.kind ?? 'openai-compatible'} [files]`);
+  }
+  const fileData = await filesRes.json();
+
+  // ---- 2. Create batch --------------------------------------------------
+  const batchRes = await fetch(`${url}/batches`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      input_file_id: fileData.id,
+      endpoint: '/v1/chat/completions',
+      completion_window: req.completionWindow ?? '24h',
+    }),
+  });
+  if (!batchRes.ok) {
+    await throwFromResponse(batchRes, `${this.options.kind ?? 'openai-compatible'} [batches]`);
+  }
+  const batch = await batchRes.json();
+  return normalizeOpenAIBatchStatus(batch);
+};
+
+OpenAICompatibleLLMService.prototype._batchStatus = async function _batchStatus(id) {
+  const res = await fetch(`${this.baseUrl}/batches/${id}`, {
+    headers: await this._headers(),
+  });
+  if (!res.ok) {
+    await throwFromResponse(res, `${this.options.kind ?? 'openai-compatible'} [batches]`);
+  }
+  return normalizeOpenAIBatchStatus(await res.json());
+};
+
+OpenAICompatibleLLMService.prototype._batchResults = async function _batchResults(id) {
+  // First fetch the batch to get output_file_id.
+  const batch = await this._batchStatus(id);
+  if (batch.status !== 'completed') {
+    throw new Error(`batch ${id} is still ${batch.status} — poll until 'completed' before retrieving results.`);
+  }
+  const outputFileId = batch.raw?.output_file_id;
+  if (!outputFileId) return [];
+
+  const res = await fetch(`${this.baseUrl}/files/${outputFileId}/content`, {
+    headers: await this._headers(),
+  });
+  if (!res.ok) {
+    await throwFromResponse(res, `${this.options.kind ?? 'openai-compatible'} [files/content]`);
+  }
+  const text = await res.text();
+  return text
+    .split('\n')
+    .filter(l => l.trim().length > 0)
+    .map(line => {
+      try { return normalizeOpenAIBatchResultLine(JSON.parse(line)); }
+      catch { return null; }
+    })
+    .filter(Boolean);
+};
+
+OpenAICompatibleLLMService.prototype._batchCancel = async function _batchCancel(id) {
+  const res = await fetch(`${this.baseUrl}/batches/${id}/cancel`, {
+    method: 'POST',
+    headers: await this._headers(),
+  });
+  if (!res.ok) {
+    await throwFromResponse(res, `${this.options.kind ?? 'openai-compatible'} [batches/cancel]`);
+  }
+  return normalizeOpenAIBatchStatus(await res.json());
+};
+
+// OpenAI batch status → unified shape.
+// Their statuses: validating, in_progress, finalizing, completed, expired,
+// failed, cancelling, cancelled. We collapse to: in_progress | completed |
+// failed | canceled to match Anthropic's shape.
+function normalizeOpenAIBatchStatus(b) {
+  const status = mapOpenAIStatus(b.status);
+  const counts = b.request_counts ?? {};
+  return {
+    id: b.id,
+    provider: 'openai',
+    status,
+    submittedAt: b.created_at,
+    endedAt: b.completed_at ?? b.failed_at ?? b.cancelled_at ?? b.expired_at ?? null,
+    counts: {
+      processing: (b.request_counts?.total ?? 0) - (b.request_counts?.completed ?? 0) - (b.request_counts?.failed ?? 0),
+      succeeded:  counts.completed ?? 0,
+      errored:    counts.failed    ?? 0,
+      canceled:   0,
+      expired:    0,
+    },
+    raw: b,
+  };
+}
+
+function mapOpenAIStatus(s) {
+  if (s === 'completed') return 'completed';
+  if (s === 'failed' || s === 'expired') return 'failed';
+  if (s === 'cancelling' || s === 'cancelled') return 'canceled';
+  return 'in_progress';
+}
+
+function normalizeOpenAIBatchResultLine(line) {
+  const customId = line.custom_id;
+  if (line.error) {
+    return { customId, error: line.error.message ?? String(line.error), errorType: 'errored', raw: line };
+  }
+  const body = line.response?.body;
+  if (!body) return { customId, error: 'no response body', errorType: 'errored', raw: line };
+  const text = body.choices?.[0]?.message?.content ?? '';
+  return {
+    customId,
+    text,
+    usage: body.usage
+      ? { input_tokens: body.usage.prompt_tokens, output_tokens: body.usage.completion_tokens }
+      : undefined,
+    stopReason: body.choices?.[0]?.finish_reason,
+    model: body.model,
+    raw: body,
+  };
+}
+
 module.exports = OpenAICompatibleLLMService;

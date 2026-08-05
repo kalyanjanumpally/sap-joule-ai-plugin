@@ -91,6 +91,63 @@ class LLMService extends cds.Service {
     yield* iter;
   }
 
+  // ---- Batch API (bulk-async offline workloads, new in 1.25.0) -------------
+  //
+  // Providers that support batch endpoints override the `_batch*` core methods
+  // below. Message Batches on Anthropic (~50% cheaper, 24h SLA) and Batch API
+  // on OpenAI (same trade-off) fit nightly-scoring pipelines: classification
+  // over many rows, offline enrichment, bulk summarization.
+  //
+  //   const handle = await llm.batch({ requests: [
+  //     { customId: 'inv-1', messages: [...], maxTokens: 200 },
+  //     { customId: 'inv-2', messages: [...], maxTokens: 200 },
+  //   ] });
+  //   // Poll until complete:
+  //   while ((await llm.getBatch(handle.id)).status === 'in_progress')
+  //     await new Promise(r => setTimeout(r, 30000));
+  //   const results = await llm.getBatchResults(handle.id);
+  //
+  // Middleware does NOT wrap batch calls — the request path is fundamentally
+  // async and per-request cost accounting fires when getBatchResults() runs
+  // (the sync usageMetering middleware won't see individual batch items).
+  // Consumers who need per-item accounting should iterate results and record
+  // manually.
+
+  async batch(req) {
+    if (!req || !Array.isArray(req.requests) || req.requests.length === 0) {
+      throw new Error('batch() requires { requests: [{ customId, messages, ... }, ...] }');
+    }
+    for (const [i, r] of req.requests.entries()) {
+      if (!r || typeof r.customId !== 'string' || r.customId.length === 0) {
+        throw new Error(`batch(): requests[${i}].customId must be a non-empty string`);
+      }
+      if (!Array.isArray(r.messages) || r.messages.length === 0) {
+        throw new Error(`batch(): requests[${i}].messages must be a non-empty array`);
+      }
+    }
+    return this._batchSubmit(req);
+  }
+
+  async getBatch(id) {
+    if (typeof id !== 'string' || !id) throw new Error('getBatch(id) requires a non-empty string id');
+    return this._batchStatus(id);
+  }
+
+  async getBatchResults(id) {
+    if (typeof id !== 'string' || !id) throw new Error('getBatchResults(id) requires a non-empty string id');
+    return this._batchResults(id);
+  }
+
+  async cancelBatch(id) {
+    if (typeof id !== 'string' || !id) throw new Error('cancelBatch(id) requires a non-empty string id');
+    return this._batchCancel(id);
+  }
+
+  async _batchSubmit()  { throw batchNotSupported(this, 'batch'); }
+  async _batchStatus()  { throw batchNotSupported(this, 'getBatch'); }
+  async _batchResults() { throw batchNotSupported(this, 'getBatchResults'); }
+  async _batchCancel()  { throw batchNotSupported(this, 'cancelBatch'); }
+
   // ---- middleware runner (Koa-style compose) -------------------------------
 
   _runMiddleware(ctx, coreFn) {
@@ -188,6 +245,16 @@ class LLMService extends cds.Service {
   async _embed() {
     throw new Error(`${this.constructor.name} does not support embeddings`);
   }
+}
+
+function batchNotSupported(svc, method) {
+  const kind = svc.options?.kind ?? svc.constructor?.name ?? 'this';
+  return new Error(
+    `${kind} does not support ${method}(). Batch endpoints are only implemented on ` +
+    `AnthropicLLMService (Message Batches) and OpenAI-compatible providers whose endpoint ` +
+    `speaks the OpenAI Batch API. Use chat() instead — or open an issue if your provider ` +
+    `has a batch endpoint we could plug in.`,
+  );
 }
 
 module.exports = LLMService;
