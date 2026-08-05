@@ -74,6 +74,21 @@ curl -sS 'http://localhost:4004/finance/LlmSpend?$orderby=totalCost%20desc&$top=
 
 The middleware picks tenant from `cds.context.tenant` (populated by XSUAA on BTP) with a `'default'` fallback for local dev. Model prices come from the shipped `DEFAULT_PRICING` table — override in `srv/ai-service.js` if you have contract discounts.
 
+### Watch the response cache save money
+
+`srv/ai-service.js` also attaches `responseCache({ ttl: 1h })` alongside `usageMeteringToCap`. Every identical `chat()` call (same messages + system + tools + format + maxTokens) inside the 1-hour window returns instantly from the in-memory LRU. Cache hits get recorded in `FinanceService.LlmSpend` with `totalCost: 0` — and the metering summary tracks `totalCachedHits` + `totalCostSaved` so finance can see the savings.
+
+```sh
+# Ops dashboard
+curl -sS http://localhost:4004/cache-stats | jq
+# → { hits: 27, misses: 43, skips: 0, hitRate: 0.386, size: 43 }
+
+# Cache-hit spend rows
+curl -sS "http://localhost:4004/finance/LlmSpend?\$filter=totalCost%20eq%200&\$top=5" | jq
+```
+
+Multi-instance deployments (CF, Kyma, K8s) get per-replica caches by default; swap `responseCache({ store })` for a Redis / HANA cache table adapter to share hits across replicas.
+
 ## Provider by profile
 
 Configured in `package.json`:

@@ -3,6 +3,7 @@ const {
   imageFromBase64, imageFromUrl,
   pdfFromBase64, pdfFromUrl,
   usageMeteringToCap,
+  responseCache,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -35,11 +36,23 @@ Rationale must cite the specific field(s) driving the rating.`;
 // Module-scoped lazy singleton so the streaming Express route (registered in
 // AIService.init below) and the OData handlers share one LLM instance.
 //
-// On first connect, we attach the usageMeteringToCap middleware — every
-// chat/stream/embed call is now auto-persisted to FinanceService.LlmSpend
-// (projected from LlmUsage). Tenants come from cds.context.tenant when
-// XSUAA is bound; falls back to 'default' for local dev.
+// Middleware stack (top = OUTER, bottom = INNER):
+//
+//   usageMeteringToCap  — persists every request into FinanceService.LlmSpend.
+//                         Must be OUTER so it observes cache-hit responses on
+//                         the way back up the chain — those get recorded with
+//                         cost=0 and increment totalCachedHits + totalCostSaved.
+//   responseCache       — memoizes identical chat() calls. In-memory LRU with
+//                         a 1-hour TTL for the demo; swap for Redis / HANA
+//                         cache in a real BTP deployment via the `store` opt.
+//                         Streams + embeds + tool-turn responses skip the
+//                         cache automatically.
+//
+// The two together mean: every LLM call gets tracked, cache hits get billed
+// $0 in LlmSpend, and the demo can hit the same query twice and watch the
+// second one come back instantly + cost-free.
 let _llmPromise;
+let _cache;
 function getLLM() {
   if (!_llmPromise) {
     _llmPromise = cds.connect.to('llm').then((llm) => {
@@ -47,11 +60,16 @@ function getLLM() {
         tenantOf:   (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
         providerOf: (ctx) => ctx.raw?.providerAlias ?? cds.env.requires?.llm?.kind ?? null,
       }));
+      _cache = responseCache({ ttl: 60 * 60 * 1000 }); // 1 hour
+      llm.use(_cache);
       return llm;
     });
   }
   return _llmPromise;
 }
+
+/** Exported for `/ai/cache-stats` — a small ops-visible dashboard on the cache. */
+function getCache() { return _cache; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -141,6 +159,22 @@ module.exports = class AIService extends cds.ApplicationService {
         express.json({ limit: '1mb' }),
         makeStreamHandler(llm),
       );
+
+      // Ops dashboard for the response cache. Combined with the
+      // FinanceService.LlmSpend entity, this makes savings observable:
+      //   GET /finance/LlmSpend?$filter=totalCost eq 0  → cache-hit rows
+      //   GET /cache-stats                              → hit rate + size
+      cds.app.get('/cache-stats', (_req, res) => {
+        const cache = getCache();
+        if (!cache) return res.status(503).json({ error: 'cache not initialized yet' });
+        res.json({
+          hits:    cache.stats.hits,
+          misses:  cache.stats.misses,
+          skips:   cache.stats.skips,
+          hitRate: cache.hitRate(),
+          size:    cache.size(),
+        });
+      });
     }
 
     this.on('summarizePurchaseOrder', async (req) => {
