@@ -6,6 +6,7 @@ const {
   responseCache,
   Agent, runAgents,
   guardrails, filters,
+  costBudget, BudgetExceededError,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -91,6 +92,11 @@ Rules:
 let _llmPromise;
 let _cache;
 let _guardrails;
+let _budget;
+// Shared limits object — passed by reference to costBudget() so
+// FinanceService can mutate it live from LlmBudget rows without a
+// restart. costBudget reads from this via limitFor() on every call.
+const _budgetLimits = { total: undefined, perTenant: {}, perModel: {} };
 function getLLM() {
   if (!_llmPromise) {
     _llmPromise = cds.connect.to('llm').then((llm) => {
@@ -125,6 +131,23 @@ function getLLM() {
         },
       });
       llm.use(_guardrails);
+      // costBudget — starts empty; FinanceService.init() populates it from
+      // the LlmBudget entity once the DB is up. Sits OUTER of the meter so
+      // a refusal (BudgetExceededError) short-circuits before a $0 row would
+      // land in LlmSpend.
+      _budget = costBudget({
+        limits:   _budgetLimits,        // shared reference — FinanceService mutates this
+        window:   'day',
+        action:   'throw',
+        currency: 'USD',
+        tenantOf:   (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
+        onExceeded: (info) => {
+          cds.log('llm:budget')[info.action === 'block' ? 'warn' : 'info'](
+            `[budget] ${info.action}: ${info.scope}='${info.key}' — spent ${info.current.toFixed(4)} ${info.currency}, limit ${info.limit} ${info.currency}`,
+          );
+        },
+      });
+      llm.use(_budget);
       llm.use(usageMeteringToCap(cds, {
         tenantOf:   (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
         providerOf: (ctx) => ctx.raw?.providerAlias ?? cds.env.requires?.llm?.kind ?? null,
@@ -136,6 +159,10 @@ function getLLM() {
   }
   return _llmPromise;
 }
+
+/** Exported for FinanceService to install/refresh budget limits from the DB. */
+function getBudget() { return _budget; }
+function getBudgetLimits() { return _budgetLimits; }
 
 /** Exported for `/ai/cache-stats` — a small ops-visible dashboard on the cache. */
 function getCache() { return _cache; }
@@ -254,6 +281,26 @@ module.exports = class AIService extends cds.ApplicationService {
         const gr = getGuardrails();
         if (!gr) return res.status(503).json({ error: 'guardrails not initialized yet' });
         res.json(gr.stats);
+      });
+      // Budget dashboard — current-window spend + configured limits.
+      // Complements the OData `FinanceService.getBudgetStatus()` action
+      // with a simpler HTTP endpoint (no OData $inlinecount overhead) for
+      // dashboards / kubelet probes.
+      cds.app.get('/budget-status', async (_req, res) => {
+        const budget = getBudget();
+        if (!budget) return res.status(503).json({ error: 'budget not initialized yet' });
+        const snap = await budget.snapshot();
+        res.json({
+          window:   snap.window,
+          currency: snap.currency,
+          total:    { spent: snap.total, limit: budget.limitFor('total', 'total') },
+          perTenant: Object.entries(snap.perTenant).map(([key, spent]) => ({
+            key, spent, limit: budget.limitFor('perTenant', key),
+          })),
+          perModel: Object.entries(snap.perModel).map(([key, spent]) => ({
+            key, spent, limit: budget.limitFor('perModel', key),
+          })),
+        });
       });
     }
 
@@ -486,3 +533,9 @@ module.exports = class AIService extends cds.ApplicationService {
     return super.init();
   }
 };
+
+// Expose the budget middleware + shared limits object so FinanceService can
+// install limits + read live counters. Attached AFTER the class assignment
+// to avoid being clobbered by `module.exports = class AIService...`.
+module.exports.getBudget = getBudget;
+module.exports.getBudgetLimits = getBudgetLimits;

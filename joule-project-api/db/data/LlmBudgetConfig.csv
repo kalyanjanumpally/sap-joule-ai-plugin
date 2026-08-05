@@ -1,0 +1,6 @@
+ID;scope;keyName;windowKind;limitAmount;currency;action;enabled;notes
+total:total;total;total;day;500.0000;USD;throw;true;Aggregate daily ceiling across all LLM calls.
+perTenant:default;perTenant;default;day;50.0000;USD;throw;true;Catch-all daily limit for un-configured tenants.
+perTenant:acme;perTenant;acme;day;200.0000;USD;throw;true;Acme has a higher daily allowance under contract.
+perTenant:globex;perTenant;globex;day;100.0000;USD;warn;true;Globex is in soft-alert mode — log only, don't block.
+perModel:claude-opus-4-7;perModel;claude-opus-4-7;day;150.0000;USD;throw;true;Cap Opus (most expensive model) to $150/day.

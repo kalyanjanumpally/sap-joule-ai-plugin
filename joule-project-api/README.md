@@ -13,6 +13,10 @@ CAP backend for the **Procurement Copilot** Joule agent. Hosts LLM-backed action
 | `POST /procurement/SupplierContracts/ProcurementService.searchByMeaning` | **Semantic search over supplier contracts (auto-declared by `@rag`)** |
 | `POST /procurement/SupplierContracts/ProcurementService.askAbout` | **Q&A with cited sources over supplier contracts (auto-declared by `@rag`)** |
 | `GET  /finance/LlmSpend` | **Per-request LLM cost accounting — auto-persisted by `usageMeteringToCap` middleware. Queryable via OData: `$filter=tenant eq 'acme'`, `$orderby=totalCost desc`, etc.** |
+| `GET  /finance/LlmBudget` | **Admin-editable ceilings for the `costBudget` middleware. Each row is one limit — `scope` ∈ `{total, perTenant, perModel}`, `keyName`, `limitAmount`. Fiori list report annotated on the entity.** |
+| `POST /finance/getBudgetStatus` | **Live current-window spend — reads from the middleware's in-memory (or Redis) counters, NOT from the DB.** |
+| `POST /finance/reloadBudget` | **Re-read `LlmBudget` rows after admin edits. No restart needed.** |
+| `GET  /budget-status` | Lightweight JSON snapshot of budget spend + limits (same data as the OData action; no OData framing). Useful for K8s probes. |
 
 The `/ai/*` actions delegate to whichever LLM provider is configured under `cds.requires.llm` (see [`../cds-plugin-llm`](../cds-plugin-llm/README.md)). The `/procurement/*` actions are auto-declared by [`@saptarishi/cds-plugin-vector-hana`](../cds-plugin-vector-hana/README.md) from the `@rag` annotation on `SupplierContracts` — **zero handler code lives in this project for them**. The `/finance/LlmSpend` entity is a projection of the shipped `saptarishi.llm.usage.LlmUsage` (from `@saptarishi/cds-plugin-llm@1.22+`); rows are auto-inserted by the `usageMeteringToCap` middleware wired inside `srv/ai-service.js`.
 
@@ -89,6 +93,38 @@ curl -sS "http://localhost:4004/finance/LlmSpend?\$filter=totalCost%20eq%200&\$t
 ```
 
 Multi-instance deployments (CF, Kyma, K8s) get per-replica caches by default; swap `responseCache({ store })` for a Redis / HANA cache table adapter to share hits across replicas.
+
+### Enforce a cost budget
+
+`srv/ai-service.js` wires `costBudget` **outside** `usageMeteringToCap` so a refusal short-circuits before a $0 row would land in `LlmSpend`. Limits are stored in the `FinanceService.LlmBudget` entity and hydrated at boot; admin edits take effect after `POST /finance/reloadBudget()` — no restart.
+
+```sh
+# Live snapshot — reads from the middleware, not the DB
+curl -sS http://localhost:4004/budget-status | jq
+# → {
+#     "window": "2026-08-05",
+#     "currency": "USD",
+#     "total":  { "spent": 12.4, "limit": 500 },
+#     "perTenant": [{ "key": "acme", "spent": 4.2, "limit": 200 }, ...],
+#     "perModel":  [{ "key": "claude-opus-4-7", "spent": 8.1, "limit": 150 }]
+#   }
+
+# Full OData action with limits echo (called by Joule via the `check-llm-budget` skill)
+curl -sX POST http://localhost:4004/finance/getBudgetStatus \
+  -H 'Content-Type: application/json' -d '{}' | jq
+
+# Add a new tenant cap and reload — takes effect immediately
+curl -sX POST http://localhost:4004/finance/LlmBudget \
+  -H 'Content-Type: application/json' \
+  -d '{"ID":"perTenant:initech","scope":"perTenant","keyName":"initech","limitAmount":75,"currency":"USD","windowKind":"day","action":"throw","enabled":true}'
+curl -sX POST http://localhost:4004/finance/reloadBudget \
+  -H 'Content-Type: application/json' -d '{}' | jq
+# → { "total": 6, "activeRows": 6 }
+```
+
+When any request would push a tenant / model / total counter over its limit, `costBudget` throws a `BudgetExceededError` before the LLM is called. Set a row's `action` to `warn` for logging-only mode (Globex is preseeded that way). Multi-instance deployments swap the default per-process store for `RedisCounterStore` — counters aggregate across replicas via `INCRBYFLOAT`.
+
+**Fiori list report** — the `LlmBudget` projection carries `@UI.LineItem`, `@UI.SelectionFields`, and `@UI.HeaderInfo` annotations. Any Fiori launchpad can bind to it directly and let finance admins edit rows without touching curl.
 
 ### Try the multi-agent orchestrator
 
