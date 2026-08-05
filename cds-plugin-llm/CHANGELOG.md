@@ -4,6 +4,61 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.0] — 2026-08-05
+
+### Added
+
+- **`responseCache({ store, ttl, keyFn, maxEntries?, onHit?, onMiss? })` — response cache middleware for `llm.use()`.** Memoizes identical `chat()` calls keyed by a SHA-256 hash of `(model, system, messages, tools, format, maxTokens)`. Cache hits return the previous response tagged with `cached: true` + `cacheKey` for targeted invalidation. Streams, embeddings, and tool-turn responses (`result.toolCalls`) are NOT cached — those are either hard to replay safely or intermediate steps.
+
+  ```js
+  const { responseCache, usageMetering } = require('@saptarishi/cds-plugin-llm');
+
+  // Order matters — usageMetering OUTER so it sees cache-hit responses on
+  // the way back up the chain. If cache ran outer, hits would short-circuit
+  // before meter's next() returned.
+  llm.use(usageMetering({ ... }));
+  llm.use(responseCache({ ttl: 60 * 60_000 }));   // 1 hour default
+
+  const r1 = await llm.chat({ messages: [...] });  // MISS — real LLM call
+  const r2 = await llm.chat({ messages: [...] });  // HIT — r2.cached === true
+  ```
+
+- **In-memory LRU with per-entry TTL (default backend).** New `InMemoryLRU` class exported for consumers who want to pre-warm the cache or share one across multiple provider instances. Evicts oldest on `maxEntries` overflow (default 10,000). `get()` touches recency so hot entries survive.
+
+- **Pluggable backends.** Pass any `store` implementing `{ get(key), set(key, value, ttlMs), delete?, clear?, size?, has? }`. Redis, HANA cache tables, ioredis, `keyv` — all drop in cleanly. Persistence errors during `set` are swallowed so a hiccup in the backend never fails the underlying request that already succeeded.
+
+- **Per-call opt-out**: pass `cache: false` on the `chat()` request. Increments `stats.skips` for observability.
+
+- **Custom `keyFn` for domain-specific bucketing.** Default hashes `(model, system, messages, tools, format, maxTokens)`; write your own to collapse near-duplicate queries under one entry (e.g. normalizing whitespace, lowercasing, tenant-scoping the key). `keyFn` throws are caught → falls through to a live call so a broken key-gen never takes down `chat()`.
+
+- **`usageMetering` integration** — when a cached response with `result.cached === true` bubbles up through metering, the request is still counted (`totalRequests`) BUT charged $0. New `summary.totalCachedHits` counts them; new `summary.totalCostSaved` sums what those hits WOULD have cost if the LLM had actually been called. `record.cached` bool now on every `onRecord` sink record.
+
+  ```jsonc
+  // Example summary after 100 requests with a 40% hit rate on Claude Opus:
+  {
+    "totalRequests":     100,
+    "totalCost":         12.75,      // paid for 60 real calls
+    "totalCachedHits":   40,
+    "totalCostSaved":    8.50,       // 40 hits × ~$0.21 avg
+    "byModel":           { ... }
+  }
+  ```
+
+- **`asMcpResource()`** on the cache middleware — a ready-to-register MCP resource at `config://cache` returning `{ hits, misses, skips, hitRate, size }`. Mirrors the pattern in `usageMetering.asMcpResource()`.
+
+- **Middleware helpers**: `mw.stats`, `mw.store`, `mw.size()`, `mw.hitRate()`, `mw.clear()`, `mw.delete(key)`. `mw.delete(cachedResponse.cacheKey)` invalidates a single entry.
+
+- Exports: `responseCache`, `InMemoryLRU`. TS defs — `ResponseCacheOptions`, `ResponseCacheStore`, `ResponseCacheStats`, `ResponseCacheMiddleware` — with `@since 1.26.0`. `UsageSummary` extended with `totalCachedHits: number` and `totalCostSaved: number`. `UsageRecord` extended with `cached: boolean`.
+
+- **25 new tests (542 total)**: basic caching (real LLM called once on identical repeat), key-scope discrimination (differing messages / system / tools / format each break cache), per-call opt-out via `chat({ cache: false })`, embeds not cached, tool-turn responses not cached, TTL expiry forces re-fetch, LRU eviction on `maxEntries`, `get()` touches recency so hot entries survive, expired entries deleted lazily, pluggable-store backend, custom `keyFn`, `keyFn` throwing falls through, usageMetering integration (0 cost + totalCachedHits + totalCostSaved), no cache attached → counters stay at 0, `reset()` zeroes the new counters, `onHit` + `onMiss` hooks fire, `clear()`, `delete(key)`, `asMcpResource()` shape, ttl / keyFn validation, `defaultKeyFn` determinism.
+
+### Notes
+
+- Additive — `^1.25` consumers bump to `^1.26` with zero code changes. `responseCache` is opt-in via `llm.use(...)`; `usageMetering` still works exactly as before if no cache is attached (both new counters stay at 0).
+- Middleware ordering: **usageMetering OUTER, responseCache INNER** for savings tracking to work. Reverse the order and cache hits short-circuit before meter sees them — the requests count zero and no savings are tracked. Documented in the CHANGELOG and inline in the tests.
+- The default in-memory LRU is per-process. For multi-instance deployments (CF, Kyma, K8s), each replica gets its own cache — cross-replica coherence needs a shared backend. Drop in Redis via a small `{ get, set }` adapter or point at a HANA cache table.
+- Cache keys are SHA-256 hex (64 chars). Users needing shorter keys for a specific backend can transform them inside their `keyFn` — but keep in mind two colliding requests would return the wrong cached response.
+
 ## [1.25.0] — 2026-08-05
 
 ### Added

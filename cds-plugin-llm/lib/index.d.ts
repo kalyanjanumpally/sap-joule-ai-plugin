@@ -783,6 +783,10 @@ export interface UsageSummary {
   totalOutputTokens: number;
   totalCost: number;
   currency: string;
+  /** How many requests were served from the response cache (new in 1.26.0). */
+  totalCachedHits: number;
+  /** Sum of what those cached hits would have cost if the LLM had actually been called (new in 1.26.0). */
+  totalCostSaved: number;
   byModel:    Record<string, UsageBucket>;
   byTenant:   Record<string, UsageBucket>;
   byProvider: Record<string, UsageBucket>;
@@ -801,6 +805,8 @@ export interface UsageRecord {
   totalCost:    number;
   currency:     string;
   pricingKnown: boolean;                 // false when the model isn't in the price table
+  /** True when this request was served from the response cache; cost is 0 (new in 1.26.0). */
+  cached: boolean;
 }
 
 export interface UsageMeteringOptions {
@@ -888,6 +894,78 @@ export function usageMeteringToCap(cds: unknown, options?: UsageMeteringToCapOpt
 
 /** Default entity name — matches `saptarishi.llm.usage.LlmUsage` in `lib/usageEntity.cds`. */
 export const DEFAULT_LLM_USAGE_ENTITY: string;
+
+// ---- Response cache middleware (new in 1.26.0) --------------------------
+
+export interface ResponseCacheStore {
+  get(key: string): unknown | Promise<unknown>;
+  set(key: string, value: unknown, ttlMs: number): void | Promise<void>;
+  delete?(key: string): void | Promise<void>;
+  clear?(): void | Promise<void>;
+  size?(): number | null;
+  has?(key: string): boolean | Promise<boolean>;
+}
+
+export interface ResponseCacheOptions {
+  /** Pluggable backend. Default: in-memory LRU with `maxEntries` cap. */
+  store?: ResponseCacheStore;
+  /** Cache entry TTL in milliseconds. Default: 3,600,000 (1 hour). */
+  ttl?: number;
+  /** Cap on in-memory LRU size (ignored if a custom store is provided). Default 10,000. */
+  maxEntries?: number;
+  /** Custom key derivation. Default: SHA-256 of (model, system, messages, tools, format, maxTokens). */
+  keyFn?: (ctx: MiddlewareContext) => string | Promise<string>;
+  /** Fired on cache hits — good place to log or increment a counter. */
+  onHit?: (ctx: MiddlewareContext, cached: unknown) => void;
+  /** Fired on cache misses (before the LLM call). */
+  onMiss?: (ctx: MiddlewareContext) => void;
+}
+
+export interface ResponseCacheStats {
+  hits: number;
+  misses: number;
+  skips: number;
+}
+
+export interface ResponseCacheMiddleware extends Middleware {
+  stats: ResponseCacheStats;
+  store: ResponseCacheStore;
+  clear(): Promise<void>;
+  delete(key: string): Promise<void>;
+  size(): number | null;
+  hitRate(): number;
+  /** MCP resource dumping the cache stats — mirrors `usageMetering.asMcpResource()`. */
+  asMcpResource(): {
+    uri: 'config://cache';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => { hits: number; misses: number; skips: number; hitRate: number; size: number | null };
+  };
+}
+
+/**
+ * Memoizes identical `chat()` calls by key = SHA-256(model, system, messages,
+ * tools, format, maxTokens). Streams + embeddings + tool-turn responses
+ * (result.toolCalls) are NOT cached. Skip per-call via `chat({ cache: false })`.
+ *
+ * Sets `result.cached = true` and `result.cacheKey` on hits — downstream
+ * middleware (usageMetering) reads the flag to charge $0 and increment
+ * `summary.totalCachedHits` + `summary.totalCostSaved`.
+ * @since 1.26.0
+ */
+export function responseCache(options?: ResponseCacheOptions): ResponseCacheMiddleware;
+
+/** Tiny LRU-with-TTL exported for consumers who want to pre-warm the cache. */
+export class InMemoryLRU implements ResponseCacheStore {
+  constructor(options: { maxEntries: number });
+  get(key: string): unknown | null;
+  set(key: string, value: unknown, ttlMs: number): void;
+  delete(key: string): void;
+  clear(): void;
+  size(): number;
+  has(key: string): boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Prompt-template registry (new in v1.8.0)

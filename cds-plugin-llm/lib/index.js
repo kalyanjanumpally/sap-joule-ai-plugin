@@ -38,6 +38,9 @@ module.exports = {
   // Auto-persist metering records to a CAP entity (new in 1.22.0)
   usageMeteringToCap: require('./middleware/usageMeteringToCap').usageMeteringToCap,
   DEFAULT_LLM_USAGE_ENTITY: require('./middleware/usageMeteringToCap').DEFAULT_ENTITY,
+  // Response cache middleware — memoizes identical chat() calls (new in 1.26.0)
+  responseCache: require('./middleware/responseCache').responseCache,
+  InMemoryLRU: require('./middleware/responseCache').InMemoryLRU,
   // Prompt-template registry (new in 1.8.0)
   PromptRegistry: require('./promptRegistry').PromptRegistry,
   builtInPrompts: require('./promptRegistry').builtInPrompts,

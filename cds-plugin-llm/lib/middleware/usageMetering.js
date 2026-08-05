@@ -49,27 +49,43 @@ function usageMetering(options = {}) {
     totalOutputTokens: 0,
     totalCost: 0,
     currency,
+    // Cache-hit tracking (new in 1.26.0). When responseCache is stacked
+    // BEFORE usageMetering in the middleware chain and a cache hit
+    // returns `result.cached: true`, we record the request but charge
+    // $0 — and separately count how much we would have paid without
+    // the cache. Gives finance a "cache savings" line item.
+    totalCachedHits: 0,
+    totalCostSaved: 0,
     byModel: {},
     byTenant: {},
     byProvider: {},
   };
 
-  function recordUsage({ provider, model, tenant, inputTokens, outputTokens, method }) {
+  function recordUsage({ provider, model, tenant, inputTokens, outputTokens, method, cached }) {
     const p = priceTable[model];
     const iTok = inputTokens || 0;
     const oTok = outputTokens || 0;
-    const inputCost = p ? (iTok / pricingUnit) * p.input : 0;
-    const outputCost = p ? (oTok / pricingUnit) * p.output : 0;
-    const totalCost = inputCost + outputCost;
+    const wouldBeInputCost  = p ? (iTok / pricingUnit) * p.input  : 0;
+    const wouldBeOutputCost = p ? (oTok / pricingUnit) * p.output : 0;
+    const wouldBeTotalCost  = wouldBeInputCost + wouldBeOutputCost;
+
+    // Cache-hit accounting: bill $0, credit the would-be cost to savings.
+    const actualInputCost  = cached ? 0 : wouldBeInputCost;
+    const actualOutputCost = cached ? 0 : wouldBeOutputCost;
+    const actualTotalCost  = cached ? 0 : wouldBeTotalCost;
 
     summary.totalRequests += 1;
     summary.totalInputTokens += iTok;
     summary.totalOutputTokens += oTok;
-    summary.totalCost += totalCost;
+    summary.totalCost += actualTotalCost;
+    if (cached) {
+      summary.totalCachedHits += 1;
+      summary.totalCostSaved += wouldBeTotalCost;
+    }
 
-    incrBucket(summary.byModel, model, { iTok, oTok, cost: totalCost });
-    if (tenant) incrBucket(summary.byTenant, tenant, { iTok, oTok, cost: totalCost });
-    if (provider) incrBucket(summary.byProvider, provider, { iTok, oTok, cost: totalCost });
+    incrBucket(summary.byModel, model, { iTok, oTok, cost: actualTotalCost });
+    if (tenant) incrBucket(summary.byTenant, tenant, { iTok, oTok, cost: actualTotalCost });
+    if (provider) incrBucket(summary.byProvider, provider, { iTok, oTok, cost: actualTotalCost });
 
     if (onRecord) {
       const record = {
@@ -80,11 +96,12 @@ function usageMetering(options = {}) {
         method,
         inputTokens: iTok,
         outputTokens: oTok,
-        inputCost,
-        outputCost,
-        totalCost,
+        inputCost: actualInputCost,
+        outputCost: actualOutputCost,
+        totalCost: actualTotalCost,
         currency,
         pricingKnown: !!p,
+        cached: !!cached,
       };
       // Fire-and-forget — the sink shouldn't slow down the request path.
       // Consumers who need durability should await their own writes inside.
@@ -125,6 +142,7 @@ function usageMetering(options = {}) {
         model: result.model ?? ctx.request.model,
         inputTokens: result.usage.input_tokens,
         outputTokens: result.usage.output_tokens,
+        cached: result.cached === true,
         method: 'chat',
       });
     } else if (ctx.method === 'embed') {
@@ -156,6 +174,8 @@ function usageMetering(options = {}) {
     summary.totalInputTokens = 0;
     summary.totalOutputTokens = 0;
     summary.totalCost = 0;
+    summary.totalCachedHits = 0;
+    summary.totalCostSaved = 0;
     summary.byModel = {};
     summary.byTenant = {};
     summary.byProvider = {};
