@@ -17,11 +17,18 @@ The `/ai/*` actions delegate to whichever LLM provider is configured under `cds.
 
 ### Try the RAG endpoints
 
+`SupplierContracts` uses `@rag.search: 'hybrid'` (new in cds-plugin-vector-hana 0.8.0) — vector similarity fused with keyword matching via Reciprocal Rank Fusion. Semantic queries still work; exact-token queries (contract IDs like `CTR-2026-101`, supplier codes like `sup-42`) now hit reliably where cosine-only would miss them.
+
 ```sh
-# Semantic search
+# Semantic search — hybrid mode makes exact tokens like PO/contract IDs work too
 curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.searchByMeaning \
   -H 'content-type: application/json' \
   -d '{"query": "steel coils Europe short lead time", "topK": 3}' | jq
+
+# Exact-token lookup — hybrid picks up the literal 'CTR-2026-101' in the row's text
+curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.searchByMeaning \
+  -H 'content-type: application/json' \
+  -d '{"query": "CTR-2026-101", "topK": 3}' | jq
 
 # Q&A with cited sources
 curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.askAbout \
@@ -30,6 +37,15 @@ curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementServ
 ```
 
 The first request seeds the vector index from the CSV automatically (via the plugin's `after CREATE` handler when CAP loads the seed data). Subsequent runs are cached in the SQLite vector table.
+
+To go back to cosine-only for a single query, pass `mode: 'vector'`:
+
+```sh
+curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.searchByMeaning \
+  -H 'content-type: application/json' \
+  -d '{"query": "CTR-2026-101", "mode": "vector", "topK": 3}'
+# vector-only misses the literal token; hybrid recovers it.
+```
 
 ### Query LLM spend
 

@@ -24,6 +24,10 @@ service ProcurementService @(path: '/procurement') {
     topK:      5,
     provider:  'llm-embed',                   // Ollama nomic-embed-text (768 dim) — see package.json cds.requires
     chatter:   'llm',                         // reuse the main chat model for askAbout
+    // Hybrid retrieval — vector + keyword fused via RRF. Wins over
+    // vector-only on exact-token queries (contract IDs like CTR-2026-042,
+    // supplier codes like sup-42, PO numbers). New in vector-hana 0.8.0.
+    search:    'hybrid',
   }
   entity SupplierContracts : cuid, managed {
     supplierName : String(200);

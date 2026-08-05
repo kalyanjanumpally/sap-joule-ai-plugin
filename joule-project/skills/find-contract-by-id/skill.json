@@ -1,0 +1,62 @@
+{
+  "$schema": "https://sap.com/schemas/joule/skill/v1.json",
+  "name": "find-contract-by-id",
+  "displayName": "Find contract by ID or code",
+  "description": "Looks up a supplier contract by its literal identifier (e.g. CTR-2026-101, sup-42, MTC-4471). Uses the hybrid-retrieval OData action on the CAP backend — vector similarity fused with keyword matching via Reciprocal Rank Fusion. Where a semantic-only search would miss exact identifiers, hybrid picks them up because keyword scoring rewards the literal-token match.",
+  "category": "procurement",
+  "version": "1.0.0",
+  "language": "en",
+  "confirmationRequired": false,
+  "utterances": [
+    "Find contract CTR-2026-101",
+    "Which supplier has code sup-42",
+    "Look up contract identifier MTC-4471",
+    "Pull the contract for sup-88",
+    "Show me CTR-2026-045"
+  ],
+  "parameters": [
+    {
+      "name": "identifier",
+      "type": "string",
+      "required": true,
+      "description": "The literal contract or supplier identifier — e.g. CTR-YYYY-NNN, sup-NN, MTC-NNNN."
+    }
+  ],
+  "actions": [
+    {
+      "actionRef": "ProcurementCopilot.searchByMeaning",
+      "body": {
+        "query": "{{ identifier }}",
+        "topK": 3
+      }
+    }
+  ],
+  "prompt": {
+    "$ref": "./prompt.md"
+  },
+  "responseTemplate": {
+    "$ref": "./response-template.md"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "value": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "ID":           { "type": "string" },
+            "supplierName": { "type": "string" },
+            "contractType": { "type": "string" },
+            "category":     { "type": "string" },
+            "region":       { "type": "string" },
+            "terms":        { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "requiredScopes": [
+    "S4:Procurement:Read"
+  ]
+}

@@ -151,7 +151,10 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('_id:', d['_id']\\)\")",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('installed llm:', d['dependencies']['@saptarishi/cds-plugin-llm']\\)\")",
       "Bash(node -e \"console.log\\('installed:', require\\('@saptarishi/cds-plugin-llm/package.json'\\).version\\)\")",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30980030693\")",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-vector-hana-v0.8.0\" -m \"cds-plugin-vector-hana 0.8.0\" 675524c)",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-vector-hana-v0.8.0)"
     ]
   }
 }
