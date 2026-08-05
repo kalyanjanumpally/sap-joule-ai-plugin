@@ -4,6 +4,63 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.0] — 2026-08-05
+
+### Added
+
+- **MCP sampling + roots (server-initiated request infrastructure)** — the two remaining spec surfaces the plugin hadn't shipped. Both let a tool handler ask the connected client for something during a `tools/call`:
+
+  - **`ctx.sample({ messages, systemPrompt?, maxTokens?, modelPreferences? })`** → sends `sampling/createMessage` to the client and awaits the client's LLM completion. The agent-loop pattern where a CAP tool (running server-side) reaches back through the transport to have the client (Claude Desktop, Cursor, VS Code Copilot) run its own LLM. The server never touches the client's API keys.
+  - **`ctx.getRoots()`** → sends `roots/list` and returns `[{ uri, name? }, ...]`. Server tools discover which filesystem locations the client has granted access to. Cached per-session; `notifications/roots/list_changed` invalidates the cache so the next `ctx.getRoots()` call re-fetches.
+
+  ```js
+  const server = new MCPServer({
+    name: 'my-cap-tools',
+    version: '1.0.0',
+    tools: [{
+      name: 'summarize_file',
+      inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+      handler: async ({ path }, ctx) => {
+        // Client-declared filesystem scope — the tool only reads what the user allowed
+        const roots = await ctx.getRoots();
+        if (!roots.some((r) => path.startsWith(new URL(r.uri).pathname))) {
+          throw new Error(`path outside declared roots: ${path}`);
+        }
+        const text = await fs.readFile(path, 'utf8');
+
+        // Delegate LLM work back to the client — no server-side API key required
+        const reply = await ctx.sample({
+          messages: [{ role: 'user', content: { type: 'text', text: `Summarize:\n${text}` } }],
+          maxTokens: 200,
+        });
+        return { summary: reply.content.text };
+      },
+    }],
+  });
+  ```
+
+- **`MCPServer.sendRequest(method, params, transportCtx, { timeoutMs? })`** — the underlying primitive. Assigns a unique `srv-<n>` id, writes a JSON-RPC request via `transportCtx.sendMessage`, and awaits the matching response. Correlated by id; `sessionState._pendingRequests` tracks in-flight requests. Times out cleanly (default 60s) with a `timed out after Nms` error. JSON-RPC error responses reject the promise with the error's `message`/`code`/`data`.
+
+- **Response routing in `handleMessage`** — a JSON-RPC response (has `id` + `result`/`error`, no `method`) that arrives at the server is looked up in `_pendingRequests`, timer cleared, and the awaiting promise resolved or rejected. Responses for unknown ids are logged and dropped (no crash).
+
+- **Client capability capture on `initialize`** — the client's declared `capabilities` (including `capabilities.sampling` and `capabilities.roots`) get stashed on `transportCtx.sessionState.clientCapabilities`. `ctx.sample()` and `ctx.getRoots()` gate on the matching capability and throw a specific, actionable error when the client didn't advertise it. Missing `capabilities` on the initialize params defaults to `{}` (still errors on `ctx.sample()`, but the handshake itself never fails).
+
+- **`notifications/roots/list_changed` handler** — clears `sessionState.roots` and `rootsFetchedAt` so the next `ctx.getRoots()` re-fetches. Safe pre-init (no session state yet) — no-ops without crashing.
+
+- **`transportCtx.sendMessage` on every transport**. The wire-level writer, symmetric with the existing `sendNotification`. Kept as separate names because both write to the same channel today but consumers may want to future-swap them independently.
+  - **stdio**: writes JSON-RPC envelope + newline to `stdout`, same channel as tool call replies (line-delimited).
+  - **HTTP+SSE (2024-11-05)**: `data: <json>\n\n` on the session's SSE stream — the same fan-out path as progress notifications.
+  - **Streamable HTTP (2025-03-26)**: fans out across every open GET stream on the session (typically 1). No open GET stream → `ctx.sample()` / `ctx.getRoots()` will time out, which is the correct signal.
+
+- **15 new tests (502 total)**: `sendRequest` (missing sendMessage → clear error, id-correlation + resolve, error response → reject, timeout → reject, response for unknown id → drop + warn, response routing frees the pending entry), `initialize` capability capture (stash + default), `ctx.sample()` (happy path via mock scripted client, capability missing → helpful error, transport missing → helpful error), `ctx.getRoots()` (fetch + cache once, `notifications/roots/list_changed` invalidates cache + re-fetch, capability missing → helpful error), pre-init `notifications/roots/list_changed` (safe no-op).
+
+### Notes
+
+- Additive — `^1.23` consumers bump to `^1.24` with zero code changes. Tool handlers that don't reach for `ctx.sample()` or `ctx.getRoots()` are unaffected; those that do get graceful capability-gated errors on clients that don't support them, so tools can fall back to a local LLM instead of failing outright.
+- `sampling/createMessage` and `roots/list` are inherently bidirectional — they require the client to be listening for server-initiated requests. Every transport shipped in this plugin (stdio, HTTP+SSE, Streamable HTTP) meets that requirement, but any custom transport authors add MUST expose `transportCtx.sendMessage(msg)` or `ctx.sample()` / `ctx.getRoots()` will throw a clear error mentioning it.
+- The client's `sampling/createMessage` response uses the client's own LLM — the server does not know or care which model that is. `reply.model` in the sampling response identifies it; `reply.content` is the completion; `reply.stopReason` matches the shape you'd get from `LLMService.chat()`.
+- Timeouts default to 60s. Bidirectional MCP calls that expect a fast client-side model can pass `{ timeoutMs: 5000 }` to `sendRequest` explicitly.
+
 ## [1.23.0] — 2026-08-05
 
 ### Added

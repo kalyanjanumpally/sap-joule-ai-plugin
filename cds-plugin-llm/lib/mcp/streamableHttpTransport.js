@@ -190,20 +190,24 @@ function createStreamableHttpTransport({
       logger('info', `session ${sessionId.slice(0, 8)} opened (${sessions.size} active)`);
     }
 
-    const transportCtx = {
-      // Progress + list_changed notifications from tool handlers get routed
-      // to every long-lived GET stream open on this session (typically 1).
-      // If the client has no GET stream open, notifications are dropped —
-      // same trade-off as the HTTP+SSE transport when no /sse is open.
-      sendNotification: (notif) => {
-        for (const stream of session.streams) {
-          try { stream.write(`data: ${JSON.stringify(notif)}\n\n`); }
-          catch (err) {
-            logger('warn', `session ${sessionId.slice(0, 8)} notification write failed: ${err.message}`);
-            session.streams.delete(stream);
-          }
+    // sendMessage is the generic wire writer for both notifications and
+    // server-initiated requests (sampling/createMessage, roots/list). Both
+    // fan out to every long-lived GET stream open on this session
+    // (typically 1). If the client has no GET stream open, messages are
+    // dropped — same trade-off as HTTP+SSE. sample() / getRoots() would
+    // time out in that case, which is the correct signal.
+    const sendMessage = (m) => {
+      for (const stream of session.streams) {
+        try { stream.write(`data: ${JSON.stringify(m)}\n\n`); }
+        catch (err) {
+          logger('warn', `session ${sessionId.slice(0, 8)} write failed: ${err.message}`);
+          session.streams.delete(stream);
         }
-      },
+      }
+    };
+    const transportCtx = {
+      sendNotification: sendMessage,
+      sendMessage,
       subscriptions: session.subscriptions,
       sessionState: session.sessionState,
     };

@@ -55,6 +55,17 @@ class MCPServer {
     // across every entry; `notifyResourceUpdated` only reaches entries whose
     // `subscriptions` set contains the updated URI.
     this._subscribers = new Set();
+
+    // ---- Server-initiated requests (2025-03-26 sampling + roots) --------
+    //
+    // MCP allows the server to send REQUESTS to the client — used for
+    // sampling/createMessage (server asks the client to run an LLM
+    // completion) and roots/list (server queries the client's declared
+    // filesystem scope). We correlate the pending responses by JSON-RPC
+    // id. Ids for server-initiated requests are prefixed 'srv-' to keep
+    // them distinct from client-initiated ids in logs.
+    this._pendingRequests = new Map(); // id -> { resolve, reject, timer }
+    this._nextRequestId = 1;
   }
 
   /**
@@ -202,6 +213,20 @@ class MCPServer {
     if (msg.jsonrpc !== JSONRPC_VERSION) {
       return this._errorReply(msg.id ?? null, ERROR_CODES.INVALID_REQUEST, 'jsonrpc must be "2.0"');
     }
+    // Response to a server-initiated request (has id + result/error, no method).
+    // Route to whichever pending sendRequest is awaiting this id.
+    if (msg.method === undefined && msg.id !== undefined && msg.id !== null) {
+      const pending = this._pendingRequests.get(msg.id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this._pendingRequests.delete(msg.id);
+        if (msg.error) pending.reject(_rpcErrorAsError(msg.error));
+        else pending.resolve(msg.result);
+      } else {
+        this.log('warn', `response for unknown request id ${msg.id} — dropped`);
+      }
+      return null;
+    }
     const isNotification = msg.id === undefined || msg.id === null;
     try {
       const result = await this._dispatch(msg.method, msg.params ?? {}, transportCtx);
@@ -212,6 +237,47 @@ class MCPServer {
       const code = err.code && Number.isInteger(err.code) ? err.code : ERROR_CODES.INTERNAL_ERROR;
       return this._errorReply(msg.id, code, err.message ?? String(err));
     }
+  }
+
+  /**
+   * Send a server-initiated JSON-RPC request to the client and await the
+   * response. Used by sampling/createMessage + roots/list.
+   *
+   * Requires the transport to expose `transportCtx.sendMessage(msg)` — the
+   * wire-level writer that pushes a full JSON-RPC envelope to the connected
+   * client. stdio, HTTP+SSE, and Streamable HTTP all support this.
+   *
+   *   const result = await server.sendRequest('sampling/createMessage', params, transportCtx);
+   *
+   * @param {string} method     JSON-RPC method name (e.g. 'sampling/createMessage')
+   * @param {object} params     Method params
+   * @param {object} transportCtx  Transport context; must have sendMessage(msg)
+   * @param {object} [opts]
+   * @param {number} [opts.timeoutMs=60000]
+   */
+  sendRequest(method, params, transportCtx, opts = {}) {
+    const { timeoutMs = 60000 } = opts;
+    if (!transportCtx || typeof transportCtx.sendMessage !== 'function') {
+      return Promise.reject(new Error(
+        'MCPServer.sendRequest: transportCtx.sendMessage is not available — the current transport does not support server-initiated requests.'
+      ));
+    }
+    return new Promise((resolve, reject) => {
+      const id = `srv-${this._nextRequestId++}`;
+      const timer = setTimeout(() => {
+        this._pendingRequests.delete(id);
+        reject(new Error(`server request ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this._pendingRequests.set(id, { resolve, reject, timer });
+      const msg = { jsonrpc: JSONRPC_VERSION, id, method, params };
+      try {
+        transportCtx.sendMessage(msg);
+      } catch (err) {
+        clearTimeout(timer);
+        this._pendingRequests.delete(id);
+        reject(err);
+      }
+    });
   }
 
   async _dispatch(method, params, transportCtx = {}) {
@@ -228,6 +294,12 @@ class MCPServer {
         if (typeof metaProvider === 'string' && metaProvider && transportCtx.sessionState) {
           transportCtx.sessionState.provider = metaProvider;
         }
+        // Stash the client's declared capabilities on sessionState so tool
+        // handlers can gate `ctx.sample()` and `ctx.getRoots()` on the
+        // client actually supporting them (spec 2025-03-26).
+        if (transportCtx.sessionState) {
+          transportCtx.sessionState.clientCapabilities = params?.capabilities ?? {};
+        }
         return {
           protocolVersion: PROTOCOL_VERSION,
           serverInfo: { name: this.name, version: this.version },
@@ -242,6 +314,17 @@ class MCPServer {
 
       case 'notifications/initialized':
         return {};
+
+      case 'notifications/roots/list_changed': {
+        // Client is telling us its filesystem roots changed. Invalidate any
+        // cached list on this session so the next ctx.getRoots() call
+        // re-fetches. Fetching eagerly would race — leave it lazy.
+        if (transportCtx.sessionState) {
+          transportCtx.sessionState.roots = null;
+          transportCtx.sessionState.rootsFetchedAt = null;
+        }
+        return {};
+      }
 
       case 'ping':
         return {};
@@ -280,10 +363,59 @@ class MCPServer {
               catch (err) { this.log('warn', `progress notification failed: ${err.message}`); }
             }
           : () => {};
+        // ctx.sample({ messages, systemPrompt?, maxTokens?, modelPreferences? })
+        // and ctx.getRoots() — server-initiated MCP requests. Both require
+        // the transport to support server → client messaging (sendMessage
+        // on transportCtx) AND the client to have declared the matching
+        // capability in initialize. Otherwise they throw a specific error
+        // so tool authors can gracefully fall back to a local LLM.
+        const clientCaps = transportCtx.sessionState?.clientCapabilities ?? {};
+        const canSend = typeof transportCtx.sendMessage === 'function';
+
+        const sample = async (samplingParams) => {
+          if (!canSend) {
+            throw new Error(
+              'ctx.sample() requires a bidirectional transport — this transport does not expose sendMessage(). Use stdio, HTTP+SSE, or Streamable HTTP.'
+            );
+          }
+          if (!clientCaps.sampling) {
+            throw new Error(
+              'ctx.sample() unavailable — the connected client did not declare a sampling capability in its initialize handshake.'
+            );
+          }
+          return this.sendRequest('sampling/createMessage', samplingParams, transportCtx);
+        };
+
+        const getRoots = async () => {
+          if (!canSend) {
+            throw new Error(
+              'ctx.getRoots() requires a bidirectional transport — this transport does not expose sendMessage(). Use stdio, HTTP+SSE, or Streamable HTTP.'
+            );
+          }
+          if (!clientCaps.roots) {
+            throw new Error(
+              'ctx.getRoots() unavailable — the connected client did not declare a roots capability in its initialize handshake.'
+            );
+          }
+          // Cache per-session; the client will send
+          // notifications/roots/list_changed if the list changes and we
+          // invalidate the cache there.
+          if (transportCtx.sessionState?.roots) return transportCtx.sessionState.roots;
+          const result = await this.sendRequest('roots/list', {}, transportCtx);
+          const roots = Array.isArray(result?.roots) ? result.roots : [];
+          if (transportCtx.sessionState) {
+            transportCtx.sessionState.roots = roots;
+            transportCtx.sessionState.rootsFetchedAt = Date.now();
+          }
+          return roots;
+        };
+
         const handlerCtx = {
           reportProgress,
           progressToken: progressToken ?? null,
           sessionState: transportCtx.sessionState ?? {},
+          sample,
+          getRoots,
         };
         try {
           const value = await tool.handler(args ?? {}, handlerCtx);
@@ -462,8 +594,12 @@ class MCPServer {
             // on the same stdout stream. Subscriptions Set is shared with
             // this connection's addSubscriber entry so resources/subscribe
             // updates the same Set that notifyResourceUpdated reads.
+            // sendMessage is the generic wire writer used for server-
+            // initiated requests (sampling/createMessage, roots/list).
+            const sendMessage = (m) => stdout.write(JSON.stringify(m) + '\n');
             const transportCtx = {
-              sendNotification: (notif) => stdout.write(JSON.stringify(notif) + '\n'),
+              sendNotification: sendMessage,
+              sendMessage,
               subscriptions: unsubscribe.subscriptions,
               sessionState,
             };
@@ -500,6 +636,13 @@ function templateToRegex(tpl, paramNames) {
     escaped = escaped.replace(`{${n}}`, '([^/?#]+)');
   }
   return new RegExp('^' + escaped + '$');
+}
+
+function _rpcErrorAsError(rpc) {
+  const err = new Error(rpc?.message ?? 'server request rejected');
+  if (rpc?.code != null) err.code = rpc.code;
+  if (rpc?.data != null) err.data = rpc.data;
+  return err;
 }
 
 module.exports = { MCPServer, PROTOCOL_VERSION, ERROR_CODES };

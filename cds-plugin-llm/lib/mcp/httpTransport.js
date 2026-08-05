@@ -152,14 +152,21 @@ function createHttpTransport({ server, port = 3333, host = '127.0.0.1', logger =
         // POST response isn't blocked on tool execution. sendNotification
         // wired to this session's SSE stream so tool handlers can emit
         // progress notifications back to the correct client.
+        // sendMessage is the generic wire writer — used for both
+        // notifications (progress) and server-initiated requests
+        // (sampling/createMessage, roots/list). Server-initiated request
+        // replies flow back via POST /messages, same as any other
+        // client→server message.
+        const sendMessage = (m) => {
+          try { session.res.write(`data: ${JSON.stringify(m)}\n\n`); }
+          catch (err) {
+            logger('warn', `session ${sessionId.slice(0, 8)} write failed: ${err.message}`);
+            sessions.delete(sessionId);
+          }
+        };
         const transportCtx = {
-          sendNotification: (notif) => {
-            try { session.res.write(`data: ${JSON.stringify(notif)}\n\n`); }
-            catch (err) {
-              logger('warn', `session ${sessionId.slice(0, 8)} notification write failed: ${err.message}`);
-              sessions.delete(sessionId);
-            }
-          },
+          sendNotification: sendMessage,
+          sendMessage,
           subscriptions: session.subscriptions,
           sessionState: session.sessionState,
         };
