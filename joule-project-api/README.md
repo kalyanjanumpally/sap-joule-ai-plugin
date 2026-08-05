@@ -36,7 +36,15 @@ curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementServ
   -d '{"query": "Which suppliers can deliver aluminum in EMEA within 2 weeks and require green-electricity certificates?"}' | jq
 ```
 
-The `askAbout` handler is customized in `srv/ai-service.js` to run the retrieved candidates through `llmRerank({ llm })` (new in cds-plugin-vector-hana 0.9.0) before generating the answer. The reranker scores each hit on a 0-10 relevance scale via a structured LLM call and re-sorts — so the answer prompt sees the most relevant contracts first. Latency-wise: hybrid pulls ~20 candidates, the reranker scores them in one LLM call (batch size 20), then the chat answer runs. On Groq's Llama 3.3 70B, that's typically ~1.5s end-to-end for the whole pipeline.
+The `askAbout` handler is customized in `srv/ai-service.js` to run the **full 5-stage RAG pipeline** (all wired up on plugin primitives from cds-plugin-vector-hana 0.10.0):
+
+1. **`createQueryExpander({ llm, strategy: 'hyde' })`** — the LLM writes a hypothetical answer; both the question AND the hypothetical answer get embedded and retrieved on. Boosts recall on abstract queries where the vocabulary gap between question and source is large.
+2. **`store.hybridSearch()`** — vector + keyword search runs for each expanded query. Exact tokens like `CTR-2026-101`, `sup-42`, `MTC-4471` win reliably.
+3. **`reciprocalRankFusion`** — the per-query result lists are fused. Docs appearing in multiple lists get boosted; single-list winners still surface.
+4. **`llmRerank({ llm })`** — the LLM scores each fused candidate on a 0-10 relevance scale and re-sorts. Structured output means no parsing brittleness.
+5. **`RAG.answer()`** — augmented prompt with the top-K hits + citation instructions, chat completion, source rows returned alongside the answer.
+
+Every stage is a separately shipped primitive that composes cleanly with the others; the `srv/ai-service.js` hook is `new RAG({ llm, store, mode: 'hybrid', expand, rerank })`. Latency-wise: HyDE adds one LLM call (the hypothetical), rerank adds another (structured scoring), then the answer runs. On Groq's Llama 3.3 70B, the whole 5-stage pipeline typically clocks ~2.5s end-to-end.
 
 The first request seeds the vector index from the CSV automatically (via the plugin's `after CREATE` handler when CAP loads the seed data). Subsequent runs are cached in the SQLite vector table.
 

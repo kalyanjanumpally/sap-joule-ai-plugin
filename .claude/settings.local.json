@@ -166,7 +166,10 @@
       "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-vector-hana-v0.10.0)",
       "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30982065621\")",
       "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-llm-v1.23.0\" -m \"cds-plugin-llm 1.23.0\" 0c29b12)",
-      "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.23.0)"
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.23.0)",
+      "Bash(curl -sS \"https://api.github.com/repos/kalyanjanumpally/sap-joule-ai-plugin/actions/runs/30982678032\")",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-llm-v1.24.0\" -m \"cds-plugin-llm 1.24.0\" 11a4380)",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.24.0)"
     ]
   }
 }

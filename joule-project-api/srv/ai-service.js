@@ -7,6 +7,7 @@ const {
 const {
   RAG,
   llmRerank,
+  createQueryExpander,
 } = require('@saptarishi/cds-plugin-vector-hana');
 
 const PO_SYSTEM = `You summarize S/4HANA purchase orders for procurement approvers.
@@ -101,26 +102,33 @@ module.exports = class AIService extends cds.ApplicationService {
     const llm = await getLLM();
 
     // Wrap the vector-hana plugin's `cds.vectorHana.askAbout` with a
-    // version that runs the retrieved hits through an LLM reranker
-    // (cds-plugin-vector-hana 0.9.0's llmRerank) before the final answer
-    // step. Result: hybrid retrieval → LLM rerank → chat completion, all
-    // driven by the same LLM alias so the whole pipeline stays inside
+    // version that runs the FULL 5-stage RAG pipeline:
+    //   1. expand      — createQueryExpander (HyDE) writes a hypothetical
+    //                    answer; both the question AND the hypothetical
+    //                    answer get embedded and retrieved on. Boosts
+    //                    recall on abstract / under-specified queries.
+    //   2. hybrid      — vector + keyword search per expanded query.
+    //   3. RRF fuse    — Reciprocal Rank Fusion across all queries.
+    //   4. LLM rerank  — the LLM scores each candidate 0-10, re-sorts.
+    //   5. chat answer — augmented prompt with the top hits + citations.
+    // All driven by the same LLM alias so the whole pipeline stays inside
     // whichever provider the app is configured for. Only touched once
     // per boot; safe if called by any concurrent request afterwards.
-    if (cds.vectorHana && !cds.vectorHana._rerankInstalled) {
+    if (cds.vectorHana && !cds.vectorHana._ragPipelineInstalled) {
+      const expand = createQueryExpander({ llm, strategy: 'hyde' });
       const rerank = llmRerank({ llm });
       cds.vectorHana.askAbout = async (params = {}) => {
         const { entity, query, topK, filter, systemInstructions, ...chatOpts } = params;
         const store = cds.vectorHana.getStore(entity);
         if (!store) throw new Error(`no @rag store registered for '${entity}' — is the entity annotated?`);
-        const rag = new RAG({ llm, store, mode: 'hybrid', rerank });
+        const rag = new RAG({ llm, store, mode: 'hybrid', expand, rerank });
         return rag.answer({
           query,
           topK: topK ?? 5,
           filter, systemInstructions, ...chatOpts,
         });
       };
-      cds.vectorHana._rerankInstalled = true;
+      cds.vectorHana._ragPipelineInstalled = true;
     }
 
     // Register the SSE streaming endpoint on the Express app. Path is
