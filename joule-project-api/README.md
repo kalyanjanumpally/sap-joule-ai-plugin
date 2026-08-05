@@ -30,11 +30,13 @@ curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementServ
   -H 'content-type: application/json' \
   -d '{"query": "CTR-2026-101", "topK": 3}' | jq
 
-# Q&A with cited sources
+# Q&A with cited sources — full pipeline: hybrid retrieval → LLM rerank → chat answer
 curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.askAbout \
   -H 'content-type: application/json' \
   -d '{"query": "Which suppliers can deliver aluminum in EMEA within 2 weeks and require green-electricity certificates?"}' | jq
 ```
+
+The `askAbout` handler is customized in `srv/ai-service.js` to run the retrieved candidates through `llmRerank({ llm })` (new in cds-plugin-vector-hana 0.9.0) before generating the answer. The reranker scores each hit on a 0-10 relevance scale via a structured LLM call and re-sorts — so the answer prompt sees the most relevant contracts first. Latency-wise: hybrid pulls ~20 candidates, the reranker scores them in one LLM call (batch size 20), then the chat answer runs. On Groq's Llama 3.3 70B, that's typically ~1.5s end-to-end for the whole pipeline.
 
 The first request seeds the vector index from the CSV automatically (via the plugin's `after CREATE` handler when CAP loads the seed data). Subsequent runs are cached in the SQLite vector table.
 
