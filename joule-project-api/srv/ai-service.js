@@ -5,6 +5,7 @@ const {
   usageMeteringToCap,
   responseCache,
   Agent, runAgents,
+  guardrails, filters,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -69,24 +70,61 @@ Rules:
 //
 // Middleware stack (top = OUTER, bottom = INNER):
 //
+//   guardrails         — input/output filters. Runs FIRST so the scrubbed
+//                        request reaches every downstream layer (metering
+//                        records scrubbed content, cache keys on scrubbed
+//                        content, provider sees scrubbed content). Output
+//                        filters run LAST so the caller never sees PII the
+//                        model surfaced from its retrieval sources.
 //   usageMeteringToCap  — persists every request into FinanceService.LlmSpend.
-//                         Must be OUTER so it observes cache-hit responses on
-//                         the way back up the chain — those get recorded with
-//                         cost=0 and increment totalCachedHits + totalCostSaved.
+//                         Must observe cache-hit responses on the way back up
+//                         the chain — those get recorded with cost=0 and
+//                         increment totalCachedHits + totalCostSaved.
 //   responseCache       — memoizes identical chat() calls. In-memory LRU with
 //                         a 1-hour TTL for the demo; swap for Redis / HANA
 //                         cache in a real BTP deployment via the `store` opt.
-//                         Streams + embeds + tool-turn responses skip the
-//                         cache automatically.
 //
-// The two together mean: every LLM call gets tracked, cache hits get billed
-// $0 in LlmSpend, and the demo can hit the same query twice and watch the
-// second one come back instantly + cost-free.
+// The three together mean: every LLM call is scrubbed + tracked + potentially
+// cached. Cache hits show up as $0 rows in LlmSpend; PII never leaves the
+// tenant boundary; injection attempts throw a GuardrailBlockedError and are
+// logged for the security team to review.
 let _llmPromise;
 let _cache;
+let _guardrails;
 function getLLM() {
   if (!_llmPromise) {
     _llmPromise = cds.connect.to('llm').then((llm) => {
+      _guardrails = guardrails({
+        inputFilters: [
+          // Deliberately shallow — layer with least-privilege tools + output
+          // constraints for defense in depth. See CHANGELOG note in 1.28.0.
+          filters.promptInjection(),
+          // Internal-only string blocklist — e.g. codes, endpoints, secret
+          // names that must never leave the SAP tenant boundary. Add real
+          // patterns in your deployment.
+          filters.blocklist(['<INTERNAL-SECRET>'], { mode: 'block' }),
+          // PII scrubbing on the way in — accidental paste of SSNs / credit
+          // cards / emails / phone numbers gets redacted before the provider
+          // ever sees them.
+          filters.pii({ redact: true }),
+        ],
+        outputFilters: [
+          // Model may echo PII from retrieved contract text (contact emails,
+          // phone numbers in the terms column). Scrub before returning.
+          filters.pii({ redact: true }),
+        ],
+        onBlock: (info) => {
+          cds.log('llm:guardrails').warn(
+            `[guardrails] blocked at ${info.stage} (filter #${info.filterIndex}): ${info.reason}`,
+          );
+        },
+        onRedact: (info) => {
+          cds.log('llm:guardrails').info(
+            `[guardrails] redacted at ${info.stage} (filter #${info.filterIndex})`,
+          );
+        },
+      });
+      llm.use(_guardrails);
       llm.use(usageMeteringToCap(cds, {
         tenantOf:   (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
         providerOf: (ctx) => ctx.raw?.providerAlias ?? cds.env.requires?.llm?.kind ?? null,
@@ -101,6 +139,8 @@ function getLLM() {
 
 /** Exported for `/ai/cache-stats` — a small ops-visible dashboard on the cache. */
 function getCache() { return _cache; }
+/** Exported for `/ai/guardrails-stats` — hits/blocks/redacts dashboard. */
+function getGuardrails() { return _guardrails; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -205,6 +245,15 @@ module.exports = class AIService extends cds.ApplicationService {
           hitRate: cache.hitRate(),
           size:    cache.size(),
         });
+      });
+      // Guardrails dashboard — block / redact counters (both stages).
+      // Combined with /finance/LlmSpend (metered requests) this gives
+      // Ops a complete picture: N requests came in, X were blocked, Y
+      // scrubbed, Z hit the cache, W actually reached the provider.
+      cds.app.get('/guardrails-stats', (_req, res) => {
+        const gr = getGuardrails();
+        if (!gr) return res.status(503).json({ error: 'guardrails not initialized yet' });
+        res.json(gr.stats);
       });
     }
 
