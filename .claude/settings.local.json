@@ -175,7 +175,9 @@
       "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-llm-v1.25.0\" -m \"cds-plugin-llm 1.25.0\" 45ca6fe)",
       "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.25.0)",
       "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-llm-v1.26.0\" -m \"cds-plugin-llm 1.26.0\" 83211b7)",
-      "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.26.0)"
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.26.0)",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule tag -a \"cds-plugin-llm-v1.27.0\" -m \"cds-plugin-llm 1.27.0\" 68a925e)",
+      "Bash(git -C /Users/janumpallykalyan/Documents/joule push origin cds-plugin-llm-v1.27.0)"
     ]
   }
 }

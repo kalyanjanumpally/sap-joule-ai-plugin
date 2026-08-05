@@ -4,6 +4,7 @@ const {
   pdfFromBase64, pdfFromUrl,
   usageMeteringToCap,
   responseCache,
+  Agent, runAgents,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -32,6 +33,36 @@ High = overdue > 30d, or amount > 100k EUR without matched PO, or duplicate sign
 Medium = overdue 1-30d, or amount 25k-100k without matched PO.
 Low = current, matched to PO, within tolerance.
 Rationale must cite the specific field(s) driving the rating.`;
+
+// ---- Multi-agent specialist prompts -----------------------------------
+
+const CONTRACT_LOOKUP_SYSTEM = `You are a procurement research specialist.
+Your only job is to answer questions about supplier contracts by looking them up in the contract database.
+Rules:
+- Always call the search_contracts tool. Do not answer from prior knowledge.
+- Cite the contract ID (CTR-YYYY-NNN or the entity ID) in your answer.
+- If the search returns nothing relevant, say so plainly.
+- Keep answers to 2-3 sentences.`;
+
+const PRICE_ANALYST_SYSTEM = `You are a procurement price analyst.
+Your job is to reason about pricing terms in supplier contracts. You will typically be given contract text as part of your input; extract the numeric terms (rate cards, indexing, discounts, penalties) and answer the caller's question.
+Rules:
+- Only use numbers that are literally in the input. Do not fabricate rates.
+- If a rate is expressed as an index (e.g. "LME +/- 4%"), name the index.
+- Flag any ambiguity — the caller can go back to the coordinator with a clarification.
+- Keep answers to 2-4 sentences.`;
+
+const COMPLIANCE_CHECKER_SYSTEM = `You are a procurement compliance checker.
+Given contract text or a described scenario, you flag potential compliance concerns.
+Categories to check:
+- REACH / RoHS / conflict minerals for raw materials
+- Green-electricity / carbon-offset claims
+- Data protection (GDPR / SOC2) for IT services
+- Sanctions / export controls for cross-border shipments
+Rules:
+- If nothing looks concerning, say "No compliance flags." explicitly.
+- Otherwise, cite the specific clause / claim you're flagging in one sentence per flag.
+- Keep answers under 6 sentences total.`;
 
 // Module-scoped lazy singleton so the streaming Express route (registered in
 // AIService.init below) and the OData handlers share one LLM instance.
@@ -315,6 +346,91 @@ module.exports = class AIService extends cds.ApplicationService {
         lineItems:     data.lineItems ?? [],
         tokensUsed:    (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0),
         model:         usedModel,
+      };
+    });
+
+    // ---- analyzeScenario: multi-agent supervisor ---------------------
+    //
+    // Three specialist agents (contract-lookup, price-analyst,
+    // compliance-checker) behind a supervisor coordinator. All four LLM
+    // instances share the same `llm` service alias (so usageMeteringToCap +
+    // responseCache still track everything) but the contract-lookup
+    // specialist is the only one wired with a tool — a search over the
+    // @rag-annotated SupplierContracts.
+    //
+    // Because runAgents/Agent are pure JS glue over runTools, all the
+    // familiar guarantees carry through: per-turn usage aggregation,
+    // maxSteps safety cap, cache hits on any specialist's chat() call,
+    // usageMeteringToCap rows in FinanceService.LlmSpend per LLM call.
+    this.on('analyzeScenario', async (req) => {
+      const { scenario } = req.data;
+
+      // Tool wired to the vector-hana plugin's hybrid search. The agent
+      // will call this whenever the scenario mentions a supplier / contract.
+      const searchContracts = {
+        name: 'search_contracts',
+        description: 'Semantic + keyword search over supplier contracts. Returns the top matching contracts as JSON.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Natural-language question or exact ID like CTR-2026-101.' },
+            topK:  { type: 'integer', description: '1-10; default 5' },
+          },
+          required: ['query'],
+        },
+        run: async ({ query, topK }) => {
+          const hits = await cds.vectorHana.searchByMeaning({
+            entity: 'ProcurementService.SupplierContracts',
+            query,
+            topK: topK ?? 5,
+          });
+          return JSON.stringify(hits.map((h) => ({
+            ID:           h.id,
+            supplierName: h.metadata?.supplierName,
+            contractType: h.metadata?.contractType,
+            region:       h.metadata?.region,
+            text:         h.text,
+          })), null, 2);
+        },
+      };
+
+      const contractLookup = new Agent({
+        name: 'contract-lookup',
+        description: 'Answers questions about supplier contracts. Give it the question in plain English (or a literal contract ID).',
+        llm,
+        system: CONTRACT_LOOKUP_SYSTEM,
+        tools: [searchContracts],
+        maxSteps: 3,
+      });
+      const priceAnalyst = new Agent({
+        name: 'price-analyst',
+        description: 'Extracts pricing terms from a piece of contract text. Give it the contract text or a summary, plus the question.',
+        llm,
+        system: PRICE_ANALYST_SYSTEM,
+      });
+      const complianceChecker = new Agent({
+        name: 'compliance-checker',
+        description: 'Flags compliance concerns (REACH, RoHS, GDPR, sanctions, green claims) in a contract or scenario.',
+        llm,
+        system: COMPLIANCE_CHECKER_SYSTEM,
+      });
+
+      const result = await runAgents({
+        coordinator: llm,
+        agents: [contractLookup, priceAnalyst, complianceChecker],
+        input: scenario,
+        maxSteps: 8,
+      });
+
+      return {
+        answer: result.text,
+        trace: result.trace.map((t) => ({
+          agent:    t.agent,
+          question: t.question ?? '',
+          answer:   typeof t.answer === 'string' ? t.answer : JSON.stringify(t.answer),
+          isError:  t.isError,
+        })),
+        steps: result.steps,
       };
     });
 

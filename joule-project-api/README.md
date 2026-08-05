@@ -9,6 +9,7 @@ CAP backend for the **Procurement Copilot** Joule agent. Hosts LLM-backed action
 | `POST /ai/summarizePurchaseOrder` | 2-sentence approver-ready PO summary |
 | `POST /ai/explainInvoiceRisk` | AP triage risk rating (low/medium/high) + rationale |
 | `POST /ai/extractInvoiceLineItems` | Structured extraction from an invoice image or PDF |
+| `POST /ai/analyzeScenario` | **Multi-agent orchestration**. Supervisor coordinator + 3 specialists (contract-lookup with the `@rag` hybrid search tool, price-analyst, compliance-checker). Returns `{ answer, trace: [{ agent, question, answer, isError }], steps }`. |
 | `POST /procurement/SupplierContracts/ProcurementService.searchByMeaning` | **Semantic search over supplier contracts (auto-declared by `@rag`)** |
 | `POST /procurement/SupplierContracts/ProcurementService.askAbout` | **Q&A with cited sources over supplier contracts (auto-declared by `@rag`)** |
 | `GET  /finance/LlmSpend` | **Per-request LLM cost accounting — auto-persisted by `usageMeteringToCap` middleware. Queryable via OData: `$filter=tenant eq 'acme'`, `$orderby=totalCost desc`, etc.** |
@@ -88,6 +89,32 @@ curl -sS "http://localhost:4004/finance/LlmSpend?\$filter=totalCost%20eq%200&\$t
 ```
 
 Multi-instance deployments (CF, Kyma, K8s) get per-replica caches by default; swap `responseCache({ store })` for a Redis / HANA cache table adapter to share hits across replicas.
+
+### Try the multi-agent orchestrator
+
+Ask a scenario question that spans multiple procurement lenses. The supervisor decides which specialists to call, in what order, and folds their answers together:
+
+```sh
+curl -sS -X POST http://localhost:4004/ai/analyzeScenario \
+  -H 'content-type: application/json' \
+  -d '{"scenario": "For contract CTR-2026-045, extract the payment terms and flag any compliance concerns about the chemicals ordered."}' | jq
+```
+
+Response shape:
+
+```jsonc
+{
+  "answer": "Contract CTR-2026-045 (Continental Chemicals) has 30-day payment terms... compliance flag: solvents fall under REACH ...",
+  "trace": [
+    { "agent": "contract-lookup",     "question": "Find contract CTR-2026-045",              "answer": "..." },
+    { "agent": "price-analyst",       "question": "Extract payment terms from the following...", "answer": "..." },
+    { "agent": "compliance-checker",  "question": "Flag REACH concerns for acetone, ethanol, IPA", "answer": "..." }
+  ],
+  "steps": 4
+}
+```
+
+Each specialist has its own system prompt + optional tools. `contract-lookup` uses a `search_contracts` tool wired to `cds.vectorHana.searchByMeaning` (hybrid retrieval); the other two are chat-only agents with focused rubrics. All four LLM instances share the same `cds.requires.llm` alias, so `usageMeteringToCap` still records every call as a `FinanceService.LlmSpend` row and `responseCache` still memoizes repeat coordinator turns.
 
 ## Provider by profile
 

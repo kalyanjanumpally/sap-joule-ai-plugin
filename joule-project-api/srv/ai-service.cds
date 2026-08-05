@@ -67,4 +67,25 @@ service AIService @(path: '/ai') {
     mediaType   : String,
     model       : String
   ) returns InvoiceExtract;
+
+  // ---- Multi-agent orchestration (new in this project) -----------------
+  // Supervisor coordinator + three specialist agents (contract-lookup,
+  // price-analyst, compliance-checker). See srv/ai-service.js handler.
+
+  type OrchestrationStep {
+    agent    : String;   // slug of the specialist invoked
+    question : String;   // what the coordinator asked
+    answer   : String;   // the specialist's reply
+    isError  : Boolean;  // true if the specialist threw
+  }
+
+  type OrchestrationResult {
+    answer : String;                     // final coordinator-synthesized answer
+    trace  : many OrchestrationStep;     // one entry per specialist call
+    steps  : Integer;                    // # coordinator turns
+  }
+
+  action analyzeScenario(
+    scenario : String not null
+  ) returns OrchestrationResult;
 }
