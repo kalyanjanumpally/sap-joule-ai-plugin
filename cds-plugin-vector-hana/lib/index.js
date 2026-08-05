@@ -4,4 +4,5 @@ module.exports = {
   SqliteVectorStore: require('./backends/sqlite'),
   RAG: require('./rag'),
   activateCdsPlugin: require('./cdsPlugin').activate,
+  reciprocalRankFusion: require('./rrf').reciprocalRankFusion,
 };

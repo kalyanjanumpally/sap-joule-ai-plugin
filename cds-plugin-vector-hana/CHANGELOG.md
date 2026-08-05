@@ -4,6 +4,66 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-08-05
+
+### Added
+
+- **Hybrid retrieval via Reciprocal Rank Fusion (RRF)** — new `store.hybridSearch()` runs vector + keyword in parallel and fuses per-list ranks. Directly improves recall on messy S/4 text where cosine-only misses: SKUs, PO numbers, exact identifiers, jargon queries.
+
+  ```js
+  const hits = await store.hybridSearch({
+    text: 'refund window PO-4500000123',
+    topK: 5,
+    candidateK: 20,        // fetch top-20 from each retrieval before fusion
+    vectorWeight: 1,
+    keywordWeight: 1,
+    k: 60,                 // canonical RRF constant from Cormack et al. 2009
+    filter: { region: 'EMEA' },
+  });
+  // → hits[i].fusionScore alongside the original .score
+  ```
+
+- **`store.keywordSearch()`** — new public method + `_keywordSearch` backend hook. Naive token-match count on the text column (case-insensitive substring LIKE, one hit per query token). Implemented on both SqliteVectorStore and HanaVectorStore. Backends without a keyword impl (custom stores extending the base class) fall back to `[]` — hybrid degrades to vector-only, no error. For production scale, override `_keywordSearch` with a real FTS index (SQLite FTS5, HANA CONTAINS(), etc.).
+
+- **`reciprocalRankFusion({ lists, weights?, k? })`** — pure utility exported from `lib/rrf.js`. Handles doc canonicalization by id, merges metadata across lists (later lists enrich fields the earlier didn't have), preserves the first-seen list's text and score. Weights let callers bias one retrieval over another; `k` controls how much the multi-list bonus dominates over single-list top-ranks.
+
+- **RAG hybrid mode + rerank hook**:
+  ```js
+  const rag = new RAG({
+    llm, store,
+    mode: 'hybrid',               // 'vector' (default) or 'hybrid'
+    rerank: async (hits, query) => // optional post-retrieval hook
+      llmRerankOrCrossEncoder(hits, query),
+  });
+  const { answer, hits } = await rag.answer({ query: '...', mode: 'hybrid' });
+  ```
+  The reranker runs after fusion. Return `hits` in the desired final order; RAG trims to `topK` if the reranker returns more than that.
+
+- **`@rag.search` annotation** — `'vector'` (default) or `'hybrid'`. Opts an annotated entity's `cds.vectorHana.searchByMeaning()` and `.askAbout()` into hybrid retrieval at every call site without any handler code:
+  ```cds
+  entity Suppliers {
+    key ID     : UUID;
+    name       : String;
+    description: LargeString;
+  } @rag: {
+    fields:    ['name', 'description'],
+    dimension: 768,
+    search:    'hybrid',           // ← new
+  };
+  ```
+  Per-call override via `plugin.searchByMeaning({ entity, query, mode: 'vector' })` still works if a specific query needs one strategy over the other.
+
+- **New exports**: `reciprocalRankFusion`, `tokenize` (from `lib/VectorStore.js`). TS defs added: `HybridSearchParams`, `HybridSearchHit`, `RetrievalMode`, `Reranker`.
+
+- **30 new tests (141 total)**: RRF utility (validation, basic fusion, weight bias, multi-list bonus, metadata merging, null-id handling, fusionScore surfacing), SqliteVectorStore keyword search (token ranking, topK cap, metadata filter, SKU-style exact match, invalid inputs, all-short-tokens edge case), hybrid search (vector+keyword combination, candidateK, weight bias, no-keyword-impl fallback, input validation), RAG hybrid mode (routing to hybridSearch, per-call override, missing-hybridSearch error), RAG rerank (hook invocation, over-topK trimming), constructor validation (bad mode / rerank).
+
+### Notes
+
+- Additive — `store.search()` shape is unchanged; existing consumers can stay on it. `hybridSearch()` is opt-in. `^0.7` consumers can bump to `^0.8` with zero code changes.
+- The SQLite `_keywordSearch` uses `LIKE` for substring matching — deliberately dumb so exact SKUs / order numbers (like `PO-4500000123`, `sup-42`) match literally without needing stemming or a stopword list. For high-volume production, override with an FTS5 virtual table.
+- The HANA `_keywordSearch` uses the same `LIKE` fallback for portability. On a production HANA with a text index, override with `CONTAINS()` for fuzzy + linguistic-aware matching.
+- The `rerank` hook is opt-in and pluggable — this release ships the infrastructure but no built-in reranker. Consumers can plug their own LLM-scoring, cross-encoder inference, or business-logic filter. A future release may ship an `llmRerank({ llm })` factory.
+
 ## [0.7.4] — 2026-08-03
 
 ### Fixed

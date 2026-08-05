@@ -107,6 +107,56 @@ class SqliteVectorStore extends VectorStore {
     return scored.slice(0, topK);
   }
 
+  async _keywordSearch({ terms, topK, filter }) {
+    // Naive keyword search: for each row, count how many query terms occur
+    // as substrings of the (lowercased) text column. Rows with zero hits
+    // are dropped; ties broken by id. Fine for demos and small datasets;
+    // for production, override with an FTS5 virtual table or move to HANA.
+    //
+    // The score expression uses CASE per term. Wrapping the whole thing in
+    // a subquery lets us reference `score` from the outer WHERE without
+    // re-binding the LIKE params twice.
+    // Placeholder order in the final SQL is: LIKE-params (in the SELECT
+    // score expression, which SQLite parses first) → filter-params (WHERE)
+    // → LIMIT. Match that order when pushing to `params`.
+    const params = [];
+    const termClauses = terms.map(t => {
+      params.push(`%${t}%`);
+      return `(CASE WHEN LOWER("${this.textColumn}") LIKE ? THEN 1 ELSE 0 END)`;
+    });
+    const scoreExpr = termClauses.join(' + ');
+
+    const filterClauses = [];
+    if (filter && Object.keys(filter).length > 0) {
+      for (const [key, value] of Object.entries(filter)) {
+        filterClauses.push(`json_extract("${this.metadataColumn}", '$.${key}') = ?`);
+        params.push(value);
+      }
+    }
+    const innerWhere = filterClauses.length ? 'WHERE ' + filterClauses.join(' AND ') : '';
+
+    params.push(topK);
+    const sql = `
+      SELECT * FROM (
+        SELECT "${this.idColumn}" AS id, "${this.textColumn}" AS text,
+               "${this.metadataColumn}" AS metadata,
+               (${scoreExpr}) AS score
+        FROM "${this.table}"
+        ${innerWhere}
+      )
+      WHERE score > 0
+      ORDER BY score DESC, id ASC
+      LIMIT ?
+    `;
+    const rows = this.db.prepare(sql).all(...params);
+    return rows.map(r => ({
+      id: r.id,
+      text: r.text,
+      metadata: r.metadata ? JSON.parse(r.metadata) : null,
+      score: r.score,
+    }));
+  }
+
   async _delete({ id }) {
     const info = this.db.prepare(`DELETE FROM "${this.table}" WHERE "${this.idColumn}" = ?`).run(id);
     return { deleted: info.changes };

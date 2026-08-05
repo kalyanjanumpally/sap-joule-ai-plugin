@@ -173,6 +173,50 @@ class HanaVectorStore extends VectorStore {
     }));
   }
 
+  async _keywordSearch({ terms, topK, filter }) {
+    // Simple case-insensitive substring keyword scoring. Same shape as the
+    // SQLite backend for consistency across environments. For production
+    // scale, override with HANA's native `CONTAINS()` fuzzy search once
+    // you've created a text index on the `text` column.
+    // Placeholder order: LIKE params (in the score expression, appears
+    // first in the SQL) → filter params (WHERE clause).
+    const params = [];
+    const termClauses = terms.map(t => {
+      params.push(`%${t.toLowerCase()}%`);
+      return `(CASE WHEN LOWER("${this.textColumn}") LIKE ? THEN 1 ELSE 0 END)`;
+    });
+    const scoreExpr = termClauses.join(' + ');
+
+    const filterClauses = [];
+    if (filter && Object.keys(filter).length > 0) {
+      for (const [key, value] of Object.entries(filter)) {
+        filterClauses.push(`JSON_VALUE("${this.metadataColumn}", '$.${key}') = ?`);
+        params.push(value);
+      }
+    }
+    const innerWhere = filterClauses.length ? 'WHERE ' + filterClauses.join(' AND ') : '';
+
+    const sql = `
+      SELECT TOP ${Math.floor(topK)} * FROM (
+        SELECT "${this.idColumn}" AS "id",
+               "${this.textColumn}" AS "text",
+               "${this.metadataColumn}" AS "metadata",
+               (${scoreExpr}) AS "score"
+        FROM "${this.table}"
+        ${innerWhere}
+      )
+      WHERE "score" > 0
+      ORDER BY "score" DESC, "id" ASC
+    `;
+    const rows = await this._exec(sql, params);
+    return (rows ?? []).map(r => ({
+      id: r.id ?? r.ID,
+      text: r.text ?? r.TEXT,
+      metadata: (r.metadata ?? r.METADATA) ? JSON.parse(r.metadata ?? r.METADATA) : null,
+      score: r.score ?? r.SCORE,
+    }));
+  }
+
   async _delete({ id }) {
     const sql = `DELETE FROM "${this.table}" WHERE "${this.idColumn}" = ?`;
     await this._exec(sql, [id]);

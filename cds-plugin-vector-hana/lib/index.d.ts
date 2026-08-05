@@ -53,9 +53,39 @@ export class VectorStore {
    */
   upsertMany(items: UpsertParams[]): Promise<{ id: string }[]>;
   search<M = Record<string, unknown>>(p: SearchParams): Promise<SearchHit<M>[]>;
+  /**
+   * Keyword search over the text column. Tokenizes the query on non-word
+   * chars and ranks docs by count of matching tokens. Fine on small
+   * datasets; backends can override for a real FTS index. New in 0.8.0.
+   */
+  keywordSearch<M = Record<string, unknown>>(p: SearchParams): Promise<SearchHit<M>[]>;
+  /**
+   * Hybrid search — runs vector + keyword in parallel and fuses via
+   * Reciprocal Rank Fusion (RRF). Directly improves recall on messy text
+   * where cosine-only underperforms (SKUs, exact identifiers, jargon).
+   * Returns hits with a `fusionScore` field alongside the original `score`.
+   * New in 0.8.0.
+   */
+  hybridSearch<M = Record<string, unknown>>(p: HybridSearchParams): Promise<HybridSearchHit<M>[]>;
   delete(p: { id: string }): Promise<unknown>;
   dropTable(): Promise<void>;
   close(): Promise<void>;
+}
+
+export interface HybridSearchParams extends SearchParams {
+  /** How many candidates to fetch from each retrieval before fusion. Default 4*topK. */
+  candidateK?: number;
+  /** Weight for the vector list in RRF. Default 1. */
+  vectorWeight?: number;
+  /** Weight for the keyword list in RRF. Default 1. */
+  keywordWeight?: number;
+  /** RRF smoothing constant. Default 60 — the canonical value from Cormack et al. 2009. */
+  k?: number;
+}
+
+export interface HybridSearchHit<M = Record<string, unknown>> extends SearchHit<M> {
+  /** RRF-fused score; higher = better. Combined from per-list ranks. */
+  fusionScore: number;
 }
 
 export interface SqliteVectorStoreOptions extends VectorStoreOptions {
@@ -110,6 +140,14 @@ export interface ChatLLM {
   stream?(req: { system?: string; messages: Array<{ role: string; content: unknown }>; [k: string]: unknown }): AsyncIterable<unknown>;
 }
 
+export type RetrievalMode = 'vector' | 'hybrid';
+
+/** Optional post-retrieval reranker — receives the fused hits + query, returns re-ordered hits. Since 0.8.0. */
+export type Reranker<M = Record<string, unknown>> = (
+  hits: SearchHit<M>[],
+  query: string,
+) => SearchHit<M>[] | Promise<SearchHit<M>[]>;
+
 export interface RAGOptions {
   llm: ChatLLM;
   store: VectorStore;
@@ -117,6 +155,14 @@ export interface RAGOptions {
   systemInstructions?: string;
   /** Custom formatter for the retrieved context block. Receives the hits, returns a string. */
   promptTemplate?: (hits: SearchHit[]) => string;
+  /**
+   * Retrieval strategy. `'vector'` (default) uses cosine similarity only;
+   * `'hybrid'` fuses vector + keyword via RRF. Requires a store with
+   * `hybridSearch()` (SqliteVectorStore + HanaVectorStore both since 0.8.0).
+   */
+  mode?: RetrievalMode;
+  /** Optional post-retrieval reranker. Runs on the top-K hits before augment. Since 0.8.0. */
+  rerank?: Reranker;
 }
 
 export interface RAGAnswerParams {
@@ -124,6 +170,8 @@ export interface RAGAnswerParams {
   topK?: number;
   filter?: Record<string, string | number | boolean>;
   systemInstructions?: string;
+  /** Per-call override for the retrieval strategy. Since 0.8.0. */
+  mode?: RetrievalMode;
   /** Any additional field is forwarded verbatim to llm.chat() (model, maxTokens, etc). */
   [k: string]: unknown;
 }
@@ -146,11 +194,34 @@ export class RAG {
   readonly store: VectorStore;
   readonly systemInstructions: string;
   readonly promptTemplate: (hits: SearchHit[]) => string;
-  retrieve<M = Record<string, unknown>>(p: { query: string; topK?: number; filter?: Record<string, string | number | boolean> }): Promise<SearchHit<M>[]>;
+  readonly mode: RetrievalMode;
+  readonly rerank: Reranker | null;
+  retrieve<M = Record<string, unknown>>(p: {
+    query: string;
+    topK?: number;
+    filter?: Record<string, string | number | boolean>;
+    /** Per-call override for the retrieval strategy. */
+    mode?: RetrievalMode;
+  }): Promise<SearchHit<M>[]>;
   augment(p: { query: string; hits: SearchHit[]; systemInstructions?: string }): { system: string; messages: Array<{ role: string; content: string }> };
   answer<M = Record<string, unknown>>(p: RAGAnswerParams): Promise<RAGAnswer<M>>;
   stream<M = Record<string, unknown>>(p: RAGAnswerParams): Promise<RAGStreamResult<M>>;
 }
+
+/**
+ * Reciprocal Rank Fusion — combines multiple ranked hit lists into one.
+ * Robust to score-scale mismatches (cosine similarity vs BM25 vs anything)
+ * because it uses each doc's rank, not its raw score.
+ *
+ *   fusedScore(doc) = sum over each list L of: w_L / (k + rank_L(doc) + 1)
+ *
+ * @since 0.8.0
+ */
+export function reciprocalRankFusion<M = Record<string, unknown>>(params: {
+  lists: SearchHit<M>[][];
+  weights?: number[];
+  k?: number;
+}): (SearchHit<M> & { fusionScore: number })[];
 
 // ---- CDS @rag annotation plugin (0.5.0) --------------------------------
 

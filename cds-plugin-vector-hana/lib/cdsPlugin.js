@@ -134,18 +134,23 @@ function activate(cds, options = {}) {
   const publicApi = {
     getStore(entityName) { return stores.get(entityName); },
 
-    async searchByMeaning({ entity, query, topK, filter } = {}) {
+    async searchByMeaning({ entity, query, topK, filter, mode } = {}) {
       const store = mustStore(stores, entity);
       const cfg = configs.get(entity);
-      return store.search({ text: query, topK: topK ?? cfg.topK, filter });
+      const effectiveMode = mode ?? cfg.search ?? 'vector';
+      const k = topK ?? cfg.topK;
+      if (effectiveMode === 'hybrid' && typeof store.hybridSearch === 'function') {
+        return store.hybridSearch({ text: query, topK: k, filter });
+      }
+      return store.search({ text: query, topK: k, filter });
     },
 
     async askAbout(params = {}) {
-      const { entity, query, topK, filter, systemInstructions, ...chatOpts } = params;
+      const { entity, query, topK, filter, systemInstructions, mode, ...chatOpts } = params;
       const store = mustStore(stores, entity);
       const cfg = configs.get(entity);
       const chatter = await resolveService(cds, cfg.chatter, 'chatter');
-      const rag = new RAG({ llm: chatter, store });
+      const rag = new RAG({ llm: chatter, store, mode: mode ?? cfg.search ?? 'vector' });
       return rag.answer({ query, topK: topK ?? cfg.topK, filter, systemInstructions, ...chatOpts });
     },
 
@@ -210,6 +215,10 @@ function normalizeConfig(rag, entityName) {
   if (store !== 'sqlite' && store !== 'hana') {
     throw new Error(`@rag.store must be 'sqlite' or 'hana', got '${store}'`);
   }
+  const search = rag.search ?? 'vector';
+  if (search !== 'vector' && search !== 'hybrid') {
+    throw new Error(`@rag.search must be 'vector' or 'hybrid', got '${search}'`);
+  }
   return {
     fields: rag.fields.slice(),
     dimension: rag.dimension,
@@ -221,6 +230,7 @@ function normalizeConfig(rag, entityName) {
     idField: rag.idField ?? 'ID',
     storeOptions: rag.storeOptions,
     actions: normalizeActionsConfig(rag.actions),
+    search,
   };
 }
 

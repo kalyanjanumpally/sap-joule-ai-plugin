@@ -15,7 +15,7 @@
  */
 class RAG {
   constructor(options = {}) {
-    const { llm, store, systemInstructions, promptTemplate } = options;
+    const { llm, store, systemInstructions, promptTemplate, mode, rerank } = options;
     if (!llm || typeof llm.chat !== 'function') {
       throw new Error('RAG requires an `llm` option — an LLMService with a chat() method.');
     }
@@ -25,17 +25,44 @@ class RAG {
         'HanaVectorStore, or any object with search()).'
       );
     }
+    if (mode !== undefined && mode !== 'vector' && mode !== 'hybrid') {
+      throw new Error(`RAG: mode must be 'vector' or 'hybrid' (got ${JSON.stringify(mode)})`);
+    }
+    if (rerank !== undefined && typeof rerank !== 'function') {
+      throw new Error('RAG: rerank must be a function (hits, query) => Promise<hits> — or omit it.');
+    }
     this.llm = llm;
     this.store = store;
     this.systemInstructions = systemInstructions ?? DEFAULT_SYSTEM_INSTRUCTIONS;
     this.promptTemplate = promptTemplate ?? defaultPromptTemplate;
+    this.mode = mode ?? 'vector';
+    this.rerank = rerank ?? null;
   }
 
-  async retrieve({ query, topK = 5, filter } = {}) {
+  async retrieve({ query, topK = 5, filter, mode } = {}) {
     if (typeof query !== 'string' || query.length === 0) {
       throw new Error('retrieve() requires { query: non-empty string }');
     }
-    return this.store.search({ text: query, topK, filter });
+    const effectiveMode = mode ?? this.mode;
+    let hits;
+    if (effectiveMode === 'hybrid') {
+      if (typeof this.store.hybridSearch !== 'function') {
+        throw new Error(
+          "RAG: mode='hybrid' requires a VectorStore with a hybridSearch() method (added in " +
+          "cds-plugin-vector-hana 0.8.0). Older stores fall back with mode='vector'.",
+        );
+      }
+      hits = await this.store.hybridSearch({ text: query, topK, filter });
+    } else {
+      hits = await this.store.search({ text: query, topK, filter });
+    }
+    if (this.rerank) {
+      hits = await this.rerank(hits, query);
+      // Rerankers are expected to return hits in the desired final order —
+      // trim to topK in case they return more (some LLM rerankers over-fetch).
+      if (Array.isArray(hits) && hits.length > topK) hits = hits.slice(0, topK);
+    }
+    return hits ?? [];
   }
 
   /**
@@ -61,8 +88,8 @@ class RAG {
   }
 
   async answer(params = {}) {
-    const { query, topK, filter, systemInstructions, ...chatOpts } = params;
-    const hits = await this.retrieve({ query, topK, filter });
+    const { query, topK, filter, systemInstructions, mode, ...chatOpts } = params;
+    const hits = await this.retrieve({ query, topK, filter, mode });
     const { system, messages } = this.augment({ query, hits, systemInstructions });
     const reply = await this.llm.chat({ ...chatOpts, system, messages });
     return { answer: extractText(reply), hits, raw: reply };
@@ -77,8 +104,8 @@ class RAG {
     if (typeof this.llm.stream !== 'function') {
       throw new Error('RAG.stream() requires an LLMService with a stream() method.');
     }
-    const { query, topK, filter, systemInstructions, ...chatOpts } = params;
-    const hits = await this.retrieve({ query, topK, filter });
+    const { query, topK, filter, systemInstructions, mode, ...chatOpts } = params;
+    const hits = await this.retrieve({ query, topK, filter, mode });
     const { system, messages } = this.augment({ query, hits, systemInstructions });
     return { hits, stream: this.llm.stream({ ...chatOpts, system, messages }) };
   }
