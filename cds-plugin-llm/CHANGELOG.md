@@ -4,6 +4,77 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.53.0] — 2026-08-06
+
+### Added
+
+- **`healthHandler` + `healthCheck` — aggregate health check.** Extracts the `/resilience` aggregate the demo app built inline into a shipping primitive. One route wires up a k8s-compatible health endpoint that reports the state of every resilience primitive.
+
+  ```js
+  const { healthHandler } = require('@saptarishi/cds-plugin-llm');
+
+  app.get('/health', healthHandler({
+    deadline, breaker, bh, budget, retry, cache, guardrails, injectionGuard, metering,
+    custom: [
+      { name: 'db',     check: async () => ({ ok: await db.ping() }) },
+      { name: 'kafka',  check: async () => ({ ok: await kafka.ping() }) },
+    ],
+  }));
+  ```
+
+  Response:
+
+  ```json
+  {
+    "status": "ok" | "degraded" | "down",
+    "degraded": [
+      { "layer": "breaker", "reason": "providers open: openai" }
+    ],
+    "primitives": {
+      "deadline": { "requests": 100, "expired": 0, "activeCount": 3 },
+      "breaker":  { "openBuckets": [], "opens": 2, "closes": 2, "shortCircuited": 5 },
+      "bulkhead": { "saturated": [], "rejected": 0, "timedOut": 0 },
+      "budget":   { "spent": 12.34, "limit": 500, "overLimit": false },
+      "retry":    { "requests": 100, "givenUp": 0 },
+      "guardrails":     { "inputBlocks": 0, "outputBlocks": 0, "inputRedacts": 3, "outputRedacts": 1 },
+      "injectionGuard": { "scanned": 42, "blocked": 0, "sanitized": 2, "warned": 0 },
+      "metering":       { "totalRequests": 100, "totalCost": 12.34, "totalCachedHits": 15 },
+      "cache":          { "hitRate": 0.35, "size": 128, "hits": 15, "misses": 27 }
+    },
+    "custom": {
+      "db":    { "ok": true,  "reason": null },
+      "kafka": { "ok": true,  "reason": null }
+    }
+  }
+  ```
+
+- **Two entry points:**
+  - `healthHandler(mw, options)` — Express-shaped route factory: `(req, res) => Promise<void>`.
+  - `healthCheck(mw)` — programmatic snapshot for custom routes / loggers / MCP resources.
+
+- **Configurable HTTP status:**
+  - `treatDegradedAs` defaults to **200** (app is still serving on degraded state — typical for GKE / EKS deployments where degraded ≠ unavailable).
+  - `treatDownAs` defaults to **503** (a custom probe returned `ok: false` — pod should be removed from load balancer).
+  - Set `treatDegradedAs: 503` for strict mode (any degradation removes the pod).
+
+- **Custom probes.** `custom: [{ name, check: async () => ({ ok, reason }) }]` for app-specific checks (DB ping, downstream service). Probes that throw are captured as `ok: false` with the exception message. A single failing custom probe elevates the status to `down`.
+
+- **Override degraded predicates.** `isDegraded: { breaker: (snap) => bool, ... }` for consumers who want different degradation thresholds. Example: only mark bulkhead as degraded when `rejected > 100`, not on any rejection.
+
+- **Handles bare `http.ServerResponse` shape** (writeHead / end) in addition to Express (status / json), so it drops into any node HTTP server.
+
+- **`DEFAULT_IS_DEGRADED`** exported for consumers who want to compose their own predicates on top of the built-ins.
+
+### Type definitions
+
+- `HealthStatus = 'ok' | 'degraded' | 'down'`
+- `HealthSnapshot` — full response shape with typed `primitives` fields
+- `HealthCheckInput` — union of all supported middleware types
+
+### Backwards compatibility
+
+Additive — no breaking changes. `healthHandler` is a new top-level export; all existing exports unchanged.
+
 ## [1.52.0] — 2026-08-06
 
 ### Added

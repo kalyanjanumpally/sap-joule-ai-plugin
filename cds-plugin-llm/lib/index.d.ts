@@ -1669,6 +1669,60 @@ export class DeadlineExceededError extends Error {
   readonly method: string;
 }
 
+// ---- Aggregate health check (new in 1.53.0) --------------------------
+
+export type HealthStatus = 'ok' | 'degraded' | 'down';
+
+export interface HealthSnapshot {
+  status: HealthStatus;
+  degraded: Array<{ layer: string; reason: string }>;
+  primitives: {
+    deadline?:       { requests: number; expired: number; activeCount: number };
+    breaker?:        { openBuckets: string[]; opens: number; closes: number; shortCircuited: number };
+    bulkhead?:       { saturated: Array<{ provider: string; inFlight: number; queued: number }>; rejected: number; timedOut: number };
+    budget?:         { spent: number; limit: number | null; overLimit: boolean };
+    retry?:          { requests: number; givenUp: number };
+    guardrails?:     { inputBlocks: number; outputBlocks: number; inputRedacts: number; outputRedacts: number };
+    injectionGuard?: { scanned: number; blocked: number; sanitized: number; warned: number };
+    metering?:       { totalRequests: number; totalCost: number; totalCachedHits: number };
+    cache?:          { hitRate: number | null; size: number | null; hits: number; misses: number };
+  };
+  custom: Record<string, { ok: boolean; reason: string | null }>;
+}
+
+export interface HealthCheckInput {
+  deadline?:       DeadlineMiddleware;
+  breaker?:        CircuitBreakerMiddleware;
+  bh?:             BulkheadMiddleware;
+  bulkhead?:       BulkheadMiddleware;
+  budget?:         CostBudgetMiddleware;
+  retry?:          RetryOnRateLimitMiddleware;
+  guardrails?:     GuardrailsMiddleware;
+  injectionGuard?: PromptInjectionGuardMiddleware;
+  metering?:       UsageMeteringMiddleware;
+  cache?:          ResponseCacheMiddleware;
+  custom?: Array<{
+    name: string;
+    check: () => Promise<{ ok: boolean; reason?: string }> | { ok: boolean; reason?: string };
+  }>;
+  /** Override per-layer degraded predicates. */
+  isDegraded?: Partial<Record<string, (snap: any) => boolean>>;
+}
+
+/** Programmatic snapshot — call from your own route or logger. @since 1.53.0 */
+export function healthCheck(mw: HealthCheckInput): Promise<HealthSnapshot>;
+
+/**
+ * Express/CAP-shaped route factory. Returns `(req, res) => Promise<void>`.
+ * `treatDegradedAs` defaults to 200 (app still serving on degraded state);
+ * `treatDownAs` defaults to 503.
+ * @since 1.53.0
+ */
+export function healthHandler(
+  mw: HealthCheckInput,
+  options?: { treatDegradedAs?: number; treatDownAs?: number }
+): (req: any, res: any) => Promise<void>;
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {
