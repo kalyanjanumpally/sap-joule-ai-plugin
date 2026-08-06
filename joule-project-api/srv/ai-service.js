@@ -176,7 +176,30 @@ function getLLM() {
         tenantOf:   (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
         providerOf: (ctx) => ctx.raw?.providerAlias ?? cds.env.requires?.llm?.kind ?? null,
       }));
-      _cache = responseCache({ ttl: 60 * 60 * 1000 }); // 1 hour
+      // Semantic cache — reuses the `llm-embed` alias (Ollama nomic-embed-text
+      // by default, or genai-hub embed deployment in prod). Cache hits now
+      // fire not only on exact prompt matches but on semantically-similar
+      // rephrasing. Threshold 0.88 is a middle-ground: strict enough to
+      // avoid returning wrong answers to structurally-different questions,
+      // loose enough to catch chatty rephrasings ("summarize PO-42", "give me
+      // a summary of PO-42", "brief me on PO-42"). Lazy-init the embed
+      // service on first miss — no boot-time hit if the app never gets called.
+      let embedSvcPromise;
+      const embedder = async (text) => {
+        embedSvcPromise ??= cds.connect.to('llm-embed');
+        const embedSvc = await embedSvcPromise;
+        const { embeddings } = await embedSvc.embed({ input: [text] });
+        return embeddings[0];
+      };
+      _cache = responseCache({
+        ttl: 60 * 60 * 1000, // 1 hour
+        semantic: {
+          embedder,
+          threshold:     0.88,
+          maxScan:       200,
+          minTextLength: 30, // don't embed tiny prompts — waste of an embed call
+        },
+      });
       llm.use(_cache);
       return llm;
     });
@@ -292,11 +315,15 @@ module.exports = class AIService extends cds.ApplicationService {
         const cache = getCache();
         if (!cache) return res.status(503).json({ error: 'cache not initialized yet' });
         res.json({
-          hits:    cache.stats.hits,
-          misses:  cache.stats.misses,
-          skips:   cache.stats.skips,
-          hitRate: cache.hitRate(),
-          size:    cache.size(),
+          hits:              cache.stats.hits,
+          misses:            cache.stats.misses,
+          skips:             cache.stats.skips,
+          semanticHits:      cache.stats.semanticHits,
+          semanticMisses:    cache.stats.semanticMisses,
+          embedderErrors:    cache.stats.embedderErrors,
+          hitRate:           cache.hitRate(),
+          size:              cache.size(),
+          semanticIndexSize: cache.semanticIndex.size,
         });
       });
       // Guardrails dashboard — block / redact counters (both stages).

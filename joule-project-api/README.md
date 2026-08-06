@@ -82,18 +82,34 @@ The middleware picks tenant from `cds.context.tenant` (populated by XSUAA on BTP
 
 ### Watch the response cache save money
 
-`srv/ai-service.js` also attaches `responseCache({ ttl: 1h })` alongside `usageMeteringToCap`. Every identical `chat()` call (same messages + system + tools + format + maxTokens) inside the 1-hour window returns instantly from the in-memory LRU. Cache hits get recorded in `FinanceService.LlmSpend` with `totalCost: 0` — and the metering summary tracks `totalCachedHits` + `totalCostSaved` so finance can see the savings.
+`srv/ai-service.js` attaches `responseCache({ ttl: 1h, semantic: { threshold: 0.88 } })`. Every identical `chat()` call inside the 1-hour window returns instantly from the exact-match LRU. On an exact miss, the middleware also embeds the user text (via the `llm-embed` alias — Ollama `nomic-embed-text` locally, GenAI Hub in prod) and does a cosine scan over the most recent 200 cache entries: anything above 0.88 similarity returns the cached response. Both kinds of hit land in `FinanceService.LlmSpend` with `totalCost: 0`, and the metering summary tracks `totalCachedHits` + `totalCostSaved` so finance sees the savings on both.
 
 ```sh
-# Ops dashboard
-curl -sS http://localhost:4004/cache-stats | jq
-# → { hits: 27, misses: 43, skips: 0, hitRate: 0.386, size: 43 }
+# Ask the same thing five different ways — after the first LLM call, the next four are semantic cache hits
+for q in \
+  "summarize purchase order PO-0042 for the approver" \
+  "give me a brief summary of PO-0042" \
+  "please summarize PO-0042 concisely" \
+  "PO-0042 summary please" \
+  "brief me on purchase order PO-0042"; do
+  curl -sX POST http://localhost:4004/ai/summarizePurchaseOrder \
+    -H 'Content-Type: application/json' \
+    -d "{\"purchaseOrderId\":\"PO-0042\",\"poJson\":\"$q\"}" >/dev/null
+done
 
-# Cache-hit spend rows
-curl -sS "http://localhost:4004/finance/LlmSpend?\$filter=totalCost%20eq%200&\$top=5" | jq
+# Ops dashboard — new semantic counters + embedder-error count
+curl -sS http://localhost:4004/cache-stats | jq
+# → {
+#     "hits": 0, "misses": 1, "skips": 0,
+#     "semanticHits": 4, "semanticMisses": 0, "embedderErrors": 0,
+#     "hitRate": 0.8, "size": 1, "semanticIndexSize": 1
+#   }
+
+# Cache-hit spend rows (both exact + semantic)
+curl -sS "http://localhost:4004/finance/LlmSpend?\$filter=totalCost%20eq%200&\$top=10" | jq
 ```
 
-Multi-instance deployments (CF, Kyma, K8s) get per-replica caches by default; swap `responseCache({ store })` for a Redis / HANA cache table adapter to share hits across replicas.
+Multi-instance deployments (CF, Kyma, K8s) get per-replica exact caches by default; swap `responseCache({ store })` for a Redis / HANA cache table adapter to share exact hits across replicas. Semantic hits stay per-replica by design — each pod warms its own vector index without a network round-trip on every miss.
 
 ### Enforce a cost budget
 
