@@ -1,6 +1,6 @@
 {
   "name": "joule-project-api",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "CAP backend for the Procurement Copilot. Hosts LLM-backed actions (summarize, explain, extract) plus a @rag-annotated SupplierContracts entity that Joule can query semantically — all via auto-declared OData actions, no glue code.",
   "private": true,
   "scripts": {

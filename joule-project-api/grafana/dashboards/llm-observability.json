@@ -1,0 +1,542 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Single-pane observability for @saptarishi/cds-plugin-llm. Wires every metric family shipped by the plugin's Prometheus exporter into a scannable operator view: cost budget, cache hit rate, retry/throttling pressure, injection defense, per-model usage.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "row",
+      "id": 100,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "title": "Overview",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "id": 1,
+      "title": "Cache hit rate",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llm_cache_hit_rate",
+          "legendFormat": "hit rate"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.3 },
+              { "color": "green", "value": 0.5 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "" }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "Today's LLM spend",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llm_budget_spent_dollars{scope=\"total\",key=\"total\"}",
+          "legendFormat": "spent"
+        },
+        {
+          "refId": "B",
+          "expr": "llm_budget_limit_dollars{scope=\"total\",key=\"total\"}",
+          "legendFormat": "limit"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "percentage",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 60 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/spent/" }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "Retries / min",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(llm_retry_attempts_total[1m]) * 60"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Prompt injections blocked (10m)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(llm_injection_blocked_total[10m])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+
+    {
+      "type": "row",
+      "id": 101,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "title": "Cost budget",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 10,
+      "title": "Total spend (current window)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llm_budget_spent_dollars{scope=\"total\",key=\"total\"}",
+          "legendFormat": "spent"
+        },
+        {
+          "refId": "B",
+          "expr": "llm_budget_limit_dollars{scope=\"total\",key=\"total\"}",
+          "legendFormat": "limit"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 15,
+            "showPoints": "never"
+          }
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 11,
+      "title": "Spend by tenant (current window)",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llm_budget_spent_dollars{scope=\"perTenant\"}",
+          "legendFormat": "{{key}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 50 },
+              { "color": "red", "value": 100 }
+            ]
+          }
+        }
+      },
+      "options": { "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "type": "bargauge",
+      "id": 12,
+      "title": "Spend by model (current window)",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llm_budget_spent_dollars{scope=\"perModel\"}",
+          "legendFormat": "{{key}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD" }
+      },
+      "options": { "orientation": "horizontal", "displayMode": "gradient" }
+    },
+
+    {
+      "type": "row",
+      "id": 102,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "title": "Cache",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 20,
+      "title": "Cache hits vs misses (rate/min)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "rate(llm_cache_hits_total[5m]) * 60",           "legendFormat": "exact hits" },
+        { "refId": "B", "expr": "rate(llm_cache_semantic_hits_total[5m]) * 60",  "legendFormat": "semantic hits" },
+        { "refId": "C", "expr": "rate(llm_cache_misses_total[5m]) * 60",         "legendFormat": "misses" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqpm",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 20,
+            "stacking": { "mode": "normal" }
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 21,
+      "title": "Semantic index size",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "llm_cache_semantic_index_size" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "type": "stat",
+      "id": 22,
+      "title": "Total cache size",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "llm_cache_size" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "type": "stat",
+      "id": 23,
+      "title": "Embedder errors (semantic path)",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "increase(llm_cache_embedder_errors_total[10m])" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "value", "graphMode": "area" }
+    },
+
+    {
+      "type": "row",
+      "id": 103,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "title": "Rate limits & retry",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 30,
+      "title": "Retry attempts vs give-ups (rate/min)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "rate(llm_retry_attempts_total[5m]) * 60", "legendFormat": "attempts" },
+        { "refId": "B", "expr": "rate(llm_retry_given_up_total[5m]) * 60", "legendFormat": "gave up" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqpm",
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 20 }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 31,
+      "title": "Cumulative time waited on throttling (seconds)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "rate(llm_retry_wait_seconds_total[5m]) * 60", "legendFormat": "wait sec/min" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 15 } } }
+    },
+    {
+      "type": "timeseries",
+      "id": 32,
+      "title": "Provider rate-limit remaining (requests)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "llm_rate_limit_remaining_requests", "legendFormat": "{{provider}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "type": "timeseries",
+      "id": 33,
+      "title": "Provider rate-limit remaining (tokens)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "llm_rate_limit_remaining_tokens", "legendFormat": "{{provider}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+
+    {
+      "type": "row",
+      "id": 104,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
+      "title": "Security guardrails & injection",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 40,
+      "title": "Guardrails blocks & redacts (rate/min)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "rate(llm_guardrails_blocks_total[5m]) * 60",  "legendFormat": "{{stage}} block"  },
+        { "refId": "B", "expr": "rate(llm_guardrails_redacts_total[5m]) * 60", "legendFormat": "{{stage}} redact" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqpm",
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 15 }
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 41,
+      "title": "Prompt injection detector heat map (total hits)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llm_injection_detector_hits_total",
+          "legendFormat": "{{detector}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "orientation": "horizontal", "displayMode": "gradient" }
+    },
+
+    {
+      "type": "row",
+      "id": 105,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 },
+      "title": "Usage & cost per model",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 50,
+      "title": "Requests per model (rate/min)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 50 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(llm_usage_requests_by_model_total[5m]) * 60",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqpm" } }
+    },
+    {
+      "type": "timeseries",
+      "id": 51,
+      "title": "Cost per tenant (cumulative)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 50 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llm_usage_cost_by_tenant_dollars_total",
+          "legendFormat": "{{tenant}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 15 }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 52,
+      "title": "Cache savings (cumulative)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "llm_usage_cost_saved_dollars_total" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "id": 53,
+      "title": "Cache hits (cumulative)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "llm_usage_cached_hits_total" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "type": "stat",
+      "id": 54,
+      "title": "Input tokens (10m)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "increase(llm_usage_input_tokens_total[10m])" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "type": "stat",
+      "id": 55,
+      "title": "Output tokens (10m)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 58 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "increase(llm_usage_output_tokens_total[10m])" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["llm", "cds-plugin-llm", "observability", "joule"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Prometheus datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "LLM Observability (cds-plugin-llm)",
+  "uid": "cds-plugin-llm-observability",
+  "version": 1,
+  "weekStart": ""
+}

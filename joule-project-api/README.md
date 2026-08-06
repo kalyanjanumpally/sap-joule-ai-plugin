@@ -234,6 +234,10 @@ curl -s -X POST http://127.0.0.1:3334/mcp \
   -d '{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"config://budget"}}' | jq -r '.result.contents[0].text' | jq
 ```
 
+### Grafana dashboard
+
+`grafana/dashboards/llm-observability.json` ships a pre-wired 29-panel dashboard covering every metric family the plugin's Prometheus exporter emits. Import via Grafana → Dashboards → New → Import → Upload JSON file. See `grafana/README.md` for panel layout, compatibility notes, and 4 copy-paste alert recipes (rate-limit give-ups, budget approaching ceiling, injection spikes, cache hit-rate collapse).
+
 ### Live ops dashboard
 
 `app/ops-dashboard/` ships a single-pane observability view at http://localhost:4004/ops-dashboard/index.html. Polls all the `/*-stats` HTTP endpoints (plus MCP `config://chain`) on a configurable interval and renders:
