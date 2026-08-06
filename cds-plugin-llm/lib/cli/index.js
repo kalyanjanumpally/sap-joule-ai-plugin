@@ -10,6 +10,7 @@ const COMMANDS = {
   providers: require('./commands/providers'),
   init: require('./commands/init'),
   mcp: require('./commands/mcp'),
+  'cost-predict': require('./commands/costPredict'),
   help: async () => { printHelp(); return 0; },
 };
 
@@ -36,6 +37,8 @@ const GLOBAL_OPTS = {
   'jwt-issuer':  { type: 'string' },
   'jwt-audience': { type: 'string' },
   'providers-config': { type: 'string' },
+  'output-factor': { type: 'string' },
+  'percentile':    { type: 'string' },
 };
 
 async function run(argv) {
@@ -105,6 +108,7 @@ commands:
   providers   List supported provider kinds
   init        Scaffold a CAP app pre-wired to this plugin
   mcp         Expose the configured provider as an MCP server (stdio)
+  cost-predict Estimate batch spend from a JSONL of chat requests
   help        Show this help
 
 common options:

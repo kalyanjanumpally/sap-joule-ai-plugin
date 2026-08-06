@@ -4,6 +4,53 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.33.0] — 2026-08-06
+
+### Added
+
+- **`saptarishi-llm cost-predict <file.jsonl>` — batch cost predictor CLI.** Reads a JSONL of chat requests, heuristically estimates input tokens (chars ÷ per-model chars/token factor), predicts output tokens as `maxTokens × output-factor`, prices via `DEFAULT_PRICING`, prints a per-model breakdown + percentiles + grand total. Closes the loop with `costBudget` and `FinanceService.LlmSpend`: predict spend BEFORE firing an OpenAI Batch API or Anthropic Message Batches job, so you can size the ceiling and get sign-off in advance.
+
+  ```sh
+  saptarishi-llm cost-predict batch.jsonl --model claude-opus-4-7 --output-factor 0.5 --percentile 90
+
+  cost-predict: 1200 request(s) in batch.jsonl
+    output-factor=0.5  (predicted output tokens = maxTokens × 0.5)
+    percentile   =p90
+
+  MODEL                              #     IN tot    OUT tot   COST tot      COST p90
+  ────────────────────────────────────────────────────────────────────────────────────
+    claude-opus-4-7                  980   4.2M      500k      $100.5000     $0.1521
+    gpt-4o                           200   180k      100k      $2.1500       $0.0180
+  ? my-fine-tuned-llm                20    22k       10k       $0.0000       $0.0000
+  ────────────────────────────────────────────────────────────────────────────────────
+  TOTAL                              1200  4.4M      610k      $102.6500
+  ```
+
+- **Input row shapes** accepted, one JSON per line:
+  - Full request: `{ model, system?, messages: [...], maxTokens? }`
+  - Shorthand: `{ model?, prompt: "...", maxTokens? }`
+  - Legacy: `{ model?, text: "...", maxTokens? }`
+  Structured content blocks (`messages[i].content = [{type:'text',text:'...'}, ...]`) get flattened + summed. Malformed lines are reported to stderr but don't abort the run — the summary tells you how many were skipped.
+
+- **Per-model char-per-token factors** — heuristic tokenization tuned per model family: Anthropic (3.5), GPT (4.0), Llama (4.2), Mistral (4.1), Gemini (4.0), Qwen (3.2, multilingual denser), DeepSeek (3.8), unknown defaults to 4.0. Not a substitute for provider tokenizers but close enough for pre-batch sizing.
+
+- **Flags:**
+  - `--model <id>` — default model for rows that don't set one
+  - `--output-factor <n>` — predicted-output ÷ maxTokens ratio (default 0.6). Set 0 for input-only estimation.
+  - `--percentile <n>` — cost/token percentile to report per model (default 95)
+  - `--max-tokens <n>` — default maxTokens if a row omits it (default 1024)
+  - `--json` — machine-readable JSON output for CI pipelines
+
+- **Unpriced models flagged with `?`** in the human table and listed under an `unpriced` section (also in the JSON output). Add them to `DEFAULT_PRICING` or override via code to get accurate estimates.
+
+- **16 new tests** (692 total): missing/nonexistent/empty file, invalid `--output-factor` / `--percentile`, malformed JSONL lines reported-but-ignored, per-model pricing via DEFAULT_PRICING, unknown-model priced=false path, `--model` default fallback, mixed-model bucketing, output-factor=0 (input-only), percentile arithmetic (p90 ≥ p50), full `{system, messages: [...]}` shape, structured content-block messages, human-readable output format (TOTAL row, per-model header, `?` flag for unpriced).
+
+### Notes
+
+- **Not a substitute for real tokenization.** Heuristics are ±15% on English, wider on code and multilingual content. Use for sizing / sign-off / rough budgeting, not billing forecasts. Call your provider's `count_tokens` endpoint if you need precision.
+- **Fits the observability family.** `cost-predict` uses the same `DEFAULT_PRICING` table as `costBudget` and `usageMetering`. If you edit the table (or ship pricing overrides), all three tools stay in sync automatically.
+- **CI-friendly:** `--json` output plus non-zero exit codes on file errors makes this drop-in for a GitHub Action or CAP pipeline check — fail the deploy if projected spend on a batch exceeds a ceiling.
+
 ## [1.32.0] — 2026-08-06
 
 ### Added
