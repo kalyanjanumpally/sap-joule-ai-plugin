@@ -107,6 +107,10 @@ GeminiLLMService.prototype._stream = async function* _stream(
   let buffer = '';
   let accumulatedText = '';
   let lastEvt = null;
+  // Gemini emits complete functionCall parts per stream chunk (unlike
+  // OpenAI-compat which fragments arguments across deltas). Collect them
+  // as we go; surface on the done chunk. New in 1.43.0.
+  const collectedFunctionCalls = [];
 
   for await (const chunk of res.body) {
     buffer += decoder.decode(chunk, { stream: true });
@@ -128,16 +132,24 @@ GeminiLLMService.prototype._stream = async function* _stream(
         if (typeof p.text === 'string' && p.text) {
           accumulatedText += p.text;
           yield { type: 'text_delta', text: p.text };
+        } else if (p.functionCall) {
+          collectedFunctionCalls.push(p.functionCall);
         }
       }
     }
   }
+  const toolCalls = collectedFunctionCalls.map(fc => ({
+    id: `gemini_${Math.random().toString(36).slice(2, 10)}`,
+    name: fc.name,
+    input: fc.args ?? {},
+  }));
   yield {
     type: 'done',
     text: accumulatedText,
     usage: mapUsage(lastEvt?.usageMetadata),
-    stopReason: lastEvt?.candidates?.[0]?.finishReason,
+    stopReason: toolCalls.length ? 'tool_use' : lastEvt?.candidates?.[0]?.finishReason,
     model,
+    ...(toolCalls.length ? { toolCalls } : {}),
   };
 };
 

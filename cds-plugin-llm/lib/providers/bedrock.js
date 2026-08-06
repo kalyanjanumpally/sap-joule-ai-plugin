@@ -127,6 +127,12 @@ BedrockLLMService.prototype._stream = async function* _stream(
   let accumulatedText = '';
   let usage;
   let stopReason;
+  // Tool-call accumulation (new in 1.43.0). Bedrock Converse streams a
+  // `contentBlockStart.start.toolUse` with `{ toolUseId, name }`, then a
+  // series of `contentBlockDelta.delta.toolUse.input` chunks that build
+  // up a JSON string. Track per contentBlockIndex; parse the JSON at stream
+  // close. Same shape hand-off as openai-compatible.js's tool_calls path.
+  const partialToolCalls = new Map();  // idx → { id, name, argsText }
 
   for await (const event of response.stream) {
     if (event.contentBlockDelta?.delta?.text) {
@@ -134,17 +140,47 @@ BedrockLLMService.prototype._stream = async function* _stream(
       accumulatedText += delta;
       yield { type: 'text_delta', text: delta };
     }
+    if (event.contentBlockStart?.start?.toolUse) {
+      const start = event.contentBlockStart.start.toolUse;
+      const idx = event.contentBlockStart.contentBlockIndex ?? 0;
+      const existing = partialToolCalls.get(idx) ?? { id: undefined, name: undefined, argsText: '' };
+      if (start.toolUseId) existing.id = start.toolUseId;
+      if (start.name) existing.name = start.name;
+      partialToolCalls.set(idx, existing);
+    }
+    if (event.contentBlockDelta?.delta?.toolUse?.input !== undefined) {
+      const idx = event.contentBlockDelta.contentBlockIndex ?? 0;
+      const existing = partialToolCalls.get(idx) ?? { id: undefined, name: undefined, argsText: '' };
+      existing.argsText += event.contentBlockDelta.delta.toolUse.input;
+      partialToolCalls.set(idx, existing);
+    }
     if (event.messageStop) stopReason = event.messageStop.stopReason;
     if (event.metadata?.usage) usage = event.metadata.usage;
   }
+  const toolCalls = Array.from(partialToolCalls.values())
+    .filter(t => t.name)
+    .map(t => ({
+      id: t.id,
+      name: t.name,
+      input: safeParseJson(t.argsText) ?? {},
+    }));
+  // Bedrock's stopReason mirrors 'tool_use' from Anthropic when Claude-on-
+  // Bedrock terminates with tool calls; normalize other providers too.
+  if (toolCalls.length && stopReason !== 'tool_use') stopReason = 'tool_use';
   yield {
     type: 'done',
     text: accumulatedText,
     usage: usage ? { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens } : {},
     stopReason,
     model,
+    ...(toolCalls.length ? { toolCalls } : {}),
   };
 };
+
+function safeParseJson(s) {
+  if (typeof s !== 'string' || !s) return null;
+  try { return JSON.parse(s); } catch { return null; }
+}
 
 // ---- request/response translation ----------------------------------------
 

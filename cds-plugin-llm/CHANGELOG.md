@@ -4,6 +4,42 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.0] — 2026-08-06
+
+### Added
+
+- **Gemini + Bedrock stream `toolCalls` plumbing.** Closes the follow-up noted in 1.42.0 CHANGELOG. `streamTools` + `streamAgents` now work with Gemini and Bedrock providers with full text_delta + tool-call event surfacing — no fallback to atomic-text needed.
+
+- **Gemini `_stream`**: Gemini emits complete `functionCall` parts per SSE frame (not fragmented like OpenAI-compat), so we collect them as-received and surface on the done chunk. `stopReason: 'tool_use'` set when any tool calls fired, matching Anthropic + OpenAI-compat conventions.
+
+- **Bedrock `_stream`**: Bedrock Converse emits `contentBlockStart.start.toolUse` with `{ toolUseId, name }`, followed by a series of `contentBlockDelta.delta.toolUse.input` fragments (JSON string built up incrementally). Accumulated per `contentBlockIndex` and parsed at stream close via the same `safeParseJson` tolerance as OpenAI-compat. `stopReason: 'tool_use'` normalized when tool calls fire (Bedrock's native `messageStop.stopReason` sometimes doesn't set it).
+
+  ```js
+  // Gemini/Bedrock behave identically to OpenAI-compat + Anthropic now:
+  for await (const evt of streamTools({
+    llm: geminiOrBedrockService,
+    system, messages, tools, maxSteps: 8,
+  })) {
+    // text_delta events during each turn
+    // tool_call_start / tool_call_result events
+    // done event with usage aggregate
+  }
+  ```
+
+- **6 new tests** (807 total):
+  - Gemini `_stream`: functionCall part surfaces as toolCalls with `stopReason='tool_use'` + text_delta chunks alongside
+  - Gemini `_stream`: text-only response omits toolCalls field, preserves `finishReason`
+  - Gemini `_stream`: multiple `functionCall` parts in one turn (each becomes a toolCall)
+  - Bedrock `_stream`: toolUse start + input deltas → toolCalls on done with correct `id/name/input`, `stopReason='tool_use'`, `usage` mapped
+  - Bedrock `_stream`: text-only response omits toolCalls, preserves `end_turn` stopReason
+  - Bedrock `_stream`: multiple parallel tool_use blocks at different `contentBlockIndex` values
+
+### Notes
+
+- **All 5 provider families now support streamed `toolCalls`** on the done chunk: OpenAI-compat (Azure OpenAI + GenAI Hub + Groq + DeepSeek + Mistral + Fireworks all inherit), Anthropic, Gemini, Bedrock. Ollama does not support tool-use natively in stream mode; consumers on Ollama fall back to atomic-text through `streamTools`.
+- **Bedrock `_stream` requires a real SDK response object.** The test fakes it via `svc._sdk` + `svc.client` injection; live consumers work unchanged.
+- **`safeParseJson` extracted to Bedrock provider file** — matches the identically-named helper in OpenAI-compat. Both tolerate malformed JSON by returning `null`, letting the agent loop surface the raw text through the tool result.
+
 ## [1.42.0] — 2026-08-06
 
 ### Added
