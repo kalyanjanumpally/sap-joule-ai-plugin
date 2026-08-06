@@ -82,6 +82,7 @@ module.exports = {
   parseOpenAIRateLimit: require('./rateLimits').parseOpenAIRateLimit,
   parseAnthropicRateLimit: require('./rateLimits').parseAnthropicRateLimit,
   parseGeminiRateLimit: require('./rateLimits').parseGeminiRateLimit,
+  parseBedrockRateLimit: require('./rateLimits').parseBedrockRateLimit,
   // OpenAI Files API helper (new in 1.14.0)
   uploadPdfFromUrl: require('./openaiFiles').uploadPdfFromUrl,
   // MCP HTTP transport helpers (new in 1.16.0)

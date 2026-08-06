@@ -4,6 +4,33 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.45.0] — 2026-08-06
+
+### Added
+
+- **Bedrock rate-limit plumbing.** Closes the last gap in the rate-limit family (after OpenAI-compat in 1.38.0, Anthropic in 1.40.0, Gemini in 1.44.0). All 4 major provider families now emit `_rateLimit` on chat + stream responses; `usageMetering.rateLimits('bedrock')` returns a snapshot; Prometheus emits the same `llm_rate_limit_*` gauges.
+
+- **`parseBedrockRateLimit(sdkResponse, statusCode)`** — extracts rate-limit info from an AWS SDK v3 Bedrock response. AWS doesn't publish per-response quota-remaining headers on the direct Bedrock surface, so most successful calls yield `null`. What we CAN extract:
+  - **`$metadata.retryAfterHeader`** — set by the SDK's throttling handler on 429/503 responses.
+  - **Fallback: `$metadata.httpHeaders['retry-after']`** — when the SDK exposes headers via a custom httpHandler.
+  - **Proxy-injected `x-amzn-ratelimit-*` headers** — when `$metadata.httpHeaders` is populated (rare on direct AWS SDK, common behind API Gateway).
+  - `statusCode` param overrides `$metadata.httpStatusCode` when the caller has more accurate information.
+
+- **Provider wiring** — Bedrock `_chat` reads `$metadata` off the ConverseCommand response; `_stream` reads it off the initial ConverseStreamCommand response before draining the stream. Both attach `_rateLimit` when non-null.
+
+- **12 new tests** (829 total): `parseBedrockRateLimit` — 200 with no signals → null, 429/503 with `retryAfterHeader`, statusCode override, 200 ignores retryAfterHeader, proxy `x-amzn-ratelimit-*` extraction, fallback to `httpHeaders['retry-after']`, null/undefined input handling; Bedrock provider — `_chat` attaches on 429, `_chat` omits on 200-no-signals, `_stream` attaches on done chunk; end-to-end with `usageMetering.rateLimits('bedrock')`.
+
+### Notes
+
+- **AWS Bedrock's rate-limit visibility is deliberately sparse.** Bedrock's quota system is per-account-per-region and reads via CloudWatch metrics (`AWS/Bedrock/ModelInvocations`, `Throttles`), not response headers. This release surfaces what the SDK response object exposes — mostly `retryAfterSeconds` on throttled responses. For production quota alerts, combine `llm_rate_limit_retry_after_seconds{provider="bedrock"}` with CloudWatch metric queries.
+- **Custom httpHandler consumers** get more: when a custom httpHandler surfaces `$metadata.httpHeaders`, the parser extracts `x-amzn-ratelimit-*` headers (some enterprise Bedrock deployments behind proxies do emit these).
+- **All 4 major providers now emit `_rateLimit`**:
+  - OpenAI-compat (all 6 subclasses) — 1.38.0
+  - Anthropic — 1.40.0
+  - Gemini — 1.44.0
+  - Bedrock — 1.45.0
+- **Ollama does not report rate limits** (self-hosted, unbounded local inference). No plans to add.
+
 ## [1.44.0] — 2026-08-06
 
 ### Added

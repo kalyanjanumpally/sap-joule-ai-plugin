@@ -25,6 +25,7 @@
 
 const cds = require('@sap/cds');
 const LLMService = require('../LLMService');
+const { parseBedrockRateLimit } = require('../rateLimits');
 
 const DEFAULT_EMBEDDING_MODEL = 'amazon.titan-embed-text-v2:0';
 
@@ -84,7 +85,14 @@ class BedrockLLMService extends LLMService {
       ];
     }
     const out = await this.client.send(cmd);
-    return normalizeChatResponse(out, model);
+    // Rate-limit extraction (new in 1.45.0) — see parseBedrockRateLimit's
+    // docblock for what's actually knowable from a Bedrock response. Most
+    // successful calls yield null; throttled ones (429/503) surface
+    // retryAfterSeconds.
+    const _rateLimit = parseBedrockRateLimit(out);
+    const result = normalizeChatResponse(out, model);
+    if (_rateLimit) result._rateLimit = _rateLimit;
+    return result;
   }
 
   async _embed({ model, input }) {
@@ -123,6 +131,10 @@ BedrockLLMService.prototype._stream = async function* _stream(
     ...(tools?.length ? { toolConfig: buildToolConfig(tools) } : {}),
   });
   const response = await this.client.send(cmd);
+  // Rate-limit snapshot from the initial stream-open response (new in 1.45.0).
+  // Bedrock's ConverseStreamCommand exposes $metadata on the response object
+  // before the stream is drained.
+  const _rateLimit = parseBedrockRateLimit(response);
 
   let accumulatedText = '';
   let usage;
@@ -174,6 +186,7 @@ BedrockLLMService.prototype._stream = async function* _stream(
     stopReason,
     model,
     ...(toolCalls.length ? { toolCalls } : {}),
+    ...(_rateLimit ? { _rateLimit } : {}),
   };
 };
 

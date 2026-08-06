@@ -1785,3 +1785,13 @@ export function parseAnthropicRateLimit(headers: unknown, statusCode?: number): 
  * @since 1.44.0
  */
 export function parseGeminiRateLimit(headers: unknown, statusCode?: number): RateLimitSnapshot | null;
+
+/**
+ * Extract rate-limit info from an AWS SDK v3 Bedrock response. AWS doesn't
+ * publish per-response quota-remaining headers, so most successful calls
+ * yield null. On 429/503 throttling responses, `retryAfterSeconds` is set
+ * from `$metadata.retryAfterHeader`. Custom httpHandlers exposing
+ * `$metadata.httpHeaders` also get `x-amzn-ratelimit-*` extraction.
+ * @since 1.45.0
+ */
+export function parseBedrockRateLimit(sdkResponse: unknown, statusCode?: number): RateLimitSnapshot | null;

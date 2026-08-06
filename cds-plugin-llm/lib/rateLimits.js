@@ -214,4 +214,69 @@ function parseGeminiRateLimit(headers, statusCode) {
   };
 }
 
-module.exports = { parseOpenAIRateLimit, parseAnthropicRateLimit, parseGeminiRateLimit, parseResetToIso, _h: h };
+/**
+ * Bedrock rate-limit extraction. AWS SDK v3 does NOT expose per-model
+ * quota-remaining or quota-limit headers on Bedrock responses — the quota
+ * system is per-account-per-region and reads via CloudWatch, not response
+ * headers. What we CAN extract:
+ *
+ *   - $metadata.httpStatusCode — 429/503 signal throttling
+ *   - $metadata.retryAfterHeader — set by the SDK's throttling handler
+ *   - Any `x-amzn-*` headers exposed via `$metadata.httpHeaders` (only
+ *     populated when a custom httpHandler surfaces them; not default).
+ *
+ * Consumers who need visibility should combine this with a CloudWatch check
+ * on `Bedrock/ModelInvocations` metrics.
+ *
+ * Returns null when the response is a normal 200 with no signals.
+ * @since 1.45.0
+ */
+function parseBedrockRateLimit(sdkResponse, statusCode) {
+  const now = Date.now();
+  const meta = sdkResponse?.$metadata ?? {};
+  const status = statusCode ?? meta.httpStatusCode;
+
+  let retryAfterSeconds;
+  if (status === 429 || status === 503) {
+    retryAfterSeconds = toInt(meta.retryAfterHeader);
+    // If the SDK exposed httpHeaders (rare), fall back to raw header lookup.
+    if (retryAfterSeconds == null && meta.httpHeaders) {
+      retryAfterSeconds = toInt(h(meta.httpHeaders, 'retry-after'));
+    }
+  }
+
+  // Some Bedrock deployments (behind a proxy) do surface x-amzn-ratelimit-*
+  // headers when httpHeaders is populated. Extract when available.
+  let requestsRemaining, requestsLimit, requestsResetAt;
+  if (meta.httpHeaders) {
+    requestsLimit     = toInt(h(meta.httpHeaders, 'x-amzn-ratelimit-limit'));
+    requestsRemaining = toInt(h(meta.httpHeaders, 'x-amzn-ratelimit-remaining'));
+    const reset = h(meta.httpHeaders, 'x-amzn-ratelimit-reset');
+    if (reset) requestsResetAt = parseResetToIso(reset, now);
+  }
+
+  if (
+    requestsLimit == null && requestsRemaining == null && requestsResetAt == null &&
+    retryAfterSeconds == null
+  ) return null;
+
+  return {
+    requestsLimit,
+    requestsRemaining,
+    requestsResetAt,
+    tokensLimit:     undefined,
+    tokensRemaining: undefined,
+    tokensResetAt:   undefined,
+    retryAfterSeconds,
+    updatedAt: new Date(now).toISOString(),
+  };
+}
+
+module.exports = {
+  parseOpenAIRateLimit,
+  parseAnthropicRateLimit,
+  parseGeminiRateLimit,
+  parseBedrockRateLimit,
+  parseResetToIso,
+  _h: h,
+};
