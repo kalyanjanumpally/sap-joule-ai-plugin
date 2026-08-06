@@ -4,6 +4,35 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.47.1] — 2026-08-06
+
+### Added
+
+- **Retry counters in `promMetrics` / `prometheusHandler`.** Ties `retryOnRateLimit` (1.47.0) into the Grafana + Kubernetes ServiceMonitor stack. Register the retry middleware in the bundle to emit the new series:
+
+  ```js
+  const retry = retryOnRateLimit({ maxAttempts: 3 });
+  llm.use(retry);
+  app.get('/metrics', prometheusHandler({ cache, budget, retry, guardrails, injectionGuard, metering }));
+  ```
+
+- **5 new metric families:**
+  - `llm_retry_requests_total` — total requests observed by the middleware (each retried request counts as ONE, not N)
+  - `llm_retry_retried_requests_total` — requests that hit throttling and were retried at least once
+  - `llm_retry_attempts_total` — total retry attempts across all requests (a request that retried twice contributes 2)
+  - `llm_retry_given_up_total` — requests that exhausted `maxAttempts` and threw `RateLimitGiveUpError`
+  - `llm_retry_wait_seconds_total` — cumulative time spent waiting between retries, in seconds (`totalWaitMs / 1000` for compatibility with Prometheus rate() math)
+
+- **3 new tests** (864 total): no retry series emitted when no retry middleware is bound; all 5 counters + wait-seconds gauge emit correctly when bound with populated stats; full-bundle HELP/TYPE parity round-trip with retry mw included.
+
+- **TS defs:** `PrometheusMiddlewareBundle.retry?: RetryOnRateLimitMiddleware`.
+
+### Notes
+
+- **`llm_retry_wait_seconds_total` uses seconds (not ms)** because Prometheus's `rate()` and `increase()` idioms expect seconds. Grafana panels showing "total time spent waiting on throttling" are one `sum(rate(llm_retry_wait_seconds_total[5m]))` away.
+- **Alert recipe:** `rate(llm_retry_given_up_total[10m]) > 0.01` — any give-up above 1% over 10m indicates provider quota exhaustion → page ops.
+- **Backward-compatible.** Bundles without a `retry` field yield the same output as before. No new required fields.
+
 ## [1.47.0] — 2026-08-06
 
 ### Added

@@ -160,6 +160,23 @@ function emitInjectionGuard(guard) {
   return out;
 }
 
+function emitRetry(retry) {
+  if (!retry?.stats) return [];
+  const s = retry.stats;
+  const out = [];
+  out.push(header('llm_retry_requests_total', 'Total requests observed by retryOnRateLimit (each retry counts as ONE, not N)', 'counter'));
+  out.push(line('llm_retry_requests_total', s.requests ?? 0));
+  out.push(header('llm_retry_retried_requests_total', 'Requests that hit throttling and were retried at least once', 'counter'));
+  out.push(line('llm_retry_retried_requests_total', s.retriedRequests ?? 0));
+  out.push(header('llm_retry_attempts_total', 'Total retry attempts across all requests (a request that retried twice contributes 2)', 'counter'));
+  out.push(line('llm_retry_attempts_total', s.totalRetries ?? 0));
+  out.push(header('llm_retry_given_up_total', 'Requests that exhausted maxAttempts and threw RateLimitGiveUpError', 'counter'));
+  out.push(line('llm_retry_given_up_total', s.givenUp ?? 0));
+  out.push(header('llm_retry_wait_seconds_total', 'Cumulative time spent waiting between retries, in seconds', 'counter'));
+  out.push(line('llm_retry_wait_seconds_total', (s.totalWaitMs ?? 0) / 1000));
+  return out;
+}
+
 function emitMetering(meter) {
   if (!meter?.summary) return [];
   const s = meter.summary();
@@ -267,6 +284,7 @@ function isoToSecondsFromNow(iso) {
  * @param {object} [mw.guardrails]      guardrails middleware
  * @param {object} [mw.injectionGuard]  promptInjectionGuard middleware
  * @param {object} [mw.metering]        usageMetering / usageMeteringToCap middleware
+ * @param {object} [mw.retry]           retryOnRateLimit middleware (new in 1.47.1)
  * @param {object} [options]
  * @param {boolean} [options.excludeBreakdowns=false]  Skip per-tenant/model/provider breakdowns
  *                                                     (cardinality control for large fleets).
@@ -279,6 +297,7 @@ async function promMetrics(mw = {}, options = {}) {
   lines.push(...(await emitBudget(mw.budget)));
   lines.push(...emitGuardrails(mw.guardrails));
   lines.push(...emitInjectionGuard(mw.injectionGuard));
+  lines.push(...emitRetry(mw.retry));
   let meteringLines = emitMetering(mw.metering);
   if (excludeBreakdowns) {
     meteringLines = meteringLines.filter(

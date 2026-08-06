@@ -239,3 +239,48 @@ test('promMetrics: all-in-one bundle produces well-formed Prometheus text', asyn
   assert.ok(helpCount > 0, 'at least one HELP line');
   assert.equal(helpCount, typeCount, 'every HELP must have a matching TYPE');
 });
+
+// ---- Retry metrics (new in 1.47.1) --------------------------------
+
+test('promMetrics: no retry series when no retry middleware bound', async () => {
+  const text = await promMetrics({});
+  assert.doesNotMatch(text, /llm_retry_/);
+});
+
+test('promMetrics: emits llm_retry_* counters + wait-seconds gauge when retry mw bound', async () => {
+  const { retryOnRateLimit } = require('../lib/middleware/retryOnRateLimit');
+  // Populate the stats via manual mutation — no need to run a full retry loop
+  const retry = retryOnRateLimit({ maxAttempts: 3 });
+  retry.stats.requests        = 10;
+  retry.stats.retriedRequests = 2;
+  retry.stats.totalRetries    = 3;
+  retry.stats.givenUp         = 1;
+  retry.stats.totalWaitMs     = 6250;   // 6.25 seconds
+
+  const text = await promMetrics({ retry });
+  assert.match(text, /^# TYPE llm_retry_requests_total counter/m);
+  assert.match(text, /llm_retry_requests_total 10/);
+  assert.match(text, /llm_retry_retried_requests_total 2/);
+  assert.match(text, /llm_retry_attempts_total 3/);
+  assert.match(text, /llm_retry_given_up_total 1/);
+  assert.match(text, /^llm_retry_wait_seconds_total 6\.25/m);
+});
+
+test('promMetrics: retry-metrics HELP/TYPE lines round-trip correctly in a full bundle', async () => {
+  const { retryOnRateLimit } = require('../lib/middleware/retryOnRateLimit');
+  const retry = retryOnRateLimit({});
+  const svc = makeSvc(); await svc.init();
+  const cache = responseCache({});
+  const budget = costBudget({ limits: { total: 100 } });
+  svc.use(retry); svc.use(budget); svc.use(cache);
+  await svc.chat({ messages: [{ role: 'user', content: 'x' }] });
+  const text = await promMetrics({ cache, budget, retry });
+  const lines = text.split('\n').filter(Boolean);
+  let helpCount = 0, typeCount = 0;
+  for (const l of lines) {
+    if (l.startsWith('# HELP ')) helpCount++;
+    else if (l.startsWith('# TYPE ')) typeCount++;
+  }
+  assert.equal(helpCount, typeCount, 'HELP/TYPE parity holds when retry mw included');
+  assert.match(text, /llm_retry_requests_total 1/);
+});

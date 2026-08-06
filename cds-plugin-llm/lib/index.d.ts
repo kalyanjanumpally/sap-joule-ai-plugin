@@ -1789,6 +1789,8 @@ export interface PrometheusMiddlewareBundle {
   guardrails?:     GuardrailsMiddleware;
   injectionGuard?: PromptInjectionGuardMiddleware;
   metering?:       UsageMeteringMiddleware;
+  /** @since 1.47.1 */
+  retry?:          RetryOnRateLimitMiddleware;
 }
 
 export interface PromMetricsOptions {
