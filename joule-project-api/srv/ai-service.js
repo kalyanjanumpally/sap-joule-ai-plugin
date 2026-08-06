@@ -95,6 +95,7 @@ let _cache;
 let _guardrails;
 let _budget;
 let _injectionGuard;
+let _metering;
 // Shared limits object — passed by reference to costBudget() so
 // FinanceService can mutate it live from LlmBudget rows without a
 // restart. costBudget reads from this via limitFor() on every call.
@@ -172,10 +173,11 @@ function getLLM() {
         },
       });
       llm.use(_budget);
-      llm.use(usageMeteringToCap(cds, {
+      _metering = usageMeteringToCap(cds, {
         tenantOf:   (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
         providerOf: (ctx) => ctx.raw?.providerAlias ?? cds.env.requires?.llm?.kind ?? null,
-      }));
+      });
+      llm.use(_metering);
       // Semantic cache — reuses the `llm-embed` alias (Ollama nomic-embed-text
       // by default, or genai-hub embed deployment in prod). Cache hits now
       // fire not only on exact prompt matches but on semantically-similar
@@ -217,6 +219,8 @@ function getCache() { return _cache; }
 function getGuardrails() { return _guardrails; }
 /** Exported for `/injection-stats` — prompt-injection detection dashboard. */
 function getInjectionGuard() { return _injectionGuard; }
+/** Exported for the MCP service — usage metering middleware for summary(). */
+function getMetering() { return _metering; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -265,6 +269,19 @@ function makeStreamHandler(llm) {
 module.exports = class AIService extends cds.ApplicationService {
   async init() {
     const llm = await getLLM();
+
+    // Observability MCP surface — spins up a Streamable HTTP MCP server on
+    // port 3334 that exposes every middleware's asMcpResource() plus a small
+    // tool surface (reload_budget, reset_cache, reset_injection_stats). Bound
+    // to cds.once('served') so all middleware is wired before we build the
+    // resource list. Set MCP_OBS_DISABLE to skip; MCP_OBS_TOKEN to require
+    // bearer auth.
+    cds.once('served', async () => {
+      const { startObservabilityMcp } = require('./mcp-service');
+      await startObservabilityMcp({
+        getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering,
+      });
+    });
 
     // Wrap the vector-hana plugin's `cds.vectorHana.askAbout` with a
     // version that runs the FULL 5-stage RAG pipeline:
@@ -600,3 +617,8 @@ module.exports = class AIService extends cds.ApplicationService {
 // to avoid being clobbered by `module.exports = class AIService...`.
 module.exports.getBudget = getBudget;
 module.exports.getBudgetLimits = getBudgetLimits;
+module.exports.getCache = getCache;
+module.exports.getGuardrails = getGuardrails;
+module.exports.getInjectionGuard = getInjectionGuard;
+module.exports.getMetering = getMetering;
+module.exports.getLLM = getLLM;

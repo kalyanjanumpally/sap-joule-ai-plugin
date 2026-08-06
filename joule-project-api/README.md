@@ -18,6 +18,7 @@ CAP backend for the **Procurement Copilot** Joule agent. Hosts LLM-backed action
 | `POST /finance/reloadBudget` | **Re-read `LlmBudget` rows after admin edits. No restart needed.** |
 | `GET  /budget-status` | Lightweight JSON snapshot of budget spend + limits (same data as the OData action; no OData framing). Useful for K8s probes. |
 | `GET  /injection-stats` | **Prompt-injection detection counters** — `scanned / blocked / sanitized / warned` + per-detector breakdown (regex / base64 / unicode / delimiters / roleAttempt / lengthAnomaly). |
+| **MCP** `POST /mcp` on port **3334** | **Observability MCP server (Streamable HTTP transport).** Exposes every middleware's live state (`config://cache`, `config://budget`, `config://prompt-injection-guard`, `config://usage`, `config://guardrails`), the `LlmBudget` config rows (`finance://llm-budget`), and recent `LlmSpend` rows (`finance://llm-spend/recent?limit={n}`) as MCP resources. Plus tools: `reload_budget`, `reset_cache`, `reset_injection_stats`. |
 
 The `/ai/*` actions delegate to whichever LLM provider is configured under `cds.requires.llm` (see [`../cds-plugin-llm`](../cds-plugin-llm/README.md)). The `/procurement/*` actions are auto-declared by [`@saptarishi/cds-plugin-vector-hana`](../cds-plugin-vector-hana/README.md) from the `@rag` annotation on `SupplierContracts` — **zero handler code lives in this project for them**. The `/finance/LlmSpend` entity is a projection of the shipped `saptarishi.llm.usage.LlmUsage` (from `@saptarishi/cds-plugin-llm@1.22+`); rows are auto-inserted by the `usageMeteringToCap` middleware wired inside `srv/ai-service.js`.
 
@@ -142,6 +143,73 @@ curl -sX POST http://localhost:4004/finance/reloadBudget \
 When any request would push a tenant / model / total counter over its limit, `costBudget` throws a `BudgetExceededError` before the LLM is called. Set a row's `action` to `warn` for logging-only mode (Globex is preseeded that way). Multi-instance deployments swap the default per-process store for `RedisCounterStore` — counters aggregate across replicas via `INCRBYFLOAT`.
 
 **Fiori list report** — the `LlmBudget` projection carries `@UI.LineItem`, `@UI.SelectionFields`, and `@UI.HeaderInfo` annotations. Any Fiori launchpad can bind to it directly and let finance admins edit rows without touching curl.
+
+### Observability MCP surface
+
+`srv/mcp-service.js` spins up a **Streamable HTTP MCP server on port 3334** (separate from the OData port so it doesn't shadow CAP routes). It exposes every observability primitive that the middleware chain accumulates — cache stats, budget spend + limits, injection detection counters, per-tenant usage, guardrails blocks/redacts, live `LlmBudget` config, and recent `LlmSpend` rows — as MCP resources. External MCP clients (Claude Desktop, Cline, Cursor) can connect directly and read the entire operational picture as JSON.
+
+Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "joule-procurement-ops": {
+      "transport": { "type": "streamable-http", "url": "http://localhost:3334/mcp" }
+    }
+  }
+}
+```
+
+Cline / Cursor: same URL, same transport type.
+
+Env vars:
+
+- `MCP_OBS_PORT` — listen port (default 3334)
+- `MCP_OBS_TOKEN` — if set, all requests require `Authorization: Bearer <token>`
+- `MCP_OBS_DISABLE` — set truthy to skip startup (useful in tests)
+
+**Resources** (all `application/json`):
+
+| URI | What it returns |
+|---|---|
+| `config://cache` | Cache hit/miss counters + semantic index size |
+| `config://budget` | Current-window spend + effective limits |
+| `config://prompt-injection-guard` | Injection detection counters + per-detector breakdown |
+| `config://usage` | Aggregate token counts + cost across all metered requests |
+| `config://guardrails` | Guardrails block/redact counters |
+| `finance://llm-budget` | Every `LlmBudget` config row (persisted, admin-editable) |
+| `finance://llm-spend/recent?limit={n}` | The N most recent `LlmSpend` rows (templated, limit clamped 1-200) |
+
+**Tools**:
+
+| Name | Purpose |
+|---|---|
+| `reload_budget` | Re-read `LlmBudget` rows into the middleware (after admin edits) |
+| `reset_cache` | Clear both exact-match cache and semantic index |
+| `reset_injection_stats` | Reset promptInjectionGuard counters |
+
+Sanity check from the terminal:
+
+```sh
+# initialize + capture session id
+curl -s -X POST http://127.0.0.1:3334/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"0"}}}' \
+  -D /tmp/mcp-h.txt
+SESS=$(grep -i mcp-session /tmp/mcp-h.txt | awk '{print $2}' | tr -d '\r\n')
+
+# list resources
+curl -s -X POST http://127.0.0.1:3334/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -H "Mcp-Session-Id: $SESS" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"resources/list"}' | jq '.result.resources[] | .uri + " — " + .name'
+
+# read the current budget snapshot
+curl -s -X POST http://127.0.0.1:3334/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -H "Mcp-Session-Id: $SESS" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"config://budget"}}' | jq -r '.result.contents[0].text' | jq
+```
 
 ### Try the multi-agent orchestrator
 
