@@ -18,7 +18,11 @@ using { cuid, managed } from '@sap/cds/common';
 service ProcurementService @(path: '/procurement') {
 
   @rag: {
-    fields:    ['supplierName', 'contractType', 'category', 'terms'],
+    fields:         ['supplierName', 'contractType', 'category', 'terms'],
+    // Persist these fields as filterable metadata alongside the embedding —
+    // enables the `filter: {"region":"EMEA"}` param on searchByMeaning +
+    // askAbout to actually filter down results. New in vector-hana 0.12.0.
+    metadataFields: ['region', 'category', 'contractType', 'supplierName'],
     dimension: 768,
     store:     'sqlite',
     topK:      5,
