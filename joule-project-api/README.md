@@ -21,6 +21,7 @@ CAP backend for the **Procurement Copilot** Joule agent. Hosts LLM-backed action
 | `POST /finance/reloadBudget` | **Re-read `LlmBudget` rows after admin edits. No restart needed.** |
 | `GET  /budget-status` | Lightweight JSON snapshot of budget spend + limits (same data as the OData action; no OData framing). Useful for K8s probes. |
 | `GET  /injection-stats` | **Prompt-injection detection counters** — `scanned / blocked / sanitized / warned` + per-detector breakdown (regex / base64 / unicode / delimiters / roleAttempt / lengthAnomaly). |
+| `GET  /retry-stats` | **Rate-limit retry counters** — `requests / retriedRequests / totalRetries / givenUp / totalWaitMs`. Shows throttling pressure before it becomes user-visible latency. Complements `/budget-status` (pre-flight blocks) with reactive-recovery visibility. |
 | `GET  /metrics` | **Prometheus scrape endpoint (text-exposition 0.0.4)** — same counters as the individual `/*-stats` endpoints, serialized for Grafana / DataDog agent / Kubernetes ServiceMonitor. Cache, budget, guardrails, injection, and usage metering — one endpoint, all metrics. |
 | **MCP** `POST /mcp` on port **3334** | **Observability MCP server (Streamable HTTP transport).** Exposes every middleware's live state (`config://cache`, `config://budget`, `config://prompt-injection-guard`, `config://usage`, `config://guardrails`), the `LlmBudget` config rows (`finance://llm-budget`), and recent `LlmSpend` rows (`finance://llm-spend/recent?limit={n}`) as MCP resources. Plus tools: `reload_budget`, `reset_cache`, `reset_injection_stats`. |
 

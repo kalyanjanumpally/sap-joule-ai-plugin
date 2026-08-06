@@ -28,7 +28,7 @@ const { MCPServer } = require('@saptarishi/cds-plugin-llm/lib/mcp/server');
  * wired up before we build the resources.
  */
 async function startObservabilityMcp({
-  getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering,
+  getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
 }) {
   if (process.env.MCP_OBS_DISABLE) {
     cds.log('mcp:obs').info('[mcp:obs] disabled via MCP_OBS_DISABLE — skipping startup');
@@ -45,7 +45,7 @@ async function startObservabilityMcp({
     const server = new MCPServer({
       name:              'joule-procurement-ops',
       version:           '0.6.0',
-      resources:         buildResources({ getCache, getBudget, getGuardrails, getInjectionGuard, getMetering }),
+      resources:         buildResources({ getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry }),
       resourceTemplates: buildResourceTemplates(),
       tools:             buildTools({ getCache, getInjectionGuard }),
       logger,
@@ -70,7 +70,7 @@ async function startObservabilityMcp({
 
 // ---- Resources -------------------------------------------------------
 
-function buildResources({ getCache, getBudget, getGuardrails, getInjectionGuard, getMetering }) {
+function buildResources({ getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry }) {
   // As of cds-plugin-llm 1.40.1, MCPServer.registerResource() accepts the
   // { handler } shape shipped by middleware.asMcpResource() directly — no
   // adapter shim needed. Pass through as-is.
@@ -87,6 +87,9 @@ function buildResources({ getCache, getBudget, getGuardrails, getInjectionGuard,
 
   const meter = getMetering();
   if (meter?.asMcpResource) resources.push(meter.asMcpResource());
+
+  const retry = getRetry?.();
+  if (retry?.asMcpResource) resources.push(retry.asMcpResource());
 
   const gr = getGuardrails();
   if (gr?.asMcpResource) resources.push(gr.asMcpResource());

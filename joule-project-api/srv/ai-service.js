@@ -12,6 +12,7 @@ const {
   schemas,
   prometheusHandler,
   streamAgents,
+  retryOnRateLimit, RateLimitGiveUpError,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -100,6 +101,7 @@ let _guardrails;
 let _budget;
 let _injectionGuard;
 let _metering;
+let _retry;
 // Shared limits object — passed by reference to costBudget() so
 // FinanceService can mutate it live from LlmBudget rows without a
 // restart. costBudget reads from this via limitFor() on every call.
@@ -177,6 +179,30 @@ function getLLM() {
         },
       });
       llm.use(_budget);
+      // Rate-limit retry sits between costBudget (blocks BEFORE the call)
+      // and usageMetering (records what happened). Placement rationale:
+      //   - INNER of costBudget: if a retry pushes us over the budget on
+      //     attempt N, the pre-check on attempt N+1 fires correctly.
+      //   - OUTER of usageMetering: retries don't inflate LlmSpend rows
+      //     (one logical request = one metering row).
+      // Disable the base LLMService's built-in withRetry (max: 3, baseMs: 500)
+      // via per-request retries: {max: 0} on our own chat() calls if we want
+      // this middleware to see every throttle. For the demo we let both
+      // layers work — the built-in provides quick backoff for transient
+      // errors, this layer catches sustained rate-limit pressure with a
+      // longer patience budget.
+      _retry = retryOnRateLimit({
+        maxAttempts:    3,
+        fallbackWaitMs: 2000,
+        jitterMs:       500,
+        onRetry:  (info) => cds.log('llm:retry').warn(
+          `[retry] attempt ${info.attempt} in ${info.waitMs}ms (status=${info.status}): ${info.error.message.slice(0, 80)}`,
+        ),
+        onGiveUp: (info) => cds.log('llm:retry').error(
+          `[retry] gave up after ${info.attempts.length} retries: ${info.finalError.message.slice(0, 100)}`,
+        ),
+      });
+      llm.use(_retry);
       _metering = usageMeteringToCap(cds, {
         tenantOf:   (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
         providerOf: (ctx) => ctx.raw?.providerAlias ?? cds.env.requires?.llm?.kind ?? null,
@@ -225,6 +251,8 @@ function getGuardrails() { return _guardrails; }
 function getInjectionGuard() { return _injectionGuard; }
 /** Exported for the MCP service — usage metering middleware for summary(). */
 function getMetering() { return _metering; }
+/** Exported for the MCP service + /retry-stats dashboard. */
+function getRetry() { return _retry; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -381,7 +409,7 @@ module.exports = class AIService extends cds.ApplicationService {
     cds.once('served', async () => {
       const { startObservabilityMcp } = require('./mcp-service');
       await startObservabilityMcp({
-        getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering,
+        getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
       });
     });
 
@@ -485,6 +513,14 @@ module.exports = class AIService extends cds.ApplicationService {
         const g = getInjectionGuard();
         if (!g) return res.status(503).json({ error: 'injection guard not initialized yet' });
         res.json(g.stats);
+      });
+      // Rate-limit retry dashboard — counters + total wait time absorbed.
+      // Complements /finance/LlmSpend + /budget-status by showing throttling
+      // pressure ops needs to see before it becomes user-visible latency.
+      cds.app.get('/retry-stats', (_req, res) => {
+        const r = getRetry();
+        if (!r) return res.status(503).json({ error: 'retry middleware not initialized yet' });
+        res.json(r.stats);
       });
       // Prometheus /metrics — same counters as the /*-stats endpoints but
       // serialized to Prom 0.0.4 text-exposition. Scrape-friendly for
@@ -789,4 +825,5 @@ module.exports.getCache = getCache;
 module.exports.getGuardrails = getGuardrails;
 module.exports.getInjectionGuard = getInjectionGuard;
 module.exports.getMetering = getMetering;
+module.exports.getRetry = getRetry;
 module.exports.getLLM = getLLM;
