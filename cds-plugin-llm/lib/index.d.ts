@@ -1776,3 +1776,12 @@ export function parseOpenAIRateLimit(headers: unknown, statusCode?: number): Rat
  * @since 1.38.0
  */
 export function parseAnthropicRateLimit(headers: unknown, statusCode?: number): RateLimitSnapshot | null;
+
+/**
+ * Normalize Gemini rate-limit headers into a snapshot. Handles both Vertex-style
+ * (`x-goog-quota-limit`, `x-goog-quota-remaining`, `x-goog-quota-refresh` as
+ * Unix epoch seconds) and OpenAI-style (`x-ratelimit-*`) headers when API
+ * Gateway proxies re-emit them. Returns null when neither is present.
+ * @since 1.44.0
+ */
+export function parseGeminiRateLimit(headers: unknown, statusCode?: number): RateLimitSnapshot | null;

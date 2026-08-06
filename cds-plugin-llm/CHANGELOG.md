@@ -4,6 +4,29 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.44.0] — 2026-08-06
+
+### Added
+
+- **Gemini rate-limit plumbing.** Third and final piece of the rate-limit family (after OpenAI-compat in 1.38.0 + Anthropic in 1.40.0). Gemini provider now attaches `_rateLimit` on chat + stream responses; `usageMetering.rateLimits('gemini')` returns a snapshot; Prometheus emits the same `llm_rate_limit_*` gauges for Gemini traffic.
+
+- **`parseGeminiRateLimit(headers, statusCode)`** — normalized header parser handling both surface variants Google exposes:
+  - **Vertex-style** (Google's canonical Vertex AI surface): `x-goog-quota-limit`, `x-goog-quota-remaining`, `x-goog-quota-refresh` (Unix epoch seconds → converted to ISO).
+  - **OpenAI-style** (when API-Gateway proxies re-emit standard headers): `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests` (duration or ISO).
+  - **Universal** `retry-after` on 429/503.
+  - Returns `null` when no signals present (direct Generative Language API often omits these).
+  - Vertex takes precedence when both header families are present.
+
+- **Provider wiring** — Gemini `_chat` reads response headers via `parseGeminiRateLimit(res.headers, res.status)` and attaches `_rateLimit` on the returned response. `_stream` captures the same headers off the initial stream-open response and attaches on the done chunk.
+
+- **10 new tests** (817 total): `parseGeminiRateLimit` — Vertex-style headers, OpenAI-style headers, 429 retry-after, no headers → null, Vertex-wins precedence, Headers-object shape; Gemini provider — `_chat` attaches `_rateLimit` when Vertex headers present, gracefully omits when no headers, `_stream` attaches on done chunk; end-to-end with `usageMetering.rateLimits('gemini')` via a mocked fetch.
+
+### Notes
+
+- **Direct Generative Language API often omits rate-limit headers.** Users on `generativelanguage.googleapis.com` (the default endpoint) may see `_rateLimit: undefined` on every response — that's expected. Users on Vertex or behind an API Gateway that adds standard headers get the data.
+- **Gemini's quota model doesn't split requests vs tokens** on the header side — `tokensLimit / tokensRemaining / tokensResetAt` fields are `undefined`. Consumers wanting token-level budgets can hook `usageMetering.onRecord` and compute from `usageMetadata.candidatesTokenCount` / `promptTokenCount`.
+- **All 3 major providers now emit `_rateLimit`.** OpenAI-compat (all 6 subclasses) + Anthropic + Gemini. Bedrock rate-limit plumbing is the last gap; AWS reports throttling via SDK response metadata — needs a separate approach.
+
 ## [1.43.0] — 2026-08-06
 
 ### Added

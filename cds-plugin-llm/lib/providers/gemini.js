@@ -15,6 +15,7 @@
 const cds = require('@sap/cds');
 const LLMService = require('../LLMService');
 const { throwFromResponse } = require('../util');
+const { parseGeminiRateLimit } = require('../rateLimits');
 
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
 const DEFAULT_EMBEDDING_MODEL = 'text-embedding-004';
@@ -45,7 +46,13 @@ class GeminiLLMService extends LLMService {
     if (!res.ok) await throwFromResponse(res, 'Gemini');
 
     const data = await res.json();
-    return normalizeChatResponse(data, model);
+    // Rate-limit headers (new in 1.44.0). Non-fatal parse — Gemini's direct
+    // Generative Language API often omits these; Vertex + API-Gateway
+    // deployments emit them.
+    const _rateLimit = parseGeminiRateLimit(res.headers, res.status);
+    const result = normalizeChatResponse(data, model);
+    if (_rateLimit) result._rateLimit = _rateLimit;
+    return result;
   }
 
   async _embed({ model, input }) {
@@ -102,6 +109,8 @@ GeminiLLMService.prototype._stream = async function* _stream(
     body: JSON.stringify(body),
   });
   if (!res.ok) await throwFromResponse(res, 'Gemini');
+  // Rate-limit headers on the initial stream response (new in 1.44.0).
+  const _rateLimit = parseGeminiRateLimit(res.headers, res.status);
 
   const decoder = new TextDecoder();
   let buffer = '';
@@ -150,6 +159,7 @@ GeminiLLMService.prototype._stream = async function* _stream(
     stopReason: toolCalls.length ? 'tool_use' : lastEvt?.candidates?.[0]?.finishReason,
     model,
     ...(toolCalls.length ? { toolCalls } : {}),
+    ...(_rateLimit ? { _rateLimit } : {}),
   };
 };
 

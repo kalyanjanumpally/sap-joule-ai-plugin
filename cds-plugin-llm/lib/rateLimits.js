@@ -157,4 +157,61 @@ function parseResetToIso(raw, nowMs) {
   return new Date(nowMs + totalMs).toISOString();
 }
 
-module.exports = { parseOpenAIRateLimit, parseAnthropicRateLimit, parseResetToIso, _h: h };
+/**
+ * Gemini rate-limit headers. Google is inconsistent across surfaces:
+ *   - Generative Language API (api.gemini / generativelanguage.googleapis.com):
+ *     often no rate-limit headers; retry-after only on 429/503.
+ *   - Vertex AI: emits x-goog-quota-remaining / x-goog-quota-limit.
+ *   - API-Gateway-fronted deployments (self-hosted proxies): may re-emit
+ *     standard x-ratelimit-* headers.
+ *
+ * We parse whichever combination is present. Returns null when no signals.
+ * @since 1.44.0
+ */
+function parseGeminiRateLimit(headers, statusCode) {
+  const now = Date.now();
+
+  // Try Vertex-style first, then fall back to OpenAI-style
+  const requestsLimit     = toInt(h(headers, 'x-goog-quota-limit'))
+                          ?? toInt(h(headers, 'x-ratelimit-limit-requests'));
+  const requestsRemaining = toInt(h(headers, 'x-goog-quota-remaining'))
+                          ?? toInt(h(headers, 'x-ratelimit-remaining-requests'));
+
+  // Reset can appear as a Unix epoch second on x-goog-quota-refresh, or as a
+  // duration on x-ratelimit-reset-requests, or absent.
+  let requestsResetAt;
+  const gcpReset = h(headers, 'x-goog-quota-refresh');
+  if (gcpReset) {
+    const secs = toInt(gcpReset);
+    if (secs) requestsResetAt = new Date(secs * 1000).toISOString();
+  }
+  if (!requestsResetAt) {
+    requestsResetAt = parseResetToIso(h(headers, 'x-ratelimit-reset-requests'), now);
+  }
+
+  let retryAfterSeconds;
+  if (statusCode === 429 || statusCode === 503) {
+    retryAfterSeconds = toInt(h(headers, 'retry-after'));
+  }
+
+  if (
+    requestsLimit == null && requestsRemaining == null && requestsResetAt == null &&
+    retryAfterSeconds == null
+  ) return null;
+
+  return {
+    requestsLimit,
+    requestsRemaining,
+    requestsResetAt,
+    // Gemini doesn't split requests vs tokens on the quota side — tokensLimit
+    // etc. always undefined for now. Callers can hook onRecord to compute
+    // token budgets from response.usageMetadata if needed.
+    tokensLimit:     undefined,
+    tokensRemaining: undefined,
+    tokensResetAt:   undefined,
+    retryAfterSeconds,
+    updatedAt: new Date(now).toISOString(),
+  };
+}
+
+module.exports = { parseOpenAIRateLimit, parseAnthropicRateLimit, parseGeminiRateLimit, parseResetToIso, _h: h };
