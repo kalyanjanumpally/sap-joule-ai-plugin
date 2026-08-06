@@ -709,6 +709,62 @@ export interface RunToolsResult {
  */
 export function runTools(options: RunToolsOptions): Promise<RunToolsResult>;
 
+// ---- streamTools() event types (new in 1.39.0) ------------------------
+
+/** Emitted at the START of every chat turn. Handy for "Turn N of M" UIs. @since 1.39.0 */
+export interface StreamToolsTurnStartEvent {
+  type: 'turn_start';
+  step: number;
+}
+
+/** Assistant text for the current turn. Atomic (not deltas). @since 1.39.0 */
+export interface StreamToolsTextEvent {
+  type: 'text';
+  step: number;
+  text: string;
+}
+
+/** Emitted right BEFORE a tool starts executing. @since 1.39.0 */
+export interface StreamToolsToolCallStartEvent {
+  type: 'tool_call_start';
+  step: number;
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+/** Emitted AFTER a tool finishes (success or error). @since 1.39.0 */
+export interface StreamToolsToolCallResultEvent {
+  type: 'tool_call_result';
+  step: number;
+  id: string;
+  name: string;
+  result: string;
+  isError: boolean;
+}
+
+/** Final event when the loop terminates. Shape matches RunToolsResult. @since 1.39.0 */
+export interface StreamToolsDoneEvent extends RunToolsResult {
+  type: 'done';
+  step: number;
+}
+
+export type StreamToolsEvent =
+  | StreamToolsTurnStartEvent
+  | StreamToolsTextEvent
+  | StreamToolsToolCallStartEvent
+  | StreamToolsToolCallResultEvent
+  | StreamToolsDoneEvent;
+
+/**
+ * Async-generator counterpart to `runTools`. Yields per-turn progress events
+ * (turn_start, text, tool_call_start, tool_call_result) plus a final `done`
+ * event carrying the same shape as `RunToolsResult`. Consumers use this to
+ * render agent progress in chat UIs without blocking on the full trace.
+ * @since 1.39.0
+ */
+export function streamTools(options: RunToolsOptions): AsyncGenerator<StreamToolsEvent, void, void>;
+
 // ---------------------------------------------------------------------------
 // Multi-agent orchestration (new in v1.27.0)
 // ---------------------------------------------------------------------------

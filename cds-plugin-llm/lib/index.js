@@ -32,6 +32,8 @@ module.exports = {
   audioFromBase64,
   // Tool runner — automatic multi-turn agent loop (new in 1.1.0)
   runTools,
+  // Streaming counterpart — yields progress events between + inside each turn (new in 1.39.0)
+  streamTools: require('./toolRunner').streamTools,
   // Multi-agent orchestration (new in 1.27.0)
   Agent: require('./agents').Agent,
   runAgents: require('./agents').runAgents,

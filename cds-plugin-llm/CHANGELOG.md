@@ -4,6 +4,52 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.39.0] — 2026-08-06
+
+### Added
+
+- **`streamTools()` — async-generator counterpart to `runTools()`.** Yields per-turn progress events (turn_start, text, tool_call_start, tool_call_result) plus a final `done` event carrying the same shape as `RunToolsResult`. Chat surfaces can render "searching contracts…", "checking compliance…" progress instead of blocking on the full agent trace.
+
+  ```js
+  const { streamTools } = require('@saptarishi/cds-plugin-llm');
+
+  for await (const evt of streamTools({
+    llm,
+    system: 'You help procurement approvers.',
+    messages: [{ role: 'user', content: 'Fetch PO 4500000123 and summarize.' }],
+    tools: [ searchContracts, priceLookup, complianceCheck ],
+    maxSteps: 8,
+  })) {
+    switch (evt.type) {
+      case 'turn_start':        showBadge(`Turn ${evt.step}`); break;
+      case 'text':              writeToChat(evt.text);          break;
+      case 'tool_call_start':   showBadge(`${evt.name}…`);       break;
+      case 'tool_call_result':  hideBadge(evt.name);             break;
+      case 'done':              finalize(evt);                    break;
+    }
+  }
+  ```
+
+- **5 event types** (all include `step: 1..maxSteps`):
+  - **`turn_start`** — emitted BEFORE each `llm.chat()` call. Useful for "Turn N of M" UIs.
+  - **`text`** — assistant text for the turn. Atomic per turn (not token-level deltas). Turns that produce only tool calls emit no `text` event.
+  - **`tool_call_start`** — right before a tool runs. Carries `{ id, name, input }`.
+  - **`tool_call_result`** — after the tool finishes (success OR error). Carries `{ id, name, result, isError }`. Result is stringified for wire compatibility with the message history the loop appends.
+  - **`done`** — final event. Extends `RunToolsResult` with `type: 'done'` + `step`. Shape identical to `runTools()` return value, so consumers can share downstream code.
+
+- **Same validation surface as `runTools()`** — requires `{ llm, messages, tools }`; each tool needs a `run()` function; `maxSteps` guard throws with the same diagnostic when the model loops.
+
+- **12 new tests** (769 total): validation (missing llm / messages / tools / tool.run), text-only turn (turn_start + text + done), single tool call sequence (7 events in order), tool-throws → `isError=true` + error message, unknown-tool-name → clear error the agent can recover from, multiple tool calls in one turn (paired 1:1 start/result), empty-text turn omits text event, `maxSteps` guard throws, `done` event shape matches `RunToolsResult` (aggregate usage across turns, messages/toolCalls arrays, model + stopReason).
+
+- **TS defs:** `StreamToolsEvent` discriminated union (`StreamToolsTurnStartEvent | StreamToolsTextEvent | StreamToolsToolCallStartEvent | StreamToolsToolCallResultEvent | StreamToolsDoneEvent`); `streamTools()` signature returns `AsyncGenerator<StreamToolsEvent, void, void>`.
+
+### Notes
+
+- **Text is emitted atomically per turn** (one `text` event per assistant response). Token-level `text_delta` streaming requires provider changes to preserve `tool_calls` state through the streaming path (OpenAI-compat's stream currently accumulates text but does not surface tool_calls until after the stream closes). Consumers wanting delta streaming for non-agent flows should call `llm.stream()` directly. Delta support for `streamTools` is a follow-up.
+- **Consumes the same middleware chain as `runTools()`** — every turn goes through `llm.chat()`, so `guardrails`, `costBudget`, `usageMetering`, `responseCache`, `promptInjectionGuard` all apply per-turn. `costBudget` block errors propagate as thrown exceptions from the generator.
+- **Backpressure friendly.** The generator awaits each `llm.chat()` + tool `run()` before yielding the next event. If the consumer stops iterating (early break), no orphan chat calls fire; JavaScript's async-iterator cleanup handles it.
+- **Compatible with `runAgents`** — the multi-agent coordinator today wraps `runTools`. A follow-up will offer `streamAgents` with the same event shape so specialist calls can render progress too.
+
 ## [1.38.0] — 2026-08-06
 
 ### Added
