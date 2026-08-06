@@ -63,6 +63,8 @@ module.exports = {
   // Prompt-template registry (new in 1.8.0)
   PromptRegistry: require('./promptRegistry').PromptRegistry,
   builtInPrompts: require('./promptRegistry').builtInPrompts,
+  // Pre-built JSON Schemas for structured extraction (new in 1.34.0)
+  schemas: require('./schemas'),
   // OpenAI Files API helper (new in 1.14.0)
   uploadPdfFromUrl: require('./openaiFiles').uploadPdfFromUrl,
   // MCP HTTP transport helpers (new in 1.16.0)

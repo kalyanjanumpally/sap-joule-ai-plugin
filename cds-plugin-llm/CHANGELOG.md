@@ -4,6 +4,55 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.0] — 2026-08-06
+
+### Added
+
+- **`schemas` — pre-built JSON Schemas for common business-object extraction.** Every schema is a valid `format:` value for `chat({...})` — pass it straight through and the plugin post-parses the response into the `data` field. Removes the boilerplate of hand-rolling the same `Invoice` / `PurchaseOrder` shape in every consumer.
+
+  ```js
+  const { schemas, imageFromFile } = require('@saptarishi/cds-plugin-llm');
+
+  const { data } = await llm.chat({
+    system: 'You extract structured invoices from scanned PDFs.',
+    messages: [{
+      role: 'user',
+      content: [imageFromFile('invoice.png'), { type: 'text', text: 'Extract.' }],
+    }],
+    format: schemas.Invoice,   // ← full JSON Schema, ready-to-use
+  });
+
+  data.vendor; data.total; data.lineItems[0].description;
+  ```
+
+- **6 shipped business-object schemas:**
+  - **`schemas.Invoice`** — vendor, invoice number, dates, subtotal/tax/total, line items, currency, notes. Required: `vendor`, `currency`, `total`, `lineItems`.
+  - **`schemas.PurchaseOrder`** — poNumber, supplier, order + requested-delivery dates, line items, totalAmount, incoterm (INCOTERMS 2020), approver, notes. Required: `poNumber`, `supplier`, `currency`, `lineItems`, `totalAmount`.
+  - **`schemas.SupplierRisk`** — risk (low/medium/high enum), rationale, confidence (0-1), factors[] (each with impact enum: increases/decreases/neutral).
+  - **`schemas.ContractSummary`** — parties, contractType, effective/expiry dates, scope, keyTerms[], obligations[] (with party + dueBy), terminationClause, renewal, governingLaw.
+  - **`schemas.ExpenseReport`** — employee, report + period dates, line items (with category enum + receipt bool), total, businessJustification.
+  - **`schemas.EmailDraft`** — to/cc/bcc, subject, body, tone enum (formal/neutral/friendly/urgent), attachments.
+
+- **3 reusable sub-schemas** exposed for composition: `schemas.LineItem` (shared between Invoice + PurchaseOrder), `schemas.IsoDate`, `schemas.CurrencyCode`.
+
+- **Helpers:**
+  - **`schemas.list()`** — enumerate every registered schema name (useful for a `/schemas` MCP resource or docs generator).
+  - **`schemas.byName(name)`** — safe lookup, returns undefined for unknown names.
+  - **`schemas.extend(base, { properties, required })`** — non-mutating extend for tenant-specific variants (e.g. `schemas.extend(schemas.Invoice, { properties: { glAccount: { type: 'string' } }, required: ['glAccount'] })`). Base schema is never mutated; required entries are de-duplicated automatically.
+
+- **Every schema is `additionalProperties: false`** — the LLM can't smuggle unspecified fields into the response, and the plugin's post-parse step refuses responses missing declared `required` fields.
+
+- **14 new tests** (706 total): shape validation across every business-object schema (type=object, properties present, required is array, additionalProperties=false, every required field is defined), sub-schema exports, `list()` enumeration, `byName()` lookup + unknown handling, `extend()` merge behavior + non-mutation + required de-duplication + non-object base rejection, chat() integration proving format param reaches the provider unchanged, SupplierRisk enum + factors shape, ContractSummary obligations shape, ExpenseReport line-item required fields, EmailDraft tone enum, LineItem reuse across Invoice + PurchaseOrder.
+
+- **TS defs:** `JsonSchema`, `SchemasBundle`, `schemas` const with typed properties + helpers.
+
+### Notes
+
+- **Not schema validation.** The plugin trusts the LLM to follow the schema; validation lives at the provider layer (some enforce, some don't). Combine with `filters.pii()` or your own post-parse check if you need runtime guarantees.
+- **`additionalProperties: false` is deliberately strict.** Some providers strip unknown fields silently; others error. If you need "loose" mode for a specific tenant, use `schemas.extend(base, ...)` and manually set `additionalProperties: true` on the returned schema.
+- **Composition:** every business-object schema references `schemas.LineItem` by reference (same object instance). If you monkey-patch `schemas.LineItem` at runtime, Invoice + PurchaseOrder both see the change. Prefer `schemas.extend` for variants.
+- **No dependency on JSON Schema tooling.** These are plain literals — bring your own validator (ajv, valibot, zod-from-schema) if you want to validate the response client-side.
+
 ## [1.33.0] — 2026-08-06
 
 ### Added

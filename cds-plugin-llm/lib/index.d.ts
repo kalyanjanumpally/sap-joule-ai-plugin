@@ -1484,3 +1484,38 @@ export class PromptRegistry {
 
 /** Bundle of general-purpose prompt templates ready to `registerAll(...)`. */
 export function builtInPrompts(): PromptTemplate[];
+
+// ---- Pre-built JSON Schemas for structured extraction (new in 1.34.0) --
+
+/**
+ * Structural JSON Schema. Every value here is a valid `format:` param
+ * for `chat({...})`; the plugin post-parses the response into `data`.
+ * Passed through unmodified — refer to JSON Schema Draft-07 for shape.
+ */
+export type JsonSchema = Record<string, unknown>;
+
+export interface SchemasBundle {
+  // Business-object schemas
+  readonly Invoice: JsonSchema;
+  readonly PurchaseOrder: JsonSchema;
+  readonly SupplierRisk: JsonSchema;
+  readonly ContractSummary: JsonSchema;
+  readonly ExpenseReport: JsonSchema;
+  readonly EmailDraft: JsonSchema;
+  // Reusable sub-schemas
+  readonly LineItem: JsonSchema;
+  readonly IsoDate: JsonSchema;
+  readonly CurrencyCode: JsonSchema;
+  // Helpers
+  list(): string[];
+  byName(name: string): JsonSchema | undefined;
+  /** Non-mutating extend — merge extra `properties` + `required` onto a base object schema. */
+  extend(base: JsonSchema, patch: { properties?: Record<string, JsonSchema>; required?: string[] }): JsonSchema;
+}
+
+/**
+ * Pre-built JSON Schemas for common business-object extraction. Pass any
+ * schema straight to `chat({ format: schemas.Invoice })`.
+ * @since 1.34.0
+ */
+export const schemas: SchemasBundle;
