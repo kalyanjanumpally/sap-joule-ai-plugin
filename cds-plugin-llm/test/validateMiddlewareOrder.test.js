@@ -31,6 +31,7 @@ test('validateMiddlewareOrder: canonical ai-service.js order produces zero warni
     { kind: 'guardrails' },
     { kind: 'costBudget' },
     { kind: 'circuitBreaker' },
+    { kind: 'bulkhead' },
     { kind: 'retryOnRateLimit' },
     { kind: 'usageMeteringToCap' },
     { kind: 'responseCache' },
@@ -43,6 +44,36 @@ test('validateMiddlewareOrder: canonical ai-service.js order produces zero warni
   assert.equal(r.warnings.find((w) => w.code === 'CACHE_OUTER_OF_BUDGET'), undefined);
   // NO_CIRCUIT_BREAKER should also NOT fire — breaker is present.
   assert.equal(r.warnings.find((w) => w.code === 'NO_CIRCUIT_BREAKER'), undefined);
+  // NO_BULKHEAD should also NOT fire — bulkhead is present.
+  assert.equal(r.warnings.find((w) => w.code === 'NO_BULKHEAD'), undefined);
+});
+
+// ---- Bulkhead rules ---------------------------------------------------
+
+test('validateMiddlewareOrder: BULKHEAD_OUTER_OF_BREAKER fires when bulkhead precedes breaker', () => {
+  const r = validateMiddlewareOrder([
+    { kind: 'bulkhead' },
+    { kind: 'circuitBreaker' },
+  ]);
+  const w = r.warnings.find((x) => x.code === 'BULKHEAD_OUTER_OF_BREAKER');
+  assert.ok(w);
+  assert.equal(w.severity, 'warning');
+  assert.match(w.message, /still acquire a bulkhead slot/);
+});
+
+test('validateMiddlewareOrder: bulkhead INNER of breaker does NOT fire BULKHEAD_OUTER_OF_BREAKER', () => {
+  const r = validateMiddlewareOrder([
+    { kind: 'circuitBreaker' },
+    { kind: 'bulkhead' },
+  ]);
+  assert.equal(r.warnings.find((x) => x.code === 'BULKHEAD_OUTER_OF_BREAKER'), undefined);
+});
+
+test('validateMiddlewareOrder: NO_BULKHEAD info fires when no bulkhead present', () => {
+  const r = validateMiddlewareOrder([{ kind: 'retryOnRateLimit' }]);
+  const w = r.warnings.find((x) => x.code === 'NO_BULKHEAD');
+  assert.ok(w);
+  assert.equal(w.severity, 'info');
 });
 
 // ---- Circuit breaker rules --------------------------------------------
@@ -192,6 +223,7 @@ test('validateMiddlewareOrder: KNOWN_KINDS covers exactly the shipped middleware
     'costBudget',
     'retryOnRateLimit',
     'circuitBreaker',
+    'bulkhead',
     'usageMetering',
     'usageMeteringToCap',
     'responseCache',

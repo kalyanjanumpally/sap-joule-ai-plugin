@@ -4,6 +4,61 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.51.0] — 2026-08-06
+
+### Added
+
+- **`bulkhead` middleware — concurrency + queue isolation.** Caps in-flight calls per bucket (default: per-provider), queues excess up to `maxQueued`, times out overflow after `queueTimeoutMs`. Prevents one runaway tenant / agent loop from starving others.
+
+  ```js
+  const { bulkhead } = require('@saptarishi/cds-plugin-llm');
+
+  const bh = bulkhead({
+    maxConcurrent:  10,
+    maxQueued:      50,
+    queueTimeoutMs: 5000,
+    perProvider:    true,
+    onQueue:   (info) => cds.log('llm:bulkhead').debug('queued',   info),
+    onReject:  (info) => cds.log('llm:bulkhead').warn ('rejected', info),
+    onExecute: (info) => cds.log('llm:bulkhead').trace('running',  info),
+  });
+  llm.use(bh);
+  ```
+
+- **Completes the resilience quartet:** `retry (transient)` → `breaker (sustained)` → `fallback (multi-provider)` → `bulkhead (isolation)`.
+
+- **Recommended ordering:** `costBudget → circuitBreaker → bulkhead → retryOnRateLimit → provider`. Rationale:
+  - Bulkhead INNER of `circuitBreaker`: open-circuit rejections don't hold a bulkhead slot (reject-fast preserved).
+  - Bulkhead INNER of `costBudget`: budget check completes without waiting for a slot.
+  - Bulkhead OUTER of `retryOnRateLimit`: retries hold their slot across wait+retry, preventing thundering-herd on recovery.
+
+- **Errors:**
+  - `BulkheadFullError` — queue is at `maxQueued` capacity, request rejected immediately.
+  - `BulkheadTimeoutError` — request waited longer than `queueTimeoutMs`.
+
+- **Introspection + control:**
+  - `bh.state(provider?)` → `{ inFlight, queued }`
+  - `bh.stats` → `{ requests, admitted, queued, rejected, timedOut }`
+  - `bh.reset(provider?)` — rejects queued waiters with `BulkheadFullError`, clears bucket
+  - `bh.asMcpResource()` → `config://bulkhead`
+
+- **Prometheus:** `emitBulkhead` wired into `promMetrics` — counters `llm_bulkhead_requests_total`, `_admitted_total`, `_queued_total`, `_rejected_total`, `_timed_out_total`; per-bucket gauges `llm_bulkhead_in_flight`, `llm_bulkhead_queued`.
+
+- **`validateMiddlewareOrder` extensions:**
+  - New rule `BULKHEAD_OUTER_OF_BREAKER` (warning) — bulkhead OUTER of circuitBreaker wastes slot capacity on short-circuited requests.
+  - New rule `NO_BULKHEAD` (info) — no bulkhead in chain means one runaway tenant can starve provider concurrency for everyone.
+  - `bulkhead` added to `KNOWN_KINDS`.
+
+### Type definitions
+
+- `BulkheadOptions`, `BulkheadStats`, `BulkheadBucketState`, `BulkheadMiddleware`
+- `BulkheadFullError`, `BulkheadTimeoutError`
+- `MiddlewareOrderingWarningCode` extended with `BULKHEAD_OUTER_OF_BREAKER` and `NO_BULKHEAD`
+
+### Backwards compatibility
+
+Additive — no breaking changes. Existing chains without bulkhead continue to work; the validator's new `NO_BULKHEAD` finding is info-severity and can be suppressed via `filterWarnings(result, ['NO_BULKHEAD'])`.
+
 ## [1.50.0] — 2026-08-06
 
 ### Added

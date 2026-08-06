@@ -37,6 +37,7 @@ const KNOWN_KINDS = new Set([
   'costBudget',
   'retryOnRateLimit',
   'circuitBreaker',
+  'bulkhead',
   'usageMetering',
   'usageMeteringToCap',
   'responseCache',
@@ -174,6 +175,31 @@ function validateMiddlewareOrder(chain) {
       message:  'No circuitBreaker in the chain — sustained provider outage will burn through retry + budget on every request instead of short-circuiting.',
       fixit:    'Add `llm.use(circuitBreaker({ threshold: 5, cooldownMs: 30_000 }))` for automatic short-circuit on repeated 5xx / network failures.',
       involved: ['circuitBreaker'],
+    });
+  }
+
+  // Rule: bulkhead OUTER of circuitBreaker → circuit-open short-circuits
+  // still hold a bulkhead slot for the moment they take, which is fine
+  // for correctness but wastes a slot vs. having the breaker reject first.
+  // Warning-severity because it's a real efficiency loss under load.
+  const bulkheadIdx = idxOf('bulkhead');
+  if (bulkheadIdx !== -1 && breakerIdx !== -1 && bulkheadIdx < breakerIdx) {
+    warnings.push({
+      code:     'BULKHEAD_OUTER_OF_BREAKER',
+      severity: 'warning',
+      message:  'bulkhead is OUTER of circuitBreaker — circuit-open short-circuits still acquire a bulkhead slot before rejecting, wasting queue capacity.',
+      fixit:    'Move circuitBreaker OUTER of bulkhead so open-circuit rejections happen BEFORE the bulkhead admission check.',
+      involved: ['bulkhead', 'circuitBreaker'],
+    });
+  }
+
+  if (bulkheadIdx === -1) {
+    warnings.push({
+      code:     'NO_BULKHEAD',
+      severity: 'info',
+      message:  'No bulkhead in the chain — one runaway tenant / agent loop can starve provider concurrency for everyone.',
+      fixit:    'Add `llm.use(bulkhead({ maxConcurrent: 10, maxQueued: 50, queueTimeoutMs: 5000 }))` for per-provider concurrency isolation.',
+      involved: ['bulkhead'],
     });
   }
   if (idxOfAny('usageMetering', 'usageMeteringToCap') === -1) {

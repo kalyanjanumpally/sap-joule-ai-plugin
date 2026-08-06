@@ -72,6 +72,10 @@ module.exports = {
   // Provider fallback chain — orchestrates multiple providers (new in 1.50.0)
   chatWithFallback: require('./chatWithFallback').chatWithFallback,
   AllProvidersFailedError: require('./chatWithFallback').AllProvidersFailedError,
+  // Bulkhead middleware — concurrency + queue isolation (new in 1.51.0)
+  bulkhead: require('./middleware/bulkhead').bulkhead,
+  BulkheadFullError: require('./middleware/bulkhead').BulkheadFullError,
+  BulkheadTimeoutError: require('./middleware/bulkhead').BulkheadTimeoutError,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

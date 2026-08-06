@@ -177,6 +177,40 @@ function emitRetry(retry) {
   return out;
 }
 
+function emitBulkhead(bh) {
+  if (!bh?.stats) return [];
+  const s = bh.stats;
+  const out = [];
+  out.push(header('llm_bulkhead_requests_total', 'Total requests observed by bulkhead', 'counter'));
+  out.push(line('llm_bulkhead_requests_total', s.requests ?? 0));
+  out.push(header('llm_bulkhead_admitted_total', 'Requests admitted (fast-path or after queueing)', 'counter'));
+  out.push(line('llm_bulkhead_admitted_total', s.admitted ?? 0));
+  out.push(header('llm_bulkhead_queued_total', 'Requests that waited in the queue before running', 'counter'));
+  out.push(line('llm_bulkhead_queued_total', s.queued ?? 0));
+  out.push(header('llm_bulkhead_rejected_total', 'Requests rejected because the queue was full', 'counter'));
+  out.push(line('llm_bulkhead_rejected_total', s.rejected ?? 0));
+  out.push(header('llm_bulkhead_timed_out_total', 'Requests rejected because they exceeded queueTimeoutMs while waiting', 'counter'));
+  out.push(line('llm_bulkhead_timed_out_total', s.timedOut ?? 0));
+
+  // Per-bucket gauges
+  if (typeof bh.asMcpResource === 'function') {
+    const snap = bh.asMcpResource().handler();
+    const buckets = snap.buckets ?? {};
+    const entries = Object.entries(buckets);
+    if (entries.length > 0) {
+      out.push(header('llm_bulkhead_in_flight', 'Current in-flight calls per bucket', 'gauge'));
+      for (const [k, b] of entries) {
+        out.push(line('llm_bulkhead_in_flight', b.inFlight ?? 0, { provider: k }));
+      }
+      out.push(header('llm_bulkhead_queued', 'Current queued waiters per bucket', 'gauge'));
+      for (const [k, b] of entries) {
+        out.push(line('llm_bulkhead_queued', b.queued ?? 0, { provider: k }));
+      }
+    }
+  }
+  return out;
+}
+
 function emitCircuitBreaker(breaker) {
   if (!breaker?.stats) return [];
   const s = breaker.stats;
@@ -325,6 +359,7 @@ function isoToSecondsFromNow(iso) {
  * @param {object} [mw.metering]        usageMetering / usageMeteringToCap middleware
  * @param {object} [mw.retry]           retryOnRateLimit middleware (new in 1.47.1)
  * @param {object} [mw.breaker]         circuitBreaker middleware (new in 1.49.0)
+ * @param {object} [mw.bh]              bulkhead middleware (new in 1.51.0)
  * @param {object} [options]
  * @param {boolean} [options.excludeBreakdowns=false]  Skip per-tenant/model/provider breakdowns
  *                                                     (cardinality control for large fleets).
@@ -339,6 +374,7 @@ async function promMetrics(mw = {}, options = {}) {
   lines.push(...emitInjectionGuard(mw.injectionGuard));
   lines.push(...emitRetry(mw.retry));
   lines.push(...emitCircuitBreaker(mw.breaker));
+  lines.push(...emitBulkhead(mw.bh));
   let meteringLines = emitMetering(mw.metering);
   if (excludeBreakdowns) {
     meteringLines = meteringLines.filter(

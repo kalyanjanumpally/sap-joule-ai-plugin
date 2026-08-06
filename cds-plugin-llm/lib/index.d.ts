@@ -1558,6 +1558,75 @@ export class CircuitOpenError extends Error {
   readonly cause?: Error;
 }
 
+// ---- Bulkhead middleware (new in 1.51.0) ------------------------------
+
+export interface BulkheadOptions {
+  /** Max concurrent in-flight calls per bucket. Default 10. */
+  maxConcurrent?: number;
+  /** Max additional waiters that can queue beyond in-flight. Default 0. */
+  maxQueued?: number;
+  /** How long a waiter can sit in the queue before rejection. Default 0 = no timeout. */
+  queueTimeoutMs?: number;
+  /** Bucket state per provider (ctx.service.name). Default true. */
+  perProvider?: boolean;
+  onQueue?: (info: { provider: string; inFlight: number; queued: number; method: string }) => void | Promise<void>;
+  onReject?: (info: { provider: string; reason: 'queue-full' | 'queue-timeout'; inFlight: number; queued: number; method: string }) => void | Promise<void>;
+  onExecute?: (info: { provider: string; inFlight: number; queued: number; method: string; waitedMs?: number }) => void | Promise<void>;
+}
+
+export interface BulkheadStats {
+  requests: number;
+  admitted: number;
+  queued:   number;
+  rejected: number;
+  timedOut: number;
+}
+
+export interface BulkheadBucketState {
+  inFlight: number;
+  queued:   number;
+}
+
+export interface BulkheadMiddleware extends Middleware {
+  readonly stats: BulkheadStats;
+  state(provider?: string): BulkheadBucketState;
+  reset(provider?: string): void;
+  asMcpResource(): {
+    uri: 'config://bulkhead';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => BulkheadStats & {
+      maxConcurrent: number;
+      maxQueued: number;
+      queueTimeoutMs: number;
+      perProvider: boolean;
+      buckets: Record<string, BulkheadBucketState>;
+    };
+  };
+}
+
+/**
+ * Bulkhead / concurrency-limit middleware. Caps in-flight calls per bucket,
+ * queues excess up to maxQueued, times out overflow. Prevents one runaway
+ * tenant / agent from starving others. Completes the resilience quartet:
+ * retry → breaker → fallback → bulkhead.
+ * @since 1.51.0
+ */
+export function bulkhead(options?: BulkheadOptions): BulkheadMiddleware;
+
+export class BulkheadFullError extends Error {
+  readonly code: 'BULKHEAD_FULL';
+  readonly provider: string;
+  readonly maxQueued: number;
+}
+
+export class BulkheadTimeoutError extends Error {
+  readonly code: 'BULKHEAD_TIMEOUT';
+  readonly provider: string;
+  readonly queueTimeoutMs: number;
+}
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {
@@ -1629,10 +1698,12 @@ export type MiddlewareOrderingWarningCode =
   | 'INJECTION_INNER_OF_GUARDRAILS'
   | 'CACHE_OUTER_OF_BUDGET'
   | 'BREAKER_INNER_OF_RETRY'
+  | 'BULKHEAD_OUTER_OF_BREAKER'
   | 'NO_RETRY'
   | 'NO_METERING'
   | 'NO_SECURITY_LAYER'
   | 'NO_CIRCUIT_BREAKER'
+  | 'NO_BULKHEAD'
   | 'DUPLICATE_KIND'
   | 'UNKNOWN_KIND';
 

@@ -333,3 +333,50 @@ test('promMetrics: breaker-metrics HELP/TYPE parity in a full bundle', async () 
   assert.equal(helpCount, typeCount, 'HELP/TYPE parity holds when breaker mw included');
   assert.match(text, /llm_breaker_requests_total 1/);
 });
+
+// ---- Bulkhead metrics (new in 1.51.0) ----------------------------
+
+test('promMetrics: no bulkhead series when no bulkhead middleware bound', async () => {
+  const text = await promMetrics({});
+  assert.doesNotMatch(text, /llm_bulkhead_/);
+});
+
+test('promMetrics: emits llm_bulkhead_* counters + per-bucket gauges when bh mw bound', async () => {
+  const { bulkhead } = require('../lib/middleware/bulkhead');
+  const bh = bulkhead({ maxConcurrent: 5, maxQueued: 20 });
+  // Populate stats manually + one live call to seed a bucket
+  const svc = makeSvc(); await svc.init();
+  svc.use(bh);
+  await svc.chat({ messages: [{ role: 'user', content: 'x' }] });
+  bh.stats.rejected = 3;
+  bh.stats.timedOut = 2;
+  bh.stats.queued   = 4;
+
+  const text = await promMetrics({ bh });
+  assert.match(text, /^# TYPE llm_bulkhead_requests_total counter/m);
+  assert.match(text, /llm_bulkhead_requests_total 1/);
+  assert.match(text, /llm_bulkhead_admitted_total 1/);
+  assert.match(text, /llm_bulkhead_queued_total 4/);
+  assert.match(text, /llm_bulkhead_rejected_total 3/);
+  assert.match(text, /llm_bulkhead_timed_out_total 2/);
+  // Bucket gauges
+  assert.match(text, /^# TYPE llm_bulkhead_in_flight gauge/m);
+  assert.match(text, /llm_bulkhead_in_flight\{provider="[^"]+"\} 0/);
+});
+
+test('promMetrics: bulkhead-metrics HELP/TYPE parity in a full bundle', async () => {
+  const { bulkhead } = require('../lib/middleware/bulkhead');
+  const bh = bulkhead({ maxConcurrent: 5 });
+  const svc = makeSvc(); await svc.init();
+  svc.use(bh);
+  await svc.chat({ messages: [{ role: 'user', content: 'x' }] });
+  const text = await promMetrics({ bh });
+  const lines = text.split('\n').filter(Boolean);
+  let helpCount = 0, typeCount = 0;
+  for (const l of lines) {
+    if (l.startsWith('# HELP ')) helpCount++;
+    else if (l.startsWith('# TYPE ')) typeCount++;
+  }
+  assert.equal(helpCount, typeCount, 'HELP/TYPE parity holds when bulkhead mw included');
+  assert.match(text, /llm_bulkhead_requests_total 1/);
+});
