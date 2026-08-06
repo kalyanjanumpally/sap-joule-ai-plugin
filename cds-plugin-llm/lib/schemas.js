@@ -262,6 +262,51 @@ function extend(base, { properties = {}, required = [] } = {}) {
   };
 }
 
+/**
+ * MCP resource dumping the list of schema names. Register on an MCPServer
+ * alongside asMcpResourceTemplate() to expose the whole surface:
+ *
+ *   const { schemas } = require('@saptarishi/cds-plugin-llm');
+ *   server.registerResource({ ...schemas.asMcpResource(), read: schemas.asMcpResource().handler });
+ *   server.registerResourceTemplate({ ...schemas.asMcpResourceTemplate(), read: schemas.asMcpResourceTemplate().handler });
+ *
+ * The MCP client sees a static resource `schema://list` (all names) plus a
+ * template `schema://{name}` that resolves any individual schema's JSON.
+ * Useful for LLM-driven tool discovery — the agent can enumerate names,
+ * then read the JSON Schema of a specific type to construct a matching
+ * request.
+ * @since 1.37.0
+ */
+function asMcpResource() {
+  return {
+    uri: 'schema://list',
+    name: 'Registered structured-output schemas',
+    description: 'Every JSON Schema shipped in the plugin\'s `schemas` module. Read the individual schema at `schema://{name}`.',
+    mimeType: 'application/json',
+    handler: () => ({ schemas: list() }),
+  };
+}
+
+/**
+ * MCP resource template — the per-name lookup. `schema://Invoice`, `schema://PurchaseOrder`, etc.
+ * Returns the raw JSON Schema. Unknown names return `{ error: 'unknown schema: <name>' }`
+ * with a 200 status (the MCP client sees the payload; caller decides what to do).
+ * @since 1.37.0
+ */
+function asMcpResourceTemplate() {
+  return {
+    uriTemplate: 'schema://{name}',
+    name: 'Structured-output schema by name',
+    description: 'Read any schema shipped in the `schemas` module by its exported name. e.g. schema://Invoice, schema://SupplierRisk. See schema://list for the full inventory.',
+    mimeType: 'application/json',
+    handler: ({ name }) => {
+      const s = byName(name);
+      if (!s) return { error: `unknown schema: ${name}`, known: list() };
+      return s;
+    },
+  };
+}
+
 module.exports = {
   Invoice,
   PurchaseOrder,
@@ -277,4 +322,7 @@ module.exports = {
   list,
   byName,
   extend,
+  // MCP wiring (new in 1.37.0)
+  asMcpResource,
+  asMcpResourceTemplate,
 };

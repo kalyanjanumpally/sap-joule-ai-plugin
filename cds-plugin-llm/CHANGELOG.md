@@ -4,6 +4,41 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.37.0] — 2026-08-06
+
+### Added
+
+- **`schemas.asMcpResource()` + `schemas.asMcpResourceTemplate()`** — the shipped `schemas` module now speaks MCP directly. External MCP clients (Claude Desktop, Cline, Cursor) can list every registered schema name via `schema://list` and read any individual schema's JSON via `schema://{name}` (e.g. `schema://Invoice`, `schema://SupplierRisk`). Useful for LLM-driven tool discovery and self-documenting Joule agents that need to construct requests matching a specific shape.
+
+  ```js
+  const { schemas } = require('@saptarishi/cds-plugin-llm');
+  const { MCPServer } = require('@saptarishi/cds-plugin-llm/lib/mcp/server');
+
+  const listResource = schemas.asMcpResource();
+  const perNameTemplate = schemas.asMcpResourceTemplate();
+  server.registerResource({ ...listResource, read: listResource.handler });
+  server.registerResourceTemplate({ ...perNameTemplate, read: perNameTemplate.handler });
+  ```
+
+- **Resource shape** (`schema://list`, JSON):
+  ```json
+  { "schemas": ["Invoice", "PurchaseOrder", "SupplierRisk", "ContractSummary", "ExpenseReport", "EmailDraft"] }
+  ```
+
+- **Resource template** (`schema://{name}`, JSON):
+  - Known name → the raw JSON Schema (same object as `schemas.byName(name)`).
+  - Unknown name → `{ error: "unknown schema: <name>", known: [...] }` so the client sees an actionable payload with the valid names.
+
+- **TS defs updated:** `SchemasBundle` declares `asMcpResource(): { uri: 'schema://list', ... }` + `asMcpResourceTemplate(): { uriTemplate: 'schema://{name}', ... }` with the literal-string URI types the MCP server expects.
+
+- **3 new tests** (738 total): `asMcpResource()` lists every business-object schema by name, `asMcpResourceTemplate()` resolves `schema://Invoice` to the same reference `schemas.Invoice` returns, unknown-name path returns the error+known payload.
+
+### Notes
+
+- **Consumers custom-registering asMcpResource() outputs** (matching the pattern used for cache / budget / guardrails / injection-guard / usage) still need the same `handler → read` adapter shim. That's a plugin-wide inconsistency I'll unify in a future minor by making MCPServer accept either shape. For now: `{ ...r, read: r.handler }` works.
+- **Immutable payloads.** `asMcpResourceTemplate().handler({ name: 'Invoice' })` returns the same object reference as `schemas.Invoice` — mutating it would affect every future consumer. Wrap with `structuredClone(...)` if your MCP client mutates payloads.
+- **Extensions aren't listed.** `schemas.extend()` produces one-off variants; those don't show up in `schema://list`. Consumers wanting to expose tenant-specific extensions should register their own resource with a namespaced URI.
+
 ## [1.36.0] — 2026-08-06
 
 ### Added

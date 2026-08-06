@@ -162,3 +162,31 @@ test('schemas.LineItem: shared between Invoice and PurchaseOrder', () => {
   assert.equal(schemas.Invoice.properties.lineItems.items,        schemas.LineItem);
   assert.equal(schemas.PurchaseOrder.properties.lineItems.items,  schemas.LineItem);
 });
+
+// ---- MCP wiring (new in 1.37.0) ---------------------------------------
+
+test('schemas.asMcpResource: returns schema://list with every schema name', () => {
+  const r = schemas.asMcpResource();
+  assert.equal(r.uri, 'schema://list');
+  assert.equal(r.mimeType, 'application/json');
+  const payload = r.handler();
+  assert.ok(Array.isArray(payload.schemas));
+  for (const name of ['Invoice', 'PurchaseOrder', 'SupplierRisk', 'ContractSummary', 'ExpenseReport', 'EmailDraft']) {
+    assert.ok(payload.schemas.includes(name), `${name} should be listed`);
+  }
+});
+
+test('schemas.asMcpResourceTemplate: resolves a known name to its JSON Schema', () => {
+  const t = schemas.asMcpResourceTemplate();
+  assert.equal(t.uriTemplate, 'schema://{name}');
+  const payload = t.handler({ name: 'Invoice' });
+  assert.equal(payload, schemas.Invoice, 'returns the same reference (byName())');
+  assert.equal(payload.type, 'object');
+});
+
+test('schemas.asMcpResourceTemplate: unknown name returns error + known list', () => {
+  const payload = schemas.asMcpResourceTemplate().handler({ name: 'DoesNotExist' });
+  assert.equal(payload.error, 'unknown schema: DoesNotExist');
+  assert.ok(Array.isArray(payload.known));
+  assert.ok(payload.known.length >= 6);
+});

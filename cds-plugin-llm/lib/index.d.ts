@@ -1567,6 +1567,30 @@ export interface SchemasBundle {
   byName(name: string): JsonSchema | undefined;
   /** Non-mutating extend — merge extra `properties` + `required` onto a base object schema. */
   extend(base: JsonSchema, patch: { properties?: Record<string, JsonSchema>; required?: string[] }): JsonSchema;
+  /**
+   * MCP static resource (`schema://list`) enumerating every registered schema name.
+   * Register alongside `asMcpResourceTemplate()` to expose the whole surface.
+   * @since 1.37.0
+   */
+  asMcpResource(): {
+    uri: 'schema://list';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => { schemas: string[] };
+  };
+  /**
+   * MCP resource template — `schema://{name}` resolves any individual schema's JSON.
+   * Unknown names return `{ error: 'unknown schema: <name>', known: [...] }`.
+   * @since 1.37.0
+   */
+  asMcpResourceTemplate(): {
+    uriTemplate: 'schema://{name}';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: (params: { name: string }) => JsonSchema | { error: string; known: string[] };
+  };
 }
 
 /**
