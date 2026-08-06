@@ -1519,3 +1519,33 @@ export interface SchemasBundle {
  * @since 1.34.0
  */
 export const schemas: SchemasBundle;
+
+// ---- Prometheus metrics exporter (new in 1.35.0) ----------------------
+
+export interface PrometheusMiddlewareBundle {
+  cache?:          ResponseCacheMiddleware;
+  budget?:         CostBudgetMiddleware;
+  guardrails?:     GuardrailsMiddleware;
+  injectionGuard?: PromptInjectionGuardMiddleware;
+  metering?:       UsageMeteringMiddleware;
+}
+
+export interface PromMetricsOptions {
+  /** Skip per-tenant/model/provider breakdowns. Trades granularity for scrape cardinality. */
+  excludeBreakdowns?: boolean;
+}
+
+/**
+ * Serialize middleware state to Prometheus text-exposition format (0.0.4).
+ * All fields on `mw` are optional — pass whichever middleware you have wired.
+ * @since 1.35.0
+ */
+export function promMetrics(mw?: PrometheusMiddlewareBundle, options?: PromMetricsOptions): Promise<string>;
+
+/**
+ * Express-shaped `(req, res) => void` handler that responds with the
+ * Prometheus text-format body. Sets Content-Type correctly. Register at /metrics.
+ * @since 1.35.0
+ */
+export function prometheusHandler(mw?: PrometheusMiddlewareBundle, options?: PromMetricsOptions):
+  (req: unknown, res: unknown) => Promise<void>;

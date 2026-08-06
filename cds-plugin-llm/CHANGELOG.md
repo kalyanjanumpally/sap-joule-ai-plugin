@@ -4,6 +4,44 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.0] — 2026-08-06
+
+### Added
+
+- **`promMetrics` + `prometheusHandler` — Prometheus text-format exporter for the middleware observability surface.** Same counters that the `asMcpResource()` / `mw.stats` APIs expose, serialized to the exposition format Grafana / DataDog agent / Prometheus itself expects to scrape. Drops directly into any Express-shaped app or bare `http.ServerResponse`.
+
+  ```js
+  const { prometheusHandler } = require('@saptarishi/cds-plugin-llm');
+  app.get('/metrics', prometheusHandler({
+    cache, budget, guardrails, injectionGuard, metering,
+  }));
+  ```
+
+- **Metrics emitted** (help text + type header + labeled series per Prom 0.0.4 exposition):
+  - **Cache** — `llm_cache_hits_total`, `llm_cache_misses_total`, `llm_cache_skips_total`, `llm_cache_semantic_hits_total`, `llm_cache_semantic_misses_total`, `llm_cache_embedder_errors_total` (counters); `llm_cache_hit_rate`, `llm_cache_size`, `llm_cache_semantic_index_size` (gauges).
+  - **Budget** — `llm_budget_spent_dollars{scope, key}`, `llm_budget_limit_dollars{scope, key}` (gauges). Scope is `total | perTenant | perModel`; absent limits are omitted so Grafana ratio queries don't divide by null.
+  - **Guardrails** — `llm_guardrails_blocks_total{stage}`, `llm_guardrails_redacts_total{stage}`. Stage is `input | output`.
+  - **Injection guard** — `llm_injection_scanned_total`, `llm_injection_blocked_total`, `llm_injection_sanitized_total`, `llm_injection_warned_total`, plus `llm_injection_detector_hits_total{detector}` for per-detector breakdown (regex / base64 / unicode / delimiters / roleAttempt / lengthAnomaly).
+  - **Usage metering** — `llm_usage_requests_total`, `llm_usage_input_tokens_total`, `llm_usage_output_tokens_total`, `llm_usage_cost_dollars_total`, `llm_usage_cached_hits_total`, `llm_usage_cost_saved_dollars_total`, plus per-model / per-tenant / per-provider breakdowns (`llm_usage_requests_by_model_total{model}`, `llm_usage_cost_by_model_dollars_total{model}`, etc.).
+
+- **`excludeBreakdowns: true`** option — drops the per-model / per-tenant / per-provider series. Trade granularity for scrape cardinality on fleets with hundreds of models or thousands of tenants.
+
+- **Label sanitization + escaping** built in — dots, dashes, special chars in tenant / model / provider names get normalized to Prom-legal identifiers (`sanitizeLabelName`); values get escaped for backslash / quote / newline (`escapeLabel`). Both are exported for consumers building their own metric emitters.
+
+- **`prometheusHandler` supports both Express (`res.status().send()`) and bare Node http (`res.writeHead(); res.end()`)** shapes — auto-detected. Sets `Content-Type: text/plain; version=0.0.4; charset=utf-8`. Errors get serialized to a `500` with a `# metrics generation failed: <reason>` comment so the scrape target stays parseable.
+
+- **15 new tests** (721 total): helper unit tests (label escape + name sanitize), empty-bundle output, per-middleware emission (cache with + without semantic, budget with scope+key labels, guardrails stage labels, injection detector labels, metering with per-* breakdowns), `excludeBreakdowns` filter, wild-input label sanitization, prometheusHandler (200 + Content-Type, 500 on error, bare-http shape), and a full-bundle round-trip asserting every `# HELP` has a matching `# TYPE`.
+
+- **TS defs:** `PrometheusMiddlewareBundle`, `PromMetricsOptions`, `promMetrics`, `prometheusHandler`.
+
+### Notes
+
+- **All middleware slots are optional** — pass whichever you have wired. Fields that aren't present in a bundle produce no metrics (no blank series to confuse Grafana).
+- **Cardinality caution:** the per-tenant / per-model / per-provider counters produce one series per bucket. A 10K-tenant deployment ≈ 30K time series just from `llm_usage_requests_by_tenant_total` + `_cost_by_tenant_dollars_total`. Use `excludeBreakdowns: true` for those + rely on the `usageMeteringToCap` DB rows for slicing.
+- **Auth is caller's responsibility.** `prometheusHandler` is a pure metrics writer — wrap it with Express middleware for bearer auth / IP allowlist. Standard Prom scrape agents already run in a trusted network segment; the handler doesn't second-guess that.
+- **Complements `asMcpResource()` — doesn't replace it.** MCP resources are for LLM-driven inspection (Claude Desktop reading the current cache hit rate to answer "how many requests did we cache today?"); Prometheus metrics are for time-series graphs + alerting. Wire both if you have both consumers.
+- **Recommended chain unchanged.** promMetrics reads from middleware state, doesn't participate in the request chain. Zero request-path overhead.
+
 ## [1.34.0] — 2026-08-06
 
 ### Added

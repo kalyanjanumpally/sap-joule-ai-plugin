@@ -65,6 +65,10 @@ module.exports = {
   builtInPrompts: require('./promptRegistry').builtInPrompts,
   // Pre-built JSON Schemas for structured extraction (new in 1.34.0)
   schemas: require('./schemas'),
+  // Prometheus text-format exporter for the middleware observability
+  // surface (new in 1.35.0)
+  promMetrics: require('./prometheus').promMetrics,
+  prometheusHandler: require('./prometheus').prometheusHandler,
   // OpenAI Files API helper (new in 1.14.0)
   uploadPdfFromUrl: require('./openaiFiles').uploadPdfFromUrl,
   // MCP HTTP transport helpers (new in 1.16.0)
