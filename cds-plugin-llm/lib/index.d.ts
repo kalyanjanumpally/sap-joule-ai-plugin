@@ -859,6 +859,61 @@ export function runAgents(options: RunAgentsOptions): Promise<RunAgentsResult>;
 /** The default coordinator system prompt shipped with runAgents(). Override via options.system. */
 export const DEFAULT_COORDINATOR_SYSTEM: string;
 
+// ---- streamAgents() event types (new in 1.41.0) ----------------------
+
+/** Emitted at the START of every coordinator turn. @since 1.41.0 */
+export interface StreamAgentsTurnStartEvent {
+  type: 'turn_start';
+  step: number;
+}
+
+/** Coordinator text for the current turn (atomic per turn). @since 1.41.0 */
+export interface StreamAgentsTextEvent {
+  type: 'text';
+  step: number;
+  text: string;
+}
+
+/** Emitted right BEFORE a specialist agent runs. @since 1.41.0 */
+export interface StreamAgentsAgentCallStartEvent {
+  type: 'agent_call_start';
+  step: number;
+  /** Agent slug (`invoke_` prefix stripped from the underlying tool name). */
+  agent: string;
+  question: string | null;
+}
+
+/** Emitted AFTER a specialist finishes (success or error). @since 1.41.0 */
+export interface StreamAgentsAgentCallResultEvent {
+  type: 'agent_call_result';
+  step: number;
+  agent: string;
+  answer: string;
+  isError: boolean;
+}
+
+/** Final event when the coordinator terminates. Trace matches `runAgents()`. @since 1.41.0 */
+export interface StreamAgentsDoneEvent extends RunAgentsResult {
+  type: 'done';
+  step: number;
+}
+
+export type StreamAgentsEvent =
+  | StreamAgentsTurnStartEvent
+  | StreamAgentsTextEvent
+  | StreamAgentsAgentCallStartEvent
+  | StreamAgentsAgentCallResultEvent
+  | StreamAgentsDoneEvent;
+
+/**
+ * Async-generator counterpart to `runAgents`. Yields the same shape as
+ * `streamTools` but with `invoke_<name>` tool events repackaged as agent-slug
+ * events. Chat surfaces can render per-specialist badges without knowing
+ * about the underlying `invoke_<name>` convention.
+ * @since 1.41.0
+ */
+export function streamAgents(options: RunAgentsOptions): AsyncGenerator<StreamAgentsEvent, void, void>;
+
 // ---------------------------------------------------------------------------
 // Built-in middleware helpers (new in v1.3.0)
 // ---------------------------------------------------------------------------

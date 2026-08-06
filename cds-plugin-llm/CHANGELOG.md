@@ -4,6 +4,46 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.41.0] — 2026-08-06
+
+### Added
+
+- **`streamAgents()` — async-generator counterpart to `runAgents()`.** Yields the same event surface as `streamTools()` but with `invoke_<name>` tool events repackaged as agent-slug events. Chat surfaces can render per-specialist progress badges without knowing about the underlying `invoke_<name>` convention.
+
+  ```js
+  const { streamAgents } = require('@saptarishi/cds-plugin-llm');
+
+  for await (const evt of streamAgents({ coordinator, agents, input })) {
+    switch (evt.type) {
+      case 'turn_start':          showBadge(`Turn ${evt.step}`);        break;
+      case 'text':                writeToChat(evt.text);                 break;
+      case 'agent_call_start':    showBadge(`${evt.agent}…`);           break;  // e.g. "contract-lookup…"
+      case 'agent_call_result':   hideBadge(evt.agent);                  break;
+      case 'done':                finalize(evt);  // trace, usage, steps
+    }
+  }
+  ```
+
+- **5 event types** (all include `step: 1..maxSteps`):
+  - **`turn_start`** — before each coordinator turn.
+  - **`text`** — coordinator prose for the turn (atomic per turn).
+  - **`agent_call_start`** — right before a specialist runs; carries `{ agent, question }` (invoke_ prefix stripped).
+  - **`agent_call_result`** — after specialist finishes; carries `{ agent, answer, isError }`.
+  - **`done`** — extends `RunAgentsResult` with `type: 'done'` + `step`. `trace` matches `runAgents()` exactly — one entry per specialist invocation with `{ agent, question, answer, isError }`.
+
+- **Same validation as `runAgents()`** — requires `{ coordinator, agents, input }`; each agent needs a unique `name`, `description`, and `run()` function; duplicate names rejected. `onAgentInvocation` observer callback fires per specialist call.
+
+- **10 new tests** (790 total): validation (missing coordinator/agents/input, duplicate agent name), single agent call sequence (`invoke_` prefix stripped in start + result events), done-event trace shape matches `runAgents()` (one entry per invocation, aggregated usage across turns), `onAgentInvocation` fires per call, text-only turn (empty trace), specialist throws → `isError=true` propagates to result + trace, integration with real `Agent` class instances (duck-type equivalence).
+
+- **TS defs:** `StreamAgentsEvent` discriminated union (`StreamAgentsTurnStartEvent | StreamAgentsTextEvent | StreamAgentsAgentCallStartEvent | StreamAgentsAgentCallResultEvent | StreamAgentsDoneEvent`); `streamAgents()` signature returns `AsyncGenerator<StreamAgentsEvent, void, void>`.
+
+### Notes
+
+- **Shares the specialist-conversion logic with `runAgents()`.** Any change to `invoke_<name>` tool-shape or observer semantics needs to happen in both places (or gets extracted to a shared helper).
+- **Coordinator still uses `chat()` per turn** — text is atomic per turn (same trade-off as `streamTools()`; delta-level streaming is a follow-up requiring provider changes).
+- **Backpressure friendly.** Same async-iterator cleanup as `streamTools()`. Client disconnect breaks the loop; no orphan chat/specialist calls fire.
+- **The demo app's `/stream/analyzeScenario` endpoint** currently uses `streamTools()` with hand-rolled `invoke_<name>` tools. A follow-up demo-app release will swap in `streamAgents()` and drop ~30 lines of inline conversion.
+
 ## [1.40.1] — 2026-08-06
 
 ### Added

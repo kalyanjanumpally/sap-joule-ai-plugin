@@ -27,7 +27,7 @@
 // custom / non-LLM workers (e.g. a SQL query engine, a rules engine) plug
 // into the coordinator alongside real Agent instances.
 
-const { runTools } = require('./toolRunner');
+const { runTools, streamTools } = require('./toolRunner');
 
 class Agent {
   constructor(options = {}) {
@@ -209,4 +209,151 @@ async function runAgents(options = {}) {
   };
 }
 
-module.exports = { Agent, runAgents, DEFAULT_COORDINATOR_SYSTEM };
+/**
+ * streamAgents() — async-generator counterpart to runAgents().
+ *
+ * Yields the same event surface as streamTools() but with `invoke_<name>`
+ * tool-call events repackaged into agent-slug events. Chat UIs can render
+ * per-specialist badges ("contract-lookup running…") without knowing about
+ * the underlying `invoke_<name>` convention.
+ *
+ * Event types (all include `step: 1..maxSteps`):
+ *   { type: 'turn_start', step }
+ *   { type: 'text', step, text }                                  — coordinator prose
+ *   { type: 'agent_call_start',  step, agent, question }
+ *   { type: 'agent_call_result', step, agent, answer, isError }
+ *   { type: 'done', step, text, trace, steps, usage, model, stopReason }
+ *
+ * The `done` event's `trace` matches `runAgents()` — one entry per
+ * specialist invocation, with `{ agent, question, answer, isError }`.
+ *
+ *   for await (const evt of streamAgents({ coordinator, agents, input })) {
+ *     if (evt.type === 'text')                writeToChat(evt.text);
+ *     if (evt.type === 'agent_call_start')    showBadge(evt.agent);
+ *     if (evt.type === 'agent_call_result')   hideBadge(evt.agent);
+ *     if (evt.type === 'done')                finalize(evt);
+ *   }
+ *
+ * @since 1.41.0
+ */
+async function* streamAgents(options = {}) {
+  const {
+    coordinator,
+    agents,
+    input,
+    system = DEFAULT_COORDINATOR_SYSTEM,
+    maxSteps = 20,
+    onAgentInvocation,
+    ...rest
+  } = options;
+
+  if (!coordinator || typeof coordinator.chat !== 'function') {
+    throw new Error('streamAgents: `coordinator` must be an LLMService with chat().');
+  }
+  if (!Array.isArray(agents) || agents.length === 0) {
+    throw new Error('streamAgents: `agents` must be a non-empty array of Agent instances (or duck-typed { name, description, run }).');
+  }
+  if (typeof input !== 'string' || !input) {
+    throw new Error('streamAgents: `input` must be a non-empty string.');
+  }
+
+  // Reuse the same invoke_<name> conversion as runAgents so behavior is
+  // identical between streaming and non-streaming paths. Any change to the
+  // conversion needs to happen in both places (or extract a shared helper).
+  const seen = new Set();
+  const tools = agents.map((agent, i) => {
+    if (!agent || typeof agent.name !== 'string' || !agent.name) {
+      throw new Error(`streamAgents: agents[${i}] must have a non-empty \`name\`.`);
+    }
+    if (seen.has(agent.name)) {
+      throw new Error(`streamAgents: duplicate agent name '${agent.name}' — each agent must have a unique name.`);
+    }
+    seen.add(agent.name);
+    if (typeof agent.description !== 'string' || !agent.description) {
+      throw new Error(`streamAgents: agents[${i}] ('${agent.name}') needs a description — the coordinator uses it to route.`);
+    }
+    if (typeof agent.run !== 'function') {
+      throw new Error(`streamAgents: agents[${i}] ('${agent.name}') must have a run(input) function.`);
+    }
+    return {
+      name: `invoke_${agent.name}`,
+      description: agent.description,
+      input_schema: {
+        type: 'object',
+        properties: {
+          question: {
+            type: 'string',
+            description: `The question or task for the ${agent.name} specialist. Be specific — the specialist can't see the original user task.`,
+          },
+        },
+        required: ['question'],
+      },
+      run: async ({ question }) => {
+        if (typeof question !== 'string' || !question) {
+          throw new Error(`invoke_${agent.name}: 'question' must be a non-empty string`);
+        }
+        if (onAgentInvocation) {
+          try { await onAgentInvocation({ agent: agent.name, question }); }
+          catch { /* swallow observer errors */ }
+        }
+        const result = await agent.run({ input: question });
+        return typeof result === 'string' ? result : (result?.text ?? '');
+      },
+    };
+  });
+
+  // Route the streamTools events through a translator: any `invoke_<name>`
+  // tool-call event becomes an `agent_call_*` event with the slug stripped.
+  const stripInvoke = (name) => name.startsWith('invoke_') ? name.slice('invoke_'.length) : name;
+
+  for await (const evt of streamTools({
+    llm: coordinator,
+    system,
+    messages: [{ role: 'user', content: input }],
+    tools,
+    maxSteps,
+    ...rest,
+  })) {
+    switch (evt.type) {
+      case 'tool_call_start':
+        yield {
+          type:     'agent_call_start',
+          step:     evt.step,
+          agent:    stripInvoke(evt.name),
+          question: evt.input?.question ?? null,
+        };
+        break;
+      case 'tool_call_result':
+        yield {
+          type:    'agent_call_result',
+          step:    evt.step,
+          agent:   stripInvoke(evt.name),
+          answer:  evt.result,
+          isError: evt.isError,
+        };
+        break;
+      case 'done':
+        yield {
+          type:       'done',
+          step:       evt.step,
+          text:       evt.text,
+          steps:      evt.steps,
+          usage:      evt.usage,
+          model:      evt.model,
+          stopReason: evt.stopReason,
+          trace:      evt.toolCalls.map(tc => ({
+            agent:    stripInvoke(tc.name),
+            question: tc.input?.question ?? null,
+            answer:   tc.result,
+            isError:  tc.isError,
+          })),
+        };
+        break;
+      default:
+        // turn_start + text pass through unchanged
+        yield evt;
+    }
+  }
+}
+
+module.exports = { Agent, runAgents, streamAgents, DEFAULT_COORDINATOR_SYSTEM };

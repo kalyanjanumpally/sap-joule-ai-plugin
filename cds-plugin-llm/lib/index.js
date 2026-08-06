@@ -37,6 +37,8 @@ module.exports = {
   // Multi-agent orchestration (new in 1.27.0)
   Agent: require('./agents').Agent,
   runAgents: require('./agents').runAgents,
+  // Streaming counterpart — yields agent-slug events (new in 1.41.0)
+  streamAgents: require('./agents').streamAgents,
   DEFAULT_COORDINATOR_SYSTEM: require('./agents').DEFAULT_COORDINATOR_SYSTEM,
   // Built-in middleware helpers (new in 1.3.0)
   rateLimit: require('./middleware/rateLimit').rateLimit,
