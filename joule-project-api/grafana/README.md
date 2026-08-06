@@ -14,12 +14,13 @@ Single dashboard covering every metric family the plugin emits:
 | **Rate limits & retry** | Retry attempts vs give-ups · Cumulative wait time · Provider `remaining_requests` · Provider `remaining_tokens` |
 | **Security** | Guardrails blocks/redacts by stage · Injection detector heat map |
 | **Usage & cost per model** | Requests/model (rate) · Cost/tenant (cumulative) · Cache savings · Cache hits · Input tokens (10m) · Output tokens (10m) |
+| **Resilience** | Circuit state per provider (0=closed / 1=halfOpen / 2=open) · Circuit opens vs closes · Bulkhead in-flight per provider · Bulkhead queued · Rejects & timeouts · Active in-deadline requests · Deadline expirations · Breaker short-circuits · Cooldown remaining · Consecutive failures |
 
-29 panels total. Uses standard Prometheus `rate()`, `increase()`, and instant queries. Refresh interval: 30s. Time window default: last 1h.
+40 panels total. Uses standard Prometheus `rate()`, `increase()`, and instant queries. Refresh interval: 30s. Time window default: last 1h.
 
 ## Import
 
-1. Ensure `prometheusHandler({ cache, budget, retry, guardrails, injectionGuard, metering })` is wired at `/metrics` on your app (the demo app does this in `srv/ai-service.js`). See the `cds-plugin-llm` CHANGELOG entries for 1.35.0 + 1.47.1.
+1. Ensure `prometheusHandler({ cache, budget, retry, guardrails, injectionGuard, metering, breaker, bh, deadline })` is wired at `/metrics` on your app (the demo app does this in `srv/ai-service.js`). See the `cds-plugin-llm` CHANGELOG entries for 1.35.0, 1.47.1, and 1.49.0-1.52.0.
 2. Point Prometheus at `http://<your-app>:4004/metrics` — scrape interval 15–60s is fine; scaling higher costs cardinality without much precision gain since most series are gauges.
 3. In Grafana → Dashboards → New → Import → Upload JSON file → select `dashboards/llm-observability.json`.
 4. When prompted, pick the Prometheus datasource that has this scrape configured.
@@ -50,4 +51,16 @@ label: severity=critical
 # 4. Cache hit rate collapsed (invalidation storm / config change)
 expr:  avg_over_time(llm_cache_hit_rate[10m]) < 0.2
 label: severity=info
+
+# 5. Circuit breaker open on any provider (sustained outage)
+expr:  max(llm_breaker_state) > 1
+label: severity=critical
+
+# 6. Bulkhead saturating (queue building or requests being rejected)
+expr:  rate(llm_bulkhead_rejected_total[5m]) + rate(llm_bulkhead_timed_out_total[5m]) > 0.1
+label: severity=warning
+
+# 7. Deadline expirations spiking (provider degraded but not down)
+expr:  rate(llm_deadline_expired_total[5m]) > 0.1
+label: severity=warning
 ```

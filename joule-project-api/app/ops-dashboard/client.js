@@ -1,13 +1,17 @@
 /**
  * Ops dashboard — polls the existing observability HTTP endpoints and
- * renders live counters + budget bars + middleware chain.
+ * renders live counters + budget bars + resilience state + middleware chain.
  *
  * Endpoints consumed (all read-only, no auth in dev):
+ *   GET /resilience      (aggregate — drives the top-level health dot)
  *   GET /budget-status
  *   GET /cache-stats
  *   GET /retry-stats
  *   GET /guardrails-stats
  *   GET /injection-stats
+ *   GET /deadline-state
+ *   GET /breaker-state
+ *   GET /bulkhead-state
  *   POST /mcp resources/read config://chain  (chain snapshot)
  *
  * Zero framework. Just fetch() + DOM update. Polling interval controlled
@@ -37,6 +41,16 @@
     guardrailsSub: $('#guardrails-sub'),
     injectionScanned: $('#injection-scanned'),
     injectionSub: $('#injection-sub'),
+
+    deadlineExpired: $('#deadline-expired'),
+    deadlineSub:     $('#deadline-sub'),
+    breakerState:    $('#breaker-state'),
+    breakerSub:      $('#breaker-sub'),
+    bulkheadInflight:$('#bulkhead-inflight'),
+    bulkheadSub:     $('#bulkhead-sub'),
+
+    healthDot:   $('#health-dot'),
+    healthLabel: $('#health-label'),
 
     chainList: $('#chain-list'),
   };
@@ -195,6 +209,51 @@
     els.injectionScanned.textContent = String(data.scanned ?? 0);
     els.injectionSub.textContent = `${data.blocked ?? 0} blocked · ${data.sanitized ?? 0} sanitized · ${data.warned ?? 0} warned`;
   }
+  function renderDeadline(data) {
+    if (!data) return;
+    els.deadlineExpired.textContent = String(data.expired ?? 0);
+    els.deadlineSub.textContent = `${data.requests ?? 0} requests · ${data.activeCount ?? 0} active`;
+  }
+  function renderBreaker(data) {
+    if (!data) return;
+    // Show the worst-case state across all provider buckets, or 'closed' if no buckets seen yet
+    const buckets = Object.entries(data.buckets ?? {});
+    let worst = 'closed';
+    const rank = { closed: 0, halfOpen: 1, open: 2 };
+    for (const [, s] of buckets) {
+      if ((rank[s.state] ?? 0) > (rank[worst] ?? 0)) worst = s.state;
+    }
+    els.breakerState.textContent = worst.toUpperCase();
+    els.breakerState.className = 'kpi-primary ' + (worst === 'open' ? 'err' : worst === 'halfOpen' ? 'warn' : 'ok');
+    const opens  = data.opens ?? 0;
+    const closes = data.closes ?? 0;
+    const nBuckets = buckets.length;
+    els.breakerSub.textContent = `${opens} opens · ${closes} closes · ${nBuckets} providers`;
+  }
+  function renderBulkhead(data) {
+    if (!data) return;
+    // Sum in-flight across buckets. Max concurrent shown as denominator.
+    const buckets = Object.entries(data.buckets ?? {});
+    const totalInFlight = buckets.reduce((s, [, b]) => s + (b.inFlight ?? 0), 0);
+    const totalQueued   = buckets.reduce((s, [, b]) => s + (b.queued ?? 0), 0);
+    const cap = data.maxConcurrent ?? 0;
+    els.bulkheadInflight.textContent = `${totalInFlight}/${cap * Math.max(1, buckets.length)}`;
+    const rej = data.rejected ?? 0;
+    const to  = data.timedOut ?? 0;
+    els.bulkheadSub.textContent = `${totalQueued} queued · ${rej} rejected · ${to} timed out`;
+    els.bulkheadInflight.className = 'kpi-primary ' + (rej > 0 || to > 0 ? 'warn' : '');
+  }
+  function renderHealth(data) {
+    if (!data) {
+      els.healthDot.className = 'dot idle';
+      els.healthLabel.textContent = 'unknown';
+      return;
+    }
+    const status = data.status ?? 'unknown';
+    els.healthDot.className = 'dot ' + (status === 'ok' ? 'live' : status === 'degraded' ? 'warn' : 'err');
+    const degradedLayers = (data.degraded ?? []).map((d) => d.layer).join(', ');
+    els.healthLabel.textContent = degradedLayers ? `degraded: ${degradedLayers}` : status;
+  }
   function renderChain(data) {
     if (!data || !data.order) return;
     els.chainList.innerHTML = data.order.map((m) => `
@@ -223,12 +282,16 @@
   // ---- Poll cycle ----------------------------------------------------
   async function poll() {
     setConn('live', 'polling…');
-    const [budget, cache, retry, guardrails, injection, chain] = await Promise.all([
+    const [budget, cache, retry, guardrails, injection, deadline, breaker, bulkhead, health, chain] = await Promise.all([
       safeJson('/budget-status'),
       safeJson('/cache-stats'),
       safeJson('/retry-stats'),
       safeJson('/guardrails-stats'),
       safeJson('/injection-stats'),
+      safeJson('/deadline-state'),
+      safeJson('/breaker-state'),
+      safeJson('/bulkhead-state'),
+      safeJson('/resilience'),
       readChain(),
     ]);
     renderBudget(budget);
@@ -236,6 +299,10 @@
     renderRetry(retry);
     renderGuardrails(guardrails);
     renderInjection(injection);
+    renderDeadline(deadline);
+    renderBreaker(breaker);
+    renderBulkhead(bulkhead);
+    renderHealth(health);   // health = /resilience payload
     renderChain(chain);
     const now = new Date().toLocaleTimeString();
     setConn('live', `updated ${now}`);

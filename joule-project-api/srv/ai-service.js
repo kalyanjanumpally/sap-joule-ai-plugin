@@ -13,6 +13,9 @@ const {
   prometheusHandler,
   streamAgents,
   retryOnRateLimit, RateLimitGiveUpError,
+  circuitBreaker, CircuitOpenError,
+  bulkhead, BulkheadFullError, BulkheadTimeoutError,
+  deadline, DeadlineExceededError,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -102,6 +105,9 @@ let _budget;
 let _injectionGuard;
 let _metering;
 let _retry;
+let _deadline;
+let _breaker;
+let _bulkhead;
 // Shared limits object — passed by reference to costBudget() so
 // FinanceService can mutate it live from LlmBudget rows without a
 // restart. costBudget reads from this via limitFor() on every call.
@@ -109,6 +115,20 @@ const _budgetLimits = { total: undefined, perTenant: {}, perModel: {} };
 function getLLM() {
   if (!_llmPromise) {
     _llmPromise = cds.connect.to('llm').then((llm) => {
+      // Deadline — OUTERMOST middleware so the entire request pipeline
+      // (retries + bulkhead queue + circuit-breaker decisions + provider
+      // call) shares ONE time budget. 30s cap on chat, 60s on stream (the
+      // stream can afford longer since the user sees progressive output),
+      // 5s on embed (embedders are fast; slow embeds mean the embedder
+      // service is degraded and the request should die quickly).
+      _deadline = deadline({
+        timeoutMs: 30_000,
+        perMethod: { chat: 30_000, embed: 5_000, stream: 60_000, batch: 300_000 },
+        onExpired: (info) => cds.log('llm:deadline').warn(
+          `[deadline] ${info.method} expired after ${info.elapsedMs}ms (budget ${info.timeoutMs}ms)`,
+        ),
+      });
+      llm.use(_deadline);
       // Prompt injection guard — sits OUTER of everything else so the
       // sanitized (or refused) payload is what guardrails + cache + meter +
       // provider all see. Runs BEFORE guardrails so it can spot zero-width
@@ -179,6 +199,47 @@ function getLLM() {
         },
       });
       llm.use(_budget);
+      // Circuit breaker — sustained-outage guard. After 5 consecutive
+      // 5xx / network failures per provider, opens the circuit for 30s
+      // and short-circuits calls with CircuitOpenError. Composes with
+      // retryOnRateLimit below: retries handle transient throttling,
+      // breaker handles when the provider is truly down. Placed OUTER
+      // of retry so an open circuit avoids burning retry budget on a
+      // known-down provider. Placed OUTER of bulkhead so short-circuits
+      // don't hold a bulkhead slot.
+      _breaker = circuitBreaker({
+        threshold:        5,
+        cooldownMs:       30_000,
+        halfOpenAttempts: 1,
+        perProvider:      true,
+        onOpen: (info) => cds.log('llm:breaker').warn(
+          `[breaker] OPENED provider='${info.provider}' after ${info.consecutiveFailures} failures: ${info.lastError?.message?.slice(0, 100)}`,
+        ),
+        onClose: (info) => cds.log('llm:breaker').info(
+          `[breaker] CLOSED provider='${info.provider}' — half-open probe succeeded`,
+        ),
+        onHalfOpen: (info) => cds.log('llm:breaker').info(
+          `[breaker] HALF-OPEN provider='${info.provider}' — testing recovery`,
+        ),
+      });
+      llm.use(_breaker);
+      // Bulkhead — concurrency isolation. Caps in-flight calls per
+      // provider bucket at 10, queues up to 50 excess with a 5s timeout,
+      // rejects the rest with BulkheadFullError. Prevents one runaway
+      // tenant or agent loop from starving others. Placed INNER of
+      // circuitBreaker (short-circuits skip the bucket entirely) and
+      // OUTER of retryOnRateLimit (retries hold their slot across
+      // wait+retry, preventing thundering-herd on recovery).
+      _bulkhead = bulkhead({
+        maxConcurrent:  10,
+        maxQueued:      50,
+        queueTimeoutMs: 5_000,
+        perProvider:    true,
+        onReject: (info) => cds.log('llm:bulkhead').warn(
+          `[bulkhead] ${info.reason} provider='${info.provider}' (inFlight=${info.inFlight}, queued=${info.queued})`,
+        ),
+      });
+      llm.use(_bulkhead);
       // Rate-limit retry sits between costBudget (blocks BEFORE the call)
       // and usageMetering (records what happened). Placement rationale:
       //   - INNER of costBudget: if a retry pushes us over the budget on
@@ -253,6 +314,12 @@ function getInjectionGuard() { return _injectionGuard; }
 function getMetering() { return _metering; }
 /** Exported for the MCP service + /retry-stats dashboard. */
 function getRetry() { return _retry; }
+/** Exported for /deadline-state dashboard + MCP service. */
+function getDeadline() { return _deadline; }
+/** Exported for /breaker-state dashboard + MCP service. */
+function getBreaker() { return _breaker; }
+/** Exported for /bulkhead-state dashboard + MCP service. */
+function getBulkhead() { return _bulkhead; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -410,6 +477,7 @@ module.exports = class AIService extends cds.ApplicationService {
       const { startObservabilityMcp } = require('./mcp-service');
       await startObservabilityMcp({
         getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
+        getDeadline, getBreaker, getBulkhead,
       });
     });
 
@@ -522,6 +590,117 @@ module.exports = class AIService extends cds.ApplicationService {
         if (!r) return res.status(503).json({ error: 'retry middleware not initialized yet' });
         res.json(r.stats);
       });
+      // Deadline dashboard — per-request time-budget counters + current
+      // active-count. Shows how many requests hit their timeout wall
+      // (usually zero — high count means the provider is slow).
+      cds.app.get('/deadline-state', (_req, res) => {
+        const dl = getDeadline();
+        if (!dl) return res.status(503).json({ error: 'deadline middleware not initialized yet' });
+        res.json(dl.stats);
+      });
+      // Circuit breaker dashboard — per-provider state + open/close counters.
+      // The state field (closed/open/halfOpen) is what a k8s liveness probe
+      // wants: closed = green, halfOpen = testing recovery, open = outage.
+      cds.app.get('/breaker-state', (_req, res) => {
+        const b = getBreaker();
+        if (!b) return res.status(503).json({ error: 'breaker not initialized yet' });
+        const snap = b.asMcpResource().handler();
+        res.json(snap);
+      });
+      // Bulkhead dashboard — per-provider in-flight + queue depth.
+      // High queue depth = provider slow or concurrency limit too tight.
+      // Non-zero rejected/timedOut = one provider under sustained pressure.
+      cds.app.get('/bulkhead-state', (_req, res) => {
+        const b = getBulkhead();
+        if (!b) return res.status(503).json({ error: 'bulkhead not initialized yet' });
+        const snap = b.asMcpResource().handler();
+        res.json(snap);
+      });
+      // Aggregate resilience state — like /health but focused on the
+      // resilience quartet (deadline / breaker / bulkhead / retry) + budget.
+      // Returns { status: 'ok' | 'degraded' | 'down', degraded: [...],
+      // primitives: {...} }. CAP owns /health (returns 'UP') and /live /
+      // /ready are the k8s-native names, so we expose the aggregate here.
+      cds.app.get('/resilience', async (_req, res) => {
+        const degraded = [];
+        const primitives = {};
+
+        // Circuit breaker — any open bucket = degraded.
+        const br = getBreaker();
+        if (br) {
+          const snap = br.asMcpResource().handler();
+          const openBuckets = Object.entries(snap.buckets ?? {})
+            .filter(([, s]) => s.state === 'open')
+            .map(([k]) => k);
+          primitives.breaker = { openBuckets, opens: snap.opens, closes: snap.closes };
+          if (openBuckets.length > 0) {
+            degraded.push({ layer: 'breaker', reason: `providers open: ${openBuckets.join(', ')}` });
+          }
+        }
+        // Bulkhead — any bucket saturated OR any rejections in last window = degraded.
+        const bh = getBulkhead();
+        if (bh) {
+          const snap = bh.asMcpResource().handler();
+          const saturated = Object.entries(snap.buckets ?? {})
+            .filter(([, s]) => s.queued > 0)
+            .map(([k, s]) => ({ provider: k, inFlight: s.inFlight, queued: s.queued }));
+          primitives.bulkhead = { saturated, rejected: snap.rejected, timedOut: snap.timedOut };
+          if (snap.rejected > 0 || snap.timedOut > 0) {
+            degraded.push({ layer: 'bulkhead', reason: `${snap.rejected} rejected, ${snap.timedOut} timed out` });
+          }
+        }
+        // Deadline — expired > 0 = at least one request hit the wall.
+        const dl = getDeadline();
+        if (dl) {
+          primitives.deadline = { requests: dl.stats.requests, expired: dl.stats.expired, activeCount: dl.stats.activeCount };
+          if (dl.stats.expired > 0) {
+            degraded.push({ layer: 'deadline', reason: `${dl.stats.expired} requests exceeded time budget` });
+          }
+        }
+        // Budget — any over-limit = degraded.
+        const budget = getBudget();
+        if (budget) {
+          const snap = await budget.snapshot();
+          const totalLimit = budget.limitFor('total', 'total');
+          const overLimit = totalLimit != null && snap.total > totalLimit;
+          primitives.budget = { spent: snap.total, limit: totalLimit, overLimit };
+          if (overLimit) {
+            degraded.push({ layer: 'budget', reason: `spent ${snap.total.toFixed(2)} exceeds limit ${totalLimit}` });
+          }
+        }
+        // Retry — givenUp > 0 = requests permanently failed after retries.
+        const rt = getRetry();
+        if (rt) {
+          primitives.retry = { requests: rt.stats.requests, givenUp: rt.stats.givenUp };
+          if (rt.stats.givenUp > 0) {
+            degraded.push({ layer: 'retry', reason: `${rt.stats.givenUp} requests gave up after retries` });
+          }
+        }
+
+        const status = degraded.length === 0 ? 'ok' : 'degraded';
+        res.status(status === 'ok' ? 200 : 200).json({ status, degraded, primitives });
+      });
+      // Liveness — process is running. Always 200 unless the express handler
+      // itself is stuck. Distinct from /ready (which checks middleware wiring).
+      cds.app.get('/live', (_req, res) => res.status(200).json({ status: 'live' }));
+      // Readiness — every middleware is initialized. If any is missing,
+      // the app cannot serve real requests (still booting).
+      cds.app.get('/ready', (_req, res) => {
+        const missing = [];
+        if (!getDeadline())       missing.push('deadline');
+        if (!getInjectionGuard()) missing.push('promptInjectionGuard');
+        if (!getGuardrails())     missing.push('guardrails');
+        if (!getBudget())         missing.push('costBudget');
+        if (!getBreaker())        missing.push('circuitBreaker');
+        if (!getBulkhead())       missing.push('bulkhead');
+        if (!getRetry())          missing.push('retryOnRateLimit');
+        if (!getMetering())       missing.push('usageMeteringToCap');
+        if (!getCache())          missing.push('responseCache');
+        if (missing.length > 0) {
+          return res.status(503).json({ status: 'not-ready', missing });
+        }
+        res.status(200).json({ status: 'ready' });
+      });
       // Prometheus /metrics — same counters as the /*-stats endpoints but
       // serialized to Prom 0.0.4 text-exposition. Scrape-friendly for
       // Grafana + DataDog agent + Kubernetes ServiceMonitor. cardinality
@@ -536,6 +715,12 @@ module.exports = class AIService extends cds.ApplicationService {
         // Retry counters (new in cds-plugin-llm 1.47.1) — throttling pressure
         // becomes visible in Grafana without hitting /retry-stats separately.
         retry:          getRetry(),
+        // Resilience quartet + deadline (new in cds-plugin-llm 1.49-1.52) —
+        // circuit state / bulkhead saturation / deadline expirations all
+        // reachable via Prometheus scraping.
+        breaker:        getBreaker(),
+        bh:             getBulkhead(),
+        deadline:       getDeadline(),
       }));
       // Budget dashboard — current-window spend + configured limits.
       // Complements the OData `FinanceService.getBudgetStatus()` action
@@ -829,4 +1014,7 @@ module.exports.getGuardrails = getGuardrails;
 module.exports.getInjectionGuard = getInjectionGuard;
 module.exports.getMetering = getMetering;
 module.exports.getRetry = getRetry;
+module.exports.getDeadline = getDeadline;
+module.exports.getBreaker = getBreaker;
+module.exports.getBulkhead = getBulkhead;
 module.exports.getLLM = getLLM;
