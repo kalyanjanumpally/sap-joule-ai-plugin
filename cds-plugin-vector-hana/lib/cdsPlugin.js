@@ -134,24 +134,24 @@ function activate(cds, options = {}) {
   const publicApi = {
     getStore(entityName) { return stores.get(entityName); },
 
-    async searchByMeaning({ entity, query, topK, filter, mode } = {}) {
+    async searchByMeaning({ entity, query, topK, filter, mode, alpha } = {}) {
       const store = mustStore(stores, entity);
       const cfg = configs.get(entity);
       const effectiveMode = mode ?? cfg.search ?? 'vector';
       const k = topK ?? cfg.topK;
       if (effectiveMode === 'hybrid' && typeof store.hybridSearch === 'function') {
-        return store.hybridSearch({ text: query, topK: k, filter });
+        return store.hybridSearch({ text: query, topK: k, filter, alpha });
       }
       return store.search({ text: query, topK: k, filter });
     },
 
     async askAbout(params = {}) {
-      const { entity, query, topK, filter, systemInstructions, mode, ...chatOpts } = params;
+      const { entity, query, topK, filter, systemInstructions, mode, alpha, ...chatOpts } = params;
       const store = mustStore(stores, entity);
       const cfg = configs.get(entity);
       const chatter = await resolveService(cds, cfg.chatter, 'chatter');
       const rag = new RAG({ llm: chatter, store, mode: mode ?? cfg.search ?? 'vector' });
-      return rag.answer({ query, topK: topK ?? cfg.topK, filter, systemInstructions, ...chatOpts });
+      return rag.answer({ query, topK: topK ?? cfg.topK, filter, alpha, systemInstructions, ...chatOpts });
     },
 
     async backfill(entityName) {
@@ -318,8 +318,15 @@ function declareActions(definitions, entityName, def, config, log) {
       def.actions[searchName] = {
         kind: 'action',
         params: {
-          query: { type: 'cds.String' },
-          topK: { type: 'cds.Integer' },
+          query:  { type: 'cds.String' },
+          topK:   { type: 'cds.Integer' },
+          // Row-level metadata filter, JSON-encoded (e.g. '{"region":"EMEA"}').
+          // Applied to both vector and keyword retrieval. New in 0.11.0.
+          filter: { type: 'cds.String' },
+          // Hybrid-mode vector/keyword weighting knob (0..1). alpha=1 pure
+          // vector, alpha=0 pure keyword, alpha=0.5 balanced (default RRF).
+          // Only meaningful when @rag.search: 'hybrid'. New in 0.11.0.
+          alpha:  { type: 'cds.Double' },
         },
         returns: { items: { type: entityName } },
         // Bind to the collection, not a single instance. Without this
@@ -351,9 +358,12 @@ function declareActions(definitions, entityName, def, config, log) {
       def.actions[askName] = {
         kind: 'action',
         params: {
-          query: { type: 'cds.String' },
-          topK: { type: 'cds.Integer' },
+          query:              { type: 'cds.String' },
+          topK:               { type: 'cds.Integer' },
           systemInstructions: { type: 'cds.String' },
+          // See searchByMeaning for filter/alpha semantics. New in 0.11.0.
+          filter:             { type: 'cds.String' },
+          alpha:              { type: 'cds.Double' },
         },
         returns: { type: resultTypeName },
         '@cds.odata.bindingparameter.collection': true,
@@ -396,9 +406,17 @@ function wireActionHandlers({ cds, entityName, def, store, config, log, plugin }
         throw new Error('query is required');
       }
       const topK = req?.data?.topK ?? config.topK;
+      let filter;
+      try {
+        filter = parseFilterJson(req?.data?.filter);
+      } catch (e) {
+        if (typeof req.reject === 'function') return req.reject(400, `filter must be a JSON object: ${e.message}`);
+        throw e;
+      }
+      const alpha = req?.data?.alpha;
       let hits;
       try {
-        hits = await plugin.searchByMeaning({ entity: entityName, query, topK });
+        hits = await plugin.searchByMeaning({ entity: entityName, query, topK, filter, alpha });
       } catch (err) {
         log.error(`@rag: ${entityName}: ${searchName} handler failed: ${err.message}`);
         if (typeof req.reject === 'function') return req.reject(500, `search failed: ${err.message}`);
@@ -423,9 +441,17 @@ function wireActionHandlers({ cds, entityName, def, store, config, log, plugin }
       }
       const topK = req?.data?.topK ?? config.topK;
       const systemInstructions = req?.data?.systemInstructions;
+      let filter;
+      try {
+        filter = parseFilterJson(req?.data?.filter);
+      } catch (e) {
+        if (typeof req.reject === 'function') return req.reject(400, `filter must be a JSON object: ${e.message}`);
+        throw e;
+      }
+      const alpha = req?.data?.alpha;
       let result;
       try {
-        result = await plugin.askAbout({ entity: entityName, query, topK, systemInstructions });
+        result = await plugin.askAbout({ entity: entityName, query, topK, systemInstructions, filter, alpha });
       } catch (err) {
         log.error(`@rag: ${entityName}: ${askName} handler failed: ${err.message}`);
         if (typeof req.reject === 'function') return req.reject(500, `ask failed: ${err.message}`);
@@ -497,4 +523,24 @@ function silentLog() {
   return { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 }
 
-module.exports = { activate, normalizeConfig, buildItem, declareActions, readRagAnnotation };
+/**
+ * Parse the OData `filter` param. Empty / undefined → undefined (no filter);
+ * a JSON string → the parsed object; anything else → throws so the handler
+ * can 400 with a clear message. Objects (from direct programmatic calls that
+ * bypass the OData layer) pass through unchanged.
+ * @since 0.11.0
+ */
+function parseFilterJson(raw) {
+  if (raw == null || raw === '') return undefined;
+  if (typeof raw === 'object') return raw;
+  if (typeof raw !== 'string') {
+    throw new Error(`expected a JSON string (got ${typeof raw})`);
+  }
+  const parsed = JSON.parse(raw);
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('expected a JSON object, e.g. \'{"region":"EMEA"}\'');
+  }
+  return parsed;
+}
+
+module.exports = { activate, normalizeConfig, buildItem, declareActions, readRagAnnotation, parseFilterJson };

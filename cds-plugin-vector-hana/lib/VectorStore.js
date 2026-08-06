@@ -144,11 +144,22 @@ class VectorStore {
    *   k             — RRF smoothing constant (default 60)
    *   filter        — metadata filter, passed through to both retrievals
    */
-  async hybridSearch({ text, topK = 10, candidateK, vectorWeight = 1, keywordWeight = 1, k = 60, filter } = {}) {
+  async hybridSearch({ text, topK = 10, candidateK, vectorWeight = 1, keywordWeight = 1, alpha, k = 60, filter } = {}) {
     if (typeof text !== 'string' || text.length === 0) {
       throw new Error('hybridSearch() requires { text: non-empty string }');
     }
     if (topK < 1) throw new Error('hybridSearch() requires topK >= 1');
+    // `alpha` (new in 0.11.0) is a single knob mapping [0, 1] to the two
+    // per-list weights. alpha=1 → pure vector, alpha=0 → pure keyword.
+    // Wins over separate vector/keyword weights: monotonic, dimensionless,
+    // and easy to sweep in Grafana. When supplied, it overrides both weights.
+    if (alpha !== undefined) {
+      if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
+        throw new Error(`hybridSearch(): alpha must be a number in [0, 1] (got ${alpha}).`);
+      }
+      vectorWeight  = alpha;
+      keywordWeight = 1 - alpha;
+    }
     const per = candidateK ?? Math.max(topK * 4, 10);
 
     const [vectorHits, keywordHits] = await Promise.all([

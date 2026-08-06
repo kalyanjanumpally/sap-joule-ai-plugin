@@ -43,7 +43,7 @@ class RAG {
     this.expand = expand ?? null;
   }
 
-  async retrieve({ query, topK = 5, filter, mode } = {}) {
+  async retrieve({ query, topK = 5, filter, mode, alpha } = {}) {
     if (typeof query !== 'string' || query.length === 0) {
       throw new Error('retrieve() requires { query: non-empty string }');
     }
@@ -69,7 +69,7 @@ class RAG {
             "cds-plugin-vector-hana 0.8.0). Older stores fall back with mode='vector'.",
           );
         }
-        return this.store.hybridSearch({ text: q, topK: perQueryK, filter });
+        return this.store.hybridSearch({ text: q, topK: perQueryK, filter, alpha });
       }
       return this.store.search({ text: q, topK: perQueryK, filter });
     };
@@ -115,8 +115,8 @@ class RAG {
   }
 
   async answer(params = {}) {
-    const { query, topK, filter, systemInstructions, mode, ...chatOpts } = params;
-    const hits = await this.retrieve({ query, topK, filter, mode });
+    const { query, topK, filter, systemInstructions, mode, alpha, ...chatOpts } = params;
+    const hits = await this.retrieve({ query, topK, filter, mode, alpha });
     const { system, messages } = this.augment({ query, hits, systemInstructions });
     const reply = await this.llm.chat({ ...chatOpts, system, messages });
     return { answer: extractText(reply), hits, raw: reply };

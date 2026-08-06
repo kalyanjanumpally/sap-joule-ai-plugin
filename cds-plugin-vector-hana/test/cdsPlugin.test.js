@@ -625,8 +625,10 @@ test('declareActions: adds searchByMeaning bound-to-collection action to the ent
   assert.ok(action, 'searchByMeaning action should be declared');
   assert.equal(action.kind, 'action');
   assert.deepEqual(action.params, {
-    query: { type: 'cds.String' },
-    topK: { type: 'cds.Integer' },
+    query:  { type: 'cds.String' },
+    topK:   { type: 'cds.Integer' },
+    filter: { type: 'cds.String' },   // JSON-encoded metadata filter (0.11.0)
+    alpha:  { type: 'cds.Double' },   // hybrid weighting knob (0.11.0)
   });
   assert.deepEqual(action.returns, { items: { type: 'AppService.Suppliers' } });
   // Collection-bound (not instance-bound) so `POST /Entity/Action` works
@@ -661,9 +663,11 @@ test('declareActions: adds askAbout action AND synthesizes result type in model.
   const askAction = def.actions.askAbout;
   assert.ok(askAction, 'askAbout action should be declared');
   assert.deepEqual(askAction.params, {
-    query: { type: 'cds.String' },
-    topK: { type: 'cds.Integer' },
+    query:              { type: 'cds.String' },
+    topK:               { type: 'cds.Integer' },
     systemInstructions: { type: 'cds.String' },
+    filter:             { type: 'cds.String' },   // JSON-encoded metadata filter (0.11.0)
+    alpha:              { type: 'cds.Double' },   // hybrid weighting knob (0.11.0)
   });
   assert.deepEqual(askAction.returns, { type: 'AppService.SuppliersAskAboutResult' });
 });

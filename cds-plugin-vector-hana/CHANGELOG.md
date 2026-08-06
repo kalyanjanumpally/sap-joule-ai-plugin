@@ -4,6 +4,44 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-08-06
+
+### Added
+
+- **`alpha` param** on `hybridSearch`, `RAG.retrieve`, `RAG.answer`, and the auto-declared OData `searchByMeaning` + `askAbout` actions. Single knob in `[0, 1]`: `alpha=1` → pure vector, `alpha=0` → pure keyword, `alpha=0.5` → balanced (default RRF). When supplied, overrides the separate `vectorWeight` + `keywordWeight` params. Wins over two-knob weighting: monotonic, dimensionless, easy to sweep in a Grafana slider.
+
+  ```js
+  // Programmatic
+  await cds.vectorHana.searchByMeaning({
+    entity: 'ProcurementService.SupplierContracts',
+    query:  'aluminum EMEA short lead time',
+    filter: { region: 'EMEA' },
+    alpha:  0.7,   // lean vector; keyword still contributes 30%
+    topK:   5,
+  });
+
+  // Via OData bound action
+  curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.searchByMeaning \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"aluminum EMEA","filter":"{\"region\":\"EMEA\"}","alpha":0.7,"topK":5}'
+  ```
+
+- **`filter` param exposed on OData actions.** The plugin already accepted `filter` on the programmatic `searchByMeaning` / `askAbout` calls; now the auto-declared bound actions carry a `filter: cds.String` param that accepts a JSON-encoded metadata filter (e.g. `'{"region":"EMEA"}'`). Applied to both vector and keyword retrieval. Invalid JSON returns 400 with a clear diagnostic. Objects (from programmatic calls) still pass through unchanged.
+
+- **`parseFilterJson(raw)`** helper exported from `cdsPlugin` for consumers writing custom action handlers.
+
+- **15 new tests** (197 total): `alpha` maps to weights correctly (=1 pure vector, =0 pure keyword, =0.5 balanced), `alpha` overrides explicit `vectorWeight`/`keywordWeight` when supplied, out-of-range `alpha` (>1, <0, NaN) throws, `filter` propagates to BOTH vector + keyword sub-queries, `RAG.retrieve` + `RAG.answer` forward both params, `parseFilterJson` (undefined/empty, object passthrough, JSON string parse, array→throws, invalid JSON→throws, non-string non-object→throws).
+
+### Changed
+
+- OData action param snapshots updated (`searchByMeaning`, `askAbout`) — snapshot tests now include `filter` + `alpha`. If you were asserting exact param shapes in downstream tests, add these two.
+
+### Notes
+
+- **Weights vs alpha precedence.** `alpha` wins when supplied. If you were setting `vectorWeight` + `keywordWeight` explicitly, keep doing so — nothing changes. If you switch to `alpha`, drop the explicit weights.
+- **`filter` semantics unchanged.** Same object shape the programmatic call already accepted. The OData surface just adds a JSON-string wrapper so the wire representation stays a single scalar param.
+- **HANA + SQLite backends both support `filter`** already (added in 0.6.0 for SQLite, 0.8.0 for HANA). `alpha` is purely fusion-side and works with any backend that implements `_keywordSearch` — SQLite FTS5 works; HANA's CONTAINS-backed keyword search works. Backends without keyword search fall back to vector-only regardless of `alpha`.
+
 ## [0.10.0] — 2026-08-05
 
 ### Added
