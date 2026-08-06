@@ -4,6 +4,62 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.0] — 2026-08-06
+
+### Added
+
+- **`chatWithFallback` — provider-chain orchestrator.** Tries providers in order; fails over to the next on retryable errors. Composes with the 1.49.0 `circuitBreaker`: an open circuit throws `CircuitOpenError`, which the fallback treats as an immediate signal to try the next provider (no wait, no retry).
+
+  ```js
+  const { chatWithFallback } = require('@saptarishi/cds-plugin-llm');
+
+  const { result, providerUsed, modelUsed, attempts } =
+    await chatWithFallback({
+      providers: [
+        { service: openaiSvc,    model: 'gpt-4o-mini' },
+        { service: anthropicSvc, model: 'claude-3-5-sonnet-latest' },
+        { service: bedrockSvc,   model: 'anthropic.claude-3-haiku-20240307-v1:0' },
+      ],
+      request: {
+        messages: [{ role: 'user', content: 'Draft a supplier onboarding email.' }],
+        maxTokens: 200,
+      },
+      onFailover: ({ from, to, error, skipped }) =>
+        cds.log('llm:fallback').warn(`${from} → ${to} (${skipped ? 'circuit-open' : error.message})`),
+    });
+  ```
+
+- **Composes with the full 1.49.0 resilience stack:**
+  - Each provider's own middleware chain (`guardrails / costBudget / retryOnRateLimit / circuitBreaker / usageMetering`) still runs per-attempt.
+  - `chatWithFallback` sees the OUTCOME of that chain — retries have already been exhausted by the time it sees an error, so the fallback happens at the right layer.
+  - Circuit-open short-circuit skips a provider WITHOUT delay.
+
+- **Smart default `isFallback` predicate.** Fails over on:
+  - `CircuitOpenError` (breaker says "provider is down")
+  - `RateLimitGiveUpError` (retry gave up after `maxAttempts`)
+  - HTTP `5xx` status codes
+  - Errors with no status (network / transport failure)
+
+  Does NOT fail over on `4xx` — a bad request will fail on all providers. Same for `429` (that's retry-in-place territory, not fail-over).
+
+- **Per-provider request overrides.** Shared `request` fields (messages, temperature, etc.) are merged with per-provider `request` overrides. Per-provider `model` fields take precedence. Lets you tune per-provider max-tokens, thinking budget, or provider-specific params.
+
+- **Introspection:** returns full `attempts: [{ service, model, ok, skipped, error?, errorName?, status? }]` — makes it trivial to log which providers were tried, which were circuit-skipped, and which returned real errors.
+
+- **`onFailover` callback.** Fires before each transition with `{ from, to, error, skipped, willRetry }`. Errors thrown here are swallowed (doesn't affect the outcome).
+
+- **`AllProvidersFailedError`** — thrown when every provider fails (or a non-retryable error is hit first). Carries the full `attempts` array + `cause` so callers can surface a precise "we tried openai, anthropic, and bedrock — all three failed" error message.
+
+### Type definitions
+
+- `FallbackProviderEntry`, `FallbackAttempt`, `FallbackResult<T>`, `ChatWithFallbackOptions`
+- `chatWithFallback<T>(options): Promise<FallbackResult<T>>`
+- `AllProvidersFailedError`
+
+### Backwards compatibility
+
+Additive — no breaking changes. Existing single-provider calls (`svc.chat({...})`) continue to work unchanged.
+
 ## [1.49.0] — 2026-08-06
 
 ### Added

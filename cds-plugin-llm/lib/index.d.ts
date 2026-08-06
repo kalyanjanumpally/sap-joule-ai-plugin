@@ -1558,6 +1558,69 @@ export class CircuitOpenError extends Error {
   readonly cause?: Error;
 }
 
+// ---- Provider fallback chain (new in 1.50.0) --------------------------
+
+export interface FallbackProviderEntry {
+  /** LLMService (or anything with a `.chat(req)` method + `.name`). */
+  service: { name?: string; chat: (req: any) => Promise<any> };
+  /** Per-provider model override. If omitted, inherits `request.model`. */
+  model?: string;
+  /** Per-provider request-field overrides — merged over shared request. */
+  request?: Record<string, unknown>;
+}
+
+export interface FallbackAttempt {
+  service: string;
+  model:   string | undefined;
+  ok:      boolean;
+  /** true when short-circuited by an open breaker — this was NOT a live provider call. */
+  skipped: boolean;
+  error?:      string;
+  errorName?:  string;
+  status?:     number | null;
+}
+
+export interface FallbackResult<T = any> {
+  result:        T;
+  providerUsed:  string;
+  modelUsed:     string | undefined;
+  attempts:      FallbackAttempt[];
+}
+
+export interface ChatWithFallbackOptions {
+  providers: FallbackProviderEntry[];
+  request?:  Record<string, unknown>;
+  /**
+   * Predicate: given an error from a provider, should we try the next one?
+   * Default: fails over on CircuitOpenError, RateLimitGiveUpError, 5xx status,
+   * and network / unknown-status errors. Does NOT fail over on 4xx.
+   */
+  isFallback?: (err: any) => boolean;
+  /** Called before each fail-over transition. Errors thrown here are swallowed. */
+  onFailover?: (info: {
+    from: string;
+    to:   string | null;
+    error: Error;
+    skipped: boolean;
+    willRetry: boolean;
+  }) => void | Promise<void>;
+}
+
+/**
+ * Try providers in order; fail over on retryable errors (5xx / network /
+ * CircuitOpenError / RateLimitGiveUpError). Composes with the 1.49.0
+ * `circuitBreaker` middleware: an open circuit throws CircuitOpenError,
+ * which is treated as an immediate failover signal (no wait).
+ * @since 1.50.0
+ */
+export function chatWithFallback<T = any>(options: ChatWithFallbackOptions): Promise<FallbackResult<T>>;
+
+export class AllProvidersFailedError extends Error {
+  readonly code: 'ALL_PROVIDERS_FAILED';
+  readonly attempts: FallbackAttempt[];
+  readonly cause?: Error;
+}
+
 // ---- Middleware ordering validator (new in 1.48.0) --------------------
 
 export type MiddlewareOrderingWarningCode =

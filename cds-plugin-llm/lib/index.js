@@ -69,6 +69,9 @@ module.exports = {
   // Circuit breaker middleware — sustained-outage guard (new in 1.49.0)
   circuitBreaker: require('./middleware/circuitBreaker').circuitBreaker,
   CircuitOpenError: require('./middleware/circuitBreaker').CircuitOpenError,
+  // Provider fallback chain — orchestrates multiple providers (new in 1.50.0)
+  chatWithFallback: require('./chatWithFallback').chatWithFallback,
+  AllProvidersFailedError: require('./chatWithFallback').AllProvidersFailedError,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,
