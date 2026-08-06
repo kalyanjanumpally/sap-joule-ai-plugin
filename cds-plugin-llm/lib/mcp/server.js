@@ -155,14 +155,25 @@ class MCPServer {
 
   registerResource(resource) {
     if (!resource?.uri) throw new Error('resource.uri is required');
-    if (typeof resource.read !== 'function') throw new Error(`resource ${resource.uri}: read must be a function`);
+    // Accept either `read` (canonical, per MCP spec) or `handler` (the shape
+    // returned by middleware.asMcpResource() across this plugin). Canonicalize
+    // internally to `read` so the request handlers below stay simple.
+    // @since 1.40.1
+    const read = resource.read ?? resource.handler;
+    if (typeof read !== 'function') {
+      throw new Error(`resource ${resource.uri}: read (or handler) must be a function`);
+    }
     if (this.resources.has(resource.uri)) throw new Error(`resource ${resource.uri}: already registered`);
-    this.resources.set(resource.uri, resource);
+    this.resources.set(resource.uri, { ...resource, read });
   }
 
   registerResourceTemplate(template) {
     if (!template?.uriTemplate) throw new Error('resourceTemplate.uriTemplate is required');
-    if (typeof template.read !== 'function') throw new Error(`resourceTemplate ${template.uriTemplate}: read must be a function`);
+    // Same handler/read shim as registerResource (new in 1.40.1).
+    const read = template.read ?? template.handler;
+    if (typeof read !== 'function') {
+      throw new Error(`resourceTemplate ${template.uriTemplate}: read (or handler) must be a function`);
+    }
     const paramNames = extractTemplateParams(template.uriTemplate);
     if (paramNames.length === 0) {
       throw new Error(`resourceTemplate ${template.uriTemplate}: no {param} placeholders found — register as a plain resource instead`);
@@ -173,7 +184,7 @@ class MCPServer {
       name: template.name ?? template.uriTemplate,
       description: template.description ?? '',
       mimeType: template.mimeType ?? 'text/plain',
-      read: template.read,
+      read,
       _paramNames: paramNames,
       _regex: regex,
     });

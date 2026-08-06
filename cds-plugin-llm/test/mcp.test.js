@@ -356,7 +356,67 @@ test('MCPServer: registerResource rejects duplicates + missing fields', () => {
   s.registerResource({ uri: 'a://b', read: async () => 'x' });
   assert.throws(() => s.registerResource({ uri: 'a://b', read: async () => 'x' }), /already registered/);
   assert.throws(() => s.registerResource({ read: async () => 'x' }), /uri is required/);
-  assert.throws(() => s.registerResource({ uri: 'c://d' }), /read must be a function/);
+  assert.throws(() => s.registerResource({ uri: 'c://d' }), /read \(or handler\) must be a function/);
+});
+
+// ---- handler → read shim (new in 1.40.1) -----------------------------
+
+test('MCPServer: registerResource accepts `handler` alias for `read`', async () => {
+  const s = new MCPServer({ name: 't', version: '1.0.0' });
+  // middleware.asMcpResource() shape — { uri, name, description, mimeType, handler }
+  s.registerResource({
+    uri: 'config://test',
+    name: 'Test',
+    description: 'x',
+    mimeType: 'application/json',
+    handler: () => ({ hello: 'world' }),
+  });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'resources/read',
+    params: { uri: 'config://test' },
+  });
+  const payload = JSON.parse(reply.result.contents[0].text);
+  assert.equal(payload.hello, 'world');
+});
+
+test('MCPServer: registerResourceTemplate accepts `handler` alias for `read`', async () => {
+  const s = new MCPServer({ name: 't', version: '1.0.0' });
+  s.registerResourceTemplate({
+    uriTemplate: 'thing://{name}',
+    name: 'Thing',
+    mimeType: 'application/json',
+    handler: ({ name }) => ({ name, source: 'handler-alias' }),
+  });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'resources/read',
+    params: { uri: 'thing://foo' },
+  });
+  const payload = JSON.parse(reply.result.contents[0].text);
+  assert.equal(payload.name, 'foo');
+  assert.equal(payload.source, 'handler-alias');
+});
+
+test('MCPServer: registerResourceTemplate rejects missing read AND handler', () => {
+  const s = new MCPServer({ name: 't', version: '1.0.0' });
+  assert.throws(
+    () => s.registerResourceTemplate({ uriTemplate: 'thing://{name}' }),
+    /read \(or handler\) must be a function/,
+  );
+});
+
+test('MCPServer: `read` still takes precedence when both `read` and `handler` are provided', async () => {
+  const s = new MCPServer({ name: 't', version: '1.0.0' });
+  s.registerResource({
+    uri: 'both://provided',
+    read:    () => ({ from: 'read' }),
+    handler: () => ({ from: 'handler' }),
+  });
+  const reply = await s.handleMessage({
+    jsonrpc: '2.0', id: 1, method: 'resources/read',
+    params: { uri: 'both://provided' },
+  });
+  const payload = JSON.parse(reply.result.contents[0].text);
+  assert.equal(payload.from, 'read', 'read wins when both are present');
 });
 
 test('MCPServer: prompts/list returns [] when no registry', async () => {
@@ -836,7 +896,7 @@ test('MCPServer: existing tools still work without ctx (backwards compat)', asyn
 test('MCPServer: registerResourceTemplate rejects invalid templates', () => {
   const s = new MCPServer({ name: 'x', version: '1.0.0' });
   assert.throws(() => s.registerResourceTemplate({ read: async () => 'x' }), /uriTemplate is required/);
-  assert.throws(() => s.registerResourceTemplate({ uriTemplate: 'foo://bar' }), /read must be a function/);
+  assert.throws(() => s.registerResourceTemplate({ uriTemplate: 'foo://bar' }), /read \(or handler\) must be a function/);
   assert.throws(() => s.registerResourceTemplate({
     uriTemplate: 'foo://static', read: async () => 'x',
   }), /no \{param\} placeholders/);

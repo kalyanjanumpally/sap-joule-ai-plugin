@@ -4,6 +4,35 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.40.1] — 2026-08-06
+
+### Added
+
+- **`MCPServer.registerResource` and `.registerResourceTemplate` now accept `handler` as an alias for `read`.** Closes the plugin-wide `handler` vs `read` inconsistency noted in earlier CHANGELOGs. Consumers spreading `mw.asMcpResource()` output directly into `server.registerResource(...)` no longer need the `{ ...r, read: r.handler }` shim.
+
+  ```js
+  // Before (still works):
+  const r = cache.asMcpResource();
+  server.registerResource({ ...r, read: r.handler });
+
+  // After (now the recommended shape):
+  server.registerResource(cache.asMcpResource());
+  ```
+
+- **`read` takes precedence when both are provided** — deliberate: `read` is canonical per MCP spec, `handler` is the compatibility shim for the plugin's `asMcpResource()` pattern. Registering with both is atypical (why?) but well-defined.
+
+- **4 new tests** (780 total): `registerResource` accepts a `handler` alias and the value round-trips through `resources/read`; `registerResourceTemplate` accepts a `handler` alias; template rejects when neither `read` nor `handler` is supplied; `read` takes precedence when both are present.
+
+### Changed
+
+- Error messages updated: `resource X: read must be a function` → `resource X: read (or handler) must be a function` (both `read` and `handler` now valid).
+
+### Notes
+
+- **The demo app's `fromMiddleware()` adapter shim is no longer necessary** — a follow-up demo-app release will drop it. Existing code using the shim continues to work; it's just extra ceremony.
+- **Fully backward-compatible.** Existing consumers registering with `read` see no change; the shim only activates when `handler` is present and `read` is not.
+- **Test file assertion updated** to match the new error message (`/read \(or handler\)/`). No other code changes required.
+
 ## [1.40.0] — 2026-08-06
 
 ### Added
