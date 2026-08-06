@@ -120,4 +120,48 @@ service AIService @(path: '/ai') {
     supplierId : String not null,
     scenario   : String not null
   ) returns SupplierRiskAssessment;
+
+  // ---- Voice-note to purchase-order draft (new in 0.9.0) ---------------
+  // Takes a spoken voice memo (base64), asks an audio-capable model to
+  // extract a structured purchase-order draft. Uses the schemas.PurchaseOrder
+  // shape shipped in cds-plugin-llm 1.34.0 + the audioFromBase64() helper
+  // shipped in 1.36.0. Requires an audio-capable provider — Gemini works
+  // out of the box; llm-groq / llm-anthropic will 400.
+
+  type PurchaseOrderDraft {
+    poNumber              : String;      // may be empty if not spoken
+    supplier              : String;
+    orderDate             : String;      // ISO date, if spoken
+    requestedDeliveryDate : String;
+    currency              : String;
+    totalAmount           : Decimal(15, 2);
+    lineItems             : many {
+      description : String;
+      quantity    : Decimal(15, 3);
+      unitPrice   : Decimal(15, 4);
+      lineTotal   : Decimal(15, 4);
+    };
+    incoterm              : String;
+    approver              : String;
+    notes                 : String;
+    tokensUsed            : Integer;
+    model                 : String;
+  }
+
+  /**
+   * Extract a structured PurchaseOrderDraft from a spoken voice memo.
+   *
+   *   `audioBase64` — the raw voice recording, base64-encoded (no data URI prefix).
+   *   `format`     — 'wav' | 'mp3' | 'm4a' | 'ogg' | 'flac' | 'aac' | 'opus' | 'webm'.
+   *                  Defaults to 'mp3'. Maps to the audio/* MIME type.
+   *   `model`      — override the configured default. Recommended: 'gemini-2.5-flash'
+   *                  (Google) or 'gpt-4o-audio-preview' (OpenAI-compat).
+   *
+   * Wraps the audio via audioFromBase64 + a schemas.PurchaseOrder format param.
+   */
+  action transcribeVoiceNoteToPO(
+    audioBase64 : LargeString not null,
+    format      : String,
+    model       : String
+  ) returns PurchaseOrderDraft;
 }

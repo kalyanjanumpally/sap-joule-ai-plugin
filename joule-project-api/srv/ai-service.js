@@ -2,6 +2,7 @@ const cds = require('@sap/cds');
 const {
   imageFromBase64, imageFromUrl,
   pdfFromBase64, pdfFromUrl,
+  audioFromBase64,
   usageMeteringToCap,
   responseCache,
   Agent, runAgents,
@@ -624,6 +625,80 @@ module.exports = class AIService extends cds.ApplicationService {
         tokensUsed: (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0),
         model,
       };
+    });
+
+    // ---- transcribeVoiceNoteToPO — voice → PurchaseOrderDraft ---------
+    //
+    // Wraps the raw base64 recording in an audio content block via the
+    // audioFromBase64 helper (new in cds-plugin-llm 1.36.0), then asks an
+    // audio-capable model to extract the schemas.PurchaseOrder shape
+    // (new in 1.34.0). One action, both primitives.
+    //
+    // Provider matrix:
+    //   Gemini              works natively (inline audio)
+    //   OpenAI-compat       works with gpt-4o-audio-preview (input_audio block)
+    //   Anthropic / Ollama  throw the clear diagnostic shipped in 1.36.0
+    //   (Groq / DeepSeek)   400 upstream — models don't speak audio
+    this.on('transcribeVoiceNoteToPO', async (req) => {
+      const { audioBase64, format, model } = req.data;
+      const fmt = (format || 'mp3').toLowerCase();
+      const MIME = {
+        wav:  'audio/wav',  mp3: 'audio/mpeg', m4a: 'audio/mp4',
+        ogg:  'audio/ogg',  flac: 'audio/flac', aac: 'audio/aac',
+        opus: 'audio/opus', webm: 'audio/webm',
+      };
+      const mediaType = MIME[fmt];
+      if (!mediaType) {
+        req.error(400, `Unsupported audio format '${format}'. Use: ${Object.keys(MIME).join(', ')}`);
+        return;
+      }
+
+      const audio = audioFromBase64(audioBase64, mediaType);
+
+      try {
+        const { data, usage, model: usedModel, text } = await llm.chat({
+          model: model || undefined,   // fall through to configured default
+          system: 'You extract structured purchase orders from spoken voice memos. Field values must come from what was actually said; do not invent SKUs, prices, or delivery dates. Currency codes must be ISO 4217. Dates in ISO 8601 (YYYY-MM-DD). If a field is missing from the recording, omit it.',
+          messages: [{
+            role: 'user',
+            content: [
+              audio,
+              { type: 'text', text: 'Extract the purchase order into the requested JSON shape.' },
+            ],
+          }],
+          cache: true,       // identical voice memos happen more than you'd think
+          maxTokens: 1200,
+          format: schemas.PurchaseOrder,
+        });
+
+        if (!data) {
+          req.error(500, `Voice extract failed — LLM did not return parseable JSON: ${text?.slice(0, 300)}`);
+          return;
+        }
+
+        return {
+          poNumber:              data.poNumber ?? '',
+          supplier:              data.supplier,
+          orderDate:             data.orderDate ?? '',
+          requestedDeliveryDate: data.requestedDeliveryDate ?? '',
+          currency:              data.currency,
+          totalAmount:           data.totalAmount,
+          lineItems:             data.lineItems ?? [],
+          incoterm:              data.incoterm ?? '',
+          approver:              data.approver ?? '',
+          notes:                 data.notes ?? '',
+          tokensUsed:            (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0),
+          model:                 usedModel,
+        };
+      } catch (e) {
+        // Provider-clear diagnostics from cds-plugin-llm 1.36.0 for audio-
+        // incapable providers — surface them 1:1 so the caller can act.
+        if (/Audio.*not supported|Claude Voice|whisper|Nova Sonic/i.test(e.message)) {
+          req.error(400, e.message);
+          return;
+        }
+        throw e;
+      }
     });
 
     return super.init();
