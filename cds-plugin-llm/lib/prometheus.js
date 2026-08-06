@@ -177,6 +177,19 @@ function emitRetry(retry) {
   return out;
 }
 
+function emitDeadline(dl) {
+  if (!dl?.stats) return [];
+  const s = dl.stats;
+  const out = [];
+  out.push(header('llm_deadline_requests_total', 'Total requests observed by deadline middleware', 'counter'));
+  out.push(line('llm_deadline_requests_total', s.requests ?? 0));
+  out.push(header('llm_deadline_expired_total', 'Requests aborted because they exceeded the deadline budget', 'counter'));
+  out.push(line('llm_deadline_expired_total', s.expired ?? 0));
+  out.push(header('llm_deadline_active_count', 'Currently in-flight requests still within their deadline window', 'gauge'));
+  out.push(line('llm_deadline_active_count', s.activeCount ?? 0));
+  return out;
+}
+
 function emitBulkhead(bh) {
   if (!bh?.stats) return [];
   const s = bh.stats;
@@ -360,6 +373,7 @@ function isoToSecondsFromNow(iso) {
  * @param {object} [mw.retry]           retryOnRateLimit middleware (new in 1.47.1)
  * @param {object} [mw.breaker]         circuitBreaker middleware (new in 1.49.0)
  * @param {object} [mw.bh]              bulkhead middleware (new in 1.51.0)
+ * @param {object} [mw.deadline]        deadline middleware (new in 1.52.0)
  * @param {object} [options]
  * @param {boolean} [options.excludeBreakdowns=false]  Skip per-tenant/model/provider breakdowns
  *                                                     (cardinality control for large fleets).
@@ -375,6 +389,7 @@ async function promMetrics(mw = {}, options = {}) {
   lines.push(...emitRetry(mw.retry));
   lines.push(...emitCircuitBreaker(mw.breaker));
   lines.push(...emitBulkhead(mw.bh));
+  lines.push(...emitDeadline(mw.deadline));
   let meteringLines = emitMetering(mw.metering);
   if (excludeBreakdowns) {
     meteringLines = meteringLines.filter(

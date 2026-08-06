@@ -27,6 +27,7 @@ test('validateMiddlewareOrder: empty chain → still returns ok=true (just missi
 
 test('validateMiddlewareOrder: canonical ai-service.js order produces zero warnings/errors', () => {
   const r = validateMiddlewareOrder([
+    { kind: 'deadline' },
     { kind: 'promptInjectionGuard' },
     { kind: 'guardrails' },
     { kind: 'costBudget' },
@@ -39,13 +40,38 @@ test('validateMiddlewareOrder: canonical ai-service.js order produces zero warni
   assert.equal(r.ok, true);
   const nonInfo = r.warnings.filter((w) => w.severity !== 'info');
   assert.deepEqual(nonInfo, [], 'canonical chain should not fire any warning-severity findings');
-  // CACHE_OUTER_OF_BUDGET is INFO — canonical chain has responseCache INNER of budget,
-  // so it should NOT fire here.
   assert.equal(r.warnings.find((w) => w.code === 'CACHE_OUTER_OF_BUDGET'), undefined);
-  // NO_CIRCUIT_BREAKER should also NOT fire — breaker is present.
   assert.equal(r.warnings.find((w) => w.code === 'NO_CIRCUIT_BREAKER'), undefined);
-  // NO_BULKHEAD should also NOT fire — bulkhead is present.
   assert.equal(r.warnings.find((w) => w.code === 'NO_BULKHEAD'), undefined);
+  assert.equal(r.warnings.find((w) => w.code === 'NO_DEADLINE'), undefined);
+});
+
+// ---- Deadline rules ---------------------------------------------------
+
+test('validateMiddlewareOrder: DEADLINE_INNER_OF_RETRY fires when deadline follows retry', () => {
+  const r = validateMiddlewareOrder([
+    { kind: 'retryOnRateLimit' },
+    { kind: 'deadline' },
+  ]);
+  const w = r.warnings.find((x) => x.code === 'DEADLINE_INNER_OF_RETRY');
+  assert.ok(w);
+  assert.equal(w.severity, 'warning');
+  assert.match(w.message, /each retry gets a fresh deadline/);
+});
+
+test('validateMiddlewareOrder: deadline OUTER of retry does NOT fire DEADLINE_INNER_OF_RETRY', () => {
+  const r = validateMiddlewareOrder([
+    { kind: 'deadline' },
+    { kind: 'retryOnRateLimit' },
+  ]);
+  assert.equal(r.warnings.find((x) => x.code === 'DEADLINE_INNER_OF_RETRY'), undefined);
+});
+
+test('validateMiddlewareOrder: NO_DEADLINE info fires when no deadline present', () => {
+  const r = validateMiddlewareOrder([{ kind: 'retryOnRateLimit' }]);
+  const w = r.warnings.find((x) => x.code === 'NO_DEADLINE');
+  assert.ok(w);
+  assert.equal(w.severity, 'info');
 });
 
 // ---- Bulkhead rules ---------------------------------------------------
@@ -224,6 +250,7 @@ test('validateMiddlewareOrder: KNOWN_KINDS covers exactly the shipped middleware
     'retryOnRateLimit',
     'circuitBreaker',
     'bulkhead',
+    'deadline',
     'usageMetering',
     'usageMeteringToCap',
     'responseCache',

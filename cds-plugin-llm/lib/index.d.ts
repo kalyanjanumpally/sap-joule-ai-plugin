@@ -1627,6 +1627,48 @@ export class BulkheadTimeoutError extends Error {
   readonly queueTimeoutMs: number;
 }
 
+// ---- Deadline middleware (new in 1.52.0) ------------------------------
+
+export interface DeadlineOptions {
+  /** Total request-time budget in ms. Default 30_000. */
+  timeoutMs?: number;
+  /** Optional per-method overrides, e.g. { chat: 30_000, embed: 5_000, stream: 60_000 }. */
+  perMethod?: Record<string, number>;
+  onExpired?: (info: { method: string; timeoutMs: number; elapsedMs: number }) => void | Promise<void>;
+}
+
+export interface DeadlineStats {
+  requests:    number;
+  expired:     number;
+  activeCount: number;
+}
+
+export interface DeadlineMiddleware extends Middleware {
+  readonly stats: DeadlineStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://deadline';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => DeadlineStats & { timeoutMs: number; perMethod: Record<string, number> | null };
+  };
+}
+
+/**
+ * Deadline middleware — hard cap on total request time. Aborts the ctx.signal
+ * on expiration. Compose as the OUTERMOST middleware so retries, queue-waits,
+ * and provider calls all share ONE budget.
+ * @since 1.52.0
+ */
+export function deadline(options?: DeadlineOptions): DeadlineMiddleware;
+
+export class DeadlineExceededError extends Error {
+  readonly code: 'DEADLINE_EXCEEDED';
+  readonly timeoutMs: number;
+  readonly method: string;
+}
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {
@@ -1699,11 +1741,13 @@ export type MiddlewareOrderingWarningCode =
   | 'CACHE_OUTER_OF_BUDGET'
   | 'BREAKER_INNER_OF_RETRY'
   | 'BULKHEAD_OUTER_OF_BREAKER'
+  | 'DEADLINE_INNER_OF_RETRY'
   | 'NO_RETRY'
   | 'NO_METERING'
   | 'NO_SECURITY_LAYER'
   | 'NO_CIRCUIT_BREAKER'
   | 'NO_BULKHEAD'
+  | 'NO_DEADLINE'
   | 'DUPLICATE_KIND'
   | 'UNKNOWN_KIND';
 

@@ -380,3 +380,40 @@ test('promMetrics: bulkhead-metrics HELP/TYPE parity in a full bundle', async ()
   assert.equal(helpCount, typeCount, 'HELP/TYPE parity holds when bulkhead mw included');
   assert.match(text, /llm_bulkhead_requests_total 1/);
 });
+
+// ---- Deadline metrics (new in 1.52.0) ----------------------------
+
+test('promMetrics: no deadline series when no deadline middleware bound', async () => {
+  const text = await promMetrics({});
+  assert.doesNotMatch(text, /llm_deadline_/);
+});
+
+test('promMetrics: emits llm_deadline_* counters when deadline mw bound', async () => {
+  const { deadline } = require('../lib/middleware/deadline');
+  const dl = deadline({ timeoutMs: 30_000 });
+  dl.stats.requests = 42;
+  dl.stats.expired  = 3;
+
+  const text = await promMetrics({ deadline: dl });
+  assert.match(text, /^# TYPE llm_deadline_requests_total counter/m);
+  assert.match(text, /llm_deadline_requests_total 42/);
+  assert.match(text, /llm_deadline_expired_total 3/);
+  assert.match(text, /^# TYPE llm_deadline_active_count gauge/m);
+});
+
+test('promMetrics: deadline-metrics HELP/TYPE parity in a full bundle', async () => {
+  const { deadline } = require('../lib/middleware/deadline');
+  const dl = deadline({ timeoutMs: 30_000 });
+  const svc = makeSvc(); await svc.init();
+  svc.use(dl);
+  await svc.chat({ messages: [{ role: 'user', content: 'x' }] });
+  const text = await promMetrics({ deadline: dl });
+  const lines = text.split('\n').filter(Boolean);
+  let helpCount = 0, typeCount = 0;
+  for (const l of lines) {
+    if (l.startsWith('# HELP ')) helpCount++;
+    else if (l.startsWith('# TYPE ')) typeCount++;
+  }
+  assert.equal(helpCount, typeCount, 'HELP/TYPE parity holds when deadline mw included');
+  assert.match(text, /llm_deadline_requests_total 1/);
+});

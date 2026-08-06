@@ -4,6 +4,58 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.52.0] — 2026-08-06
+
+### Added
+
+- **`deadline` middleware — hard cap on total request time.** Applies to the entire request pipeline: retries, bulkhead queue waits, provider call. Uses an `AbortController`; provider implementations that respect `ctx.signal` (or forward it into `fetch`) will cancel in-flight HTTP calls when the deadline expires.
+
+  ```js
+  const { deadline } = require('@saptarishi/cds-plugin-llm');
+
+  const dl = deadline({
+    timeoutMs: 30_000,
+    perMethod: { chat: 30_000, embed: 5_000, stream: 60_000 },
+    onExpired: (info) => cds.log('llm:deadline').warn('expired', info),
+  });
+  llm.use(dl);
+  ```
+
+- **Compose as OUTERMOST middleware.** Recommended chain:
+
+  ```
+  deadline → promptInjectionGuard → guardrails → costBudget →
+  circuitBreaker → bulkhead → retryOnRateLimit → provider
+  ```
+
+  Rationale: retries, queue-waits, and provider calls all share ONE deadline budget. If deadline were INNER of retry, each retry would get a fresh deadline — defeating the "total time budget" contract.
+
+- **`AbortSignal` composition.** If the caller already passed `ctx.signal`, deadline links it: the caller's abort propagates to inner middleware AND vice-versa. Already-aborted signals propagate immediately without waiting for `next()` to run.
+
+- **Per-method budgets.** `perMethod: { chat, embed, stream, batch }` lets you set tight timeouts for embeddings (~5s) while allowing longer chat completions (~30s) and even longer streams (~60s).
+
+- **Introspection:**
+  - `dl.stats` → `{ requests, expired, activeCount }`
+  - `dl.reset()` — clears requests + expired (activeCount unchanged, reflects real in-flight state)
+  - `dl.asMcpResource()` → `config://deadline`
+
+- **Prometheus:** `emitDeadline` wired into `promMetrics` — counters `llm_deadline_requests_total`, `llm_deadline_expired_total`; gauge `llm_deadline_active_count`.
+
+- **`validateMiddlewareOrder` extensions:**
+  - New rule `DEADLINE_INNER_OF_RETRY` (warning) — deadline INNER of retry means each retry gets a fresh deadline.
+  - New rule `NO_DEADLINE` (info) — no deadline means a slow provider can burn indefinite time.
+  - `deadline` added to `KNOWN_KINDS`.
+
+### Type definitions
+
+- `DeadlineOptions`, `DeadlineStats`, `DeadlineMiddleware`
+- `DeadlineExceededError`
+- `MiddlewareOrderingWarningCode` extended with `DEADLINE_INNER_OF_RETRY` and `NO_DEADLINE`
+
+### Backwards compatibility
+
+Additive — no breaking changes. Existing chains without deadline continue to work; the validator's new `NO_DEADLINE` finding is info-severity and can be suppressed via `filterWarnings(result, ['NO_DEADLINE'])`.
+
 ## [1.51.0] — 2026-08-06
 
 ### Added

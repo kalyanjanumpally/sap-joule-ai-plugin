@@ -38,6 +38,7 @@ const KNOWN_KINDS = new Set([
   'retryOnRateLimit',
   'circuitBreaker',
   'bulkhead',
+  'deadline',
   'usageMetering',
   'usageMeteringToCap',
   'responseCache',
@@ -200,6 +201,30 @@ function validateMiddlewareOrder(chain) {
       message:  'No bulkhead in the chain — one runaway tenant / agent loop can starve provider concurrency for everyone.',
       fixit:    'Add `llm.use(bulkhead({ maxConcurrent: 10, maxQueued: 50, queueTimeoutMs: 5000 }))` for per-provider concurrency isolation.',
       involved: ['bulkhead'],
+    });
+  }
+
+  // Rule: deadline INNER of retry → each retry gets a fresh deadline
+  // budget instead of sharing one total-request budget. Warning-severity
+  // because it's usually a mistake — the "total time" contract breaks.
+  const deadlineIdx = idxOf('deadline');
+  if (deadlineIdx !== -1 && retryIdx !== -1 && deadlineIdx > retryIdx) {
+    warnings.push({
+      code:     'DEADLINE_INNER_OF_RETRY',
+      severity: 'warning',
+      message:  'deadline is INNER of retryOnRateLimit — each retry gets a fresh deadline budget, defeating the "total time budget" contract.',
+      fixit:    'Move deadline OUTER of retryOnRateLimit so retries share a single total time budget.',
+      involved: ['deadline', 'retryOnRateLimit'],
+    });
+  }
+
+  if (deadlineIdx === -1) {
+    warnings.push({
+      code:     'NO_DEADLINE',
+      severity: 'info',
+      message:  'No deadline in the chain — a slow provider can burn indefinite time; requests have no hard time cap.',
+      fixit:    'Add `llm.use(deadline({ timeoutMs: 30_000 }))` as the OUTERMOST middleware for a total request-time budget.',
+      involved: ['deadline'],
     });
   }
   if (idxOfAny('usageMetering', 'usageMeteringToCap') === -1) {

@@ -76,6 +76,9 @@ module.exports = {
   bulkhead: require('./middleware/bulkhead').bulkhead,
   BulkheadFullError: require('./middleware/bulkhead').BulkheadFullError,
   BulkheadTimeoutError: require('./middleware/bulkhead').BulkheadTimeoutError,
+  // Deadline / timeout middleware — hard cap on total request time (new in 1.52.0)
+  deadline: require('./middleware/deadline').deadline,
+  DeadlineExceededError: require('./middleware/deadline').DeadlineExceededError,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,
