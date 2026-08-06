@@ -11,8 +11,7 @@ const {
   promptInjectionGuard, PromptInjectionError,
   schemas,
   prometheusHandler,
-  streamTools,
-  DEFAULT_COORDINATOR_SYSTEM,
+  streamAgents,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -239,14 +238,11 @@ function getMetering() { return _metering; }
  *     data: {"type":"done","text":"...","usage":{...},"model":"..."}\n\n
  */
 /**
- * SSE handler for the multi-agent analyzeScenario flow. Wraps the same
- * 3-specialist setup as the OData action, but runs it through streamTools
- * so tool-call events flow to the browser as they happen.
- *
- * Uses the same specialist→tool conversion that runAgents() does internally:
- * each specialist becomes an `invoke_<name>` tool with a single `question`
- * arg. The coordinator (an LLMService instance backed by our alias) drives
- * the loop via streamTools; every event is written to the SSE stream.
+ * SSE handler for the multi-agent analyzeScenario flow. Powered by
+ * streamAgents() from cds-plugin-llm 1.41.0 — the invoke_<name> tool
+ * conversion + trace repackaging happens plugin-side, so events emitted to
+ * the SSE stream already carry clean agent slugs like
+ * `agent_call_start { agent: 'contract-lookup', question: '...' }`.
  */
 function makeAnalyzeScenarioStreamHandler(llm) {
   return async (req, res) => {
@@ -265,31 +261,10 @@ function makeAnalyzeScenarioStreamHandler(llm) {
     const write = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
     try {
-      const specialists = buildScenarioSpecialists(llm);
-      const tools = specialists.map((agent) => ({
-        name: `invoke_${agent.name}`,
-        description: agent.description,
-        input_schema: {
-          type: 'object',
-          properties: {
-            question: {
-              type: 'string',
-              description: `The question or task for the ${agent.name} specialist. Be specific — the specialist can't see the original user task.`,
-            },
-          },
-          required: ['question'],
-        },
-        run: async ({ question }) => {
-          const result = await agent.run({ input: question });
-          return typeof result === 'string' ? result : (result?.text ?? '');
-        },
-      }));
-
-      for await (const evt of streamTools({
-        llm,
-        system: DEFAULT_COORDINATOR_SYSTEM,
-        messages: [{ role: 'user', content: scenario }],
-        tools,
+      for await (const evt of streamAgents({
+        coordinator: llm,
+        agents: buildScenarioSpecialists(llm),
+        input: scenario,
         maxSteps: 8,
       })) {
         // Client disconnect: any write throws → catch aborts the loop
@@ -451,20 +426,20 @@ module.exports = class AIService extends cds.ApplicationService {
         makeStreamHandler(llm),
       );
 
-      // Multi-agent analyzeScenario with LIVE progress over SSE (new in 0.10.0).
+      // Multi-agent analyzeScenario with LIVE progress over SSE.
       // Runs the same 3-specialist supervisor flow as the OData
-      // POST /ai/analyzeScenario action, but yields streamTools() events one
-      // at a time so a chat UI can render tool-call badges while the
-      // coordinator + specialists work. Powered by cds-plugin-llm 1.39.0.
+      // POST /ai/analyzeScenario action, but yields streamAgents() events
+      // one at a time so a chat UI can render agent badges. Powered by
+      // cds-plugin-llm 1.41.0 (invoke_<name> conversion happens plugin-side).
       //
       //   POST /stream/analyzeScenario
       //   body: { scenario }
       //   response: text/event-stream — one JSON event per line
       //     data: {"type":"turn_start","step":1}
       //     data: {"type":"text","step":1,"text":"I'll check the contracts first..."}
-      //     data: {"type":"tool_call_start","step":1,"name":"invoke_contract-lookup","input":{...}}
-      //     data: {"type":"tool_call_result","step":1,"name":"invoke_contract-lookup","result":"...","isError":false}
-      //     data: {"type":"done","step":3,"text":"...","toolCalls":[...],"usage":{...}}
+      //     data: {"type":"agent_call_start","step":1,"agent":"contract-lookup","question":"..."}
+      //     data: {"type":"agent_call_result","step":1,"agent":"contract-lookup","answer":"...","isError":false}
+      //     data: {"type":"done","step":3,"text":"...","trace":[...],"usage":{...}}
       cds.app.post(
         '/stream/analyzeScenario',
         express.json({ limit: '1mb' }),
