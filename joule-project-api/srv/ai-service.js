@@ -533,6 +533,9 @@ module.exports = class AIService extends cds.ApplicationService {
         guardrails:     getGuardrails(),
         injectionGuard: getInjectionGuard(),
         metering:       getMetering(),
+        // Retry counters (new in cds-plugin-llm 1.47.1) — throttling pressure
+        // becomes visible in Grafana without hitting /retry-stats separately.
+        retry:          getRetry(),
       }));
       // Budget dashboard — current-window spend + configured limits.
       // Complements the OData `FinanceService.getBudgetStatus()` action
