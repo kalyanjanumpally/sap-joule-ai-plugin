@@ -4,6 +4,47 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.32.0] — 2026-08-06
+
+### Added
+
+- **Semantic response cache — `responseCache({ semantic: { embedder, threshold, maxScan, minTextLength } })`.** Cache hits are no longer limited to bit-exact prompt matches. On an exact miss, the middleware embeds the user text and does a linear cosine scan over the most recent `maxScan` cache entries; anything crossing `threshold` returns the cached response. Reduces LLM spend on the common case of "customers asking the same question five different ways."
+
+  ```js
+  const llm = await cds.connect.to('llm');
+  const cache = responseCache({
+    ttl: 3_600_000,
+    semantic: {
+      embedder:      async (text) => (await llm.embed({ input: [text] })).embeddings[0],
+      threshold:     0.92,                // cosine — higher = stricter (default 0.92)
+      maxScan:       200,                 // how many recent entries to compare
+      minTextLength: 20,                  // skip super-short queries
+    },
+  });
+  llm.use(cache);
+  ```
+
+- **On a semantic hit, the returned response is marked with `{ cached: true, semantic: true, similarity: 0.94, cacheKey: <request-key>, semanticMatchKey: <matched-key> }`** — downstream middleware (`usageMetering`) can distinguish semantic hits from exact hits and record them appropriately (still $0 cost — the LLM was not called).
+
+- **`.stats` extended:** `semanticHits`, `semanticMisses` (only counted when there were candidates to compare against — cold-index attempts are noise, not signal), and `embedderErrors`. `hitRate()` now includes semantic hits in the numerator. `asMcpResource().handler()` surfaces all of them plus `semanticIndexSize`.
+
+- **`.semanticIndex`** — the in-process embedding index (`cacheKey → { embedding, semanticText, ts }`) is exposed for tests / manual eviction / debugging. Bounded by `maxScan` via LRU insertion order — evicts oldest when full.
+
+- **`cosine(a, b)`** helper exported for tests and custom scoring.
+
+- **20 new tests** (676 total, +20): cosine correctness (identical / orthogonal / opposite / zero-safe), validation (bad embedder / threshold / maxScan), semantic hit + miss on near-identical vs unrelated phrasing, strict-threshold miss, exact-fast-path when semantic enabled (embedder does NOT run on exact hits), tool-request skip, minTextLength skip, `cache: false` opt-out, embedder-failure non-fatal, hitRate arithmetic, `asMcpResource` snapshot, `maxScan` eviction, `clear()` drops both stores, and stale-index-pointer cleanup.
+
+- **TS defs:** `SemanticCacheOptions`, extended `ResponseCacheStats`, `ResponseCacheMiddleware.semanticIndex`, `cosine`.
+
+### Notes
+
+- **Backward compatible** — `semantic` is opt-in; without it, `responseCache` behaves exactly as it did in 1.26.0+. Existing exact-match caching is unchanged.
+- **Eligibility:** requests with `tools: [...]` skip semantic lookup automatically (tool-call routing must be deterministic against the exact input, not a fuzzy neighbor). Structured-output requests (`format: {...}`) DO participate — the caller usually wants shape stability, and the format is part of the cached response.
+- **The semantic index is IN-PROCESS regardless of `store`** — Redis + HANA backends still work for exact matches, but each replica warms its own semantic index. That's a deliberate trade-off: cross-instance semantic hits are approximate anyway, and centralized vector search would add a network round-trip on every miss. Roadmap: adapter for HANA vector store as a shared `semantic.store`.
+- **Cost model:** every semantic-eligible miss pays for one embedding call. On a 1024-dim provider embedding at ~$0.00013/1K tokens, that's ~$0.0000002 per short prompt — order-of-magnitude cheaper than the completion it might save. Set `minTextLength` higher if you have very high volume of tiny prompts.
+- **Threshold tuning:** start at 0.92 (strict). Drop to 0.85 for chatty consumer surfaces; go higher (0.95+) for accuracy-critical flows (compliance, legal). `semanticMisses` counts only compare-and-fail attempts — the metric is directly useful for threshold tuning without cold-start noise.
+- **Recommended chain unchanged:** `promptInjectionGuard → guardrails → costBudget → usageMetering → responseCache → provider`. Semantic hits still contribute $0 rows to `LlmSpend` and increment `summary.totalCostSaved`.
+
 ## [1.31.0] — 2026-08-05
 
 ### Added

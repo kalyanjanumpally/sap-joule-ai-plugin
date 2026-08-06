@@ -1000,6 +1000,17 @@ export interface ResponseCacheStore {
   has?(key: string): boolean | Promise<boolean>;
 }
 
+export interface SemanticCacheOptions {
+  /** Async function turning text into an embedding vector. Called on cache misses. */
+  embedder: (text: string) => Promise<number[]> | number[];
+  /** Cosine similarity threshold in (0, 1]. Default 0.92. Higher = stricter. */
+  threshold?: number;
+  /** Max # of recent entries to compare against. Default 200. */
+  maxScan?: number;
+  /** Skip semantic lookup for text shorter than this. Default 20 chars. */
+  minTextLength?: number;
+}
+
 export interface ResponseCacheOptions {
   /** Pluggable backend. Default: in-memory LRU with `maxEntries` cap. */
   store?: ResponseCacheStore;
@@ -1013,20 +1024,36 @@ export interface ResponseCacheOptions {
   onHit?: (ctx: MiddlewareContext, cached: unknown) => void;
   /** Fired on cache misses (before the LLM call). */
   onMiss?: (ctx: MiddlewareContext) => void;
+  /**
+   * Enable semantic (embedding-based) cache lookup. On an exact miss, the
+   * middleware embeds the user text and does a cosine scan over the recent
+   * cache entries. Requests with `tools` are excluded automatically.
+   * @since 1.32.0
+   */
+  semantic?: SemanticCacheOptions;
 }
 
 export interface ResponseCacheStats {
   hits: number;
   misses: number;
   skips: number;
+  semanticHits: number;
+  semanticMisses: number;
+  embedderErrors: number;
 }
 
 export interface ResponseCacheMiddleware extends Middleware {
   stats: ResponseCacheStats;
   store: ResponseCacheStore;
+  /**
+   * In-process semantic index (cacheKey → { embedding, semanticText, ts }).
+   * Only populated when the `semantic` option is enabled. @since 1.32.0
+   */
+  semanticIndex: Map<string, { embedding: number[]; semanticText: string; ts: number }>;
   clear(): Promise<void>;
   delete(key: string): Promise<void>;
   size(): number | null;
+  /** Combined exact+semantic hit rate over total requests that reached the cache. */
   hitRate(): number;
   /** MCP resource dumping the cache stats — mirrors `usageMetering.asMcpResource()`. */
   asMcpResource(): {
@@ -1034,9 +1061,22 @@ export interface ResponseCacheMiddleware extends Middleware {
     name: string;
     description: string;
     mimeType: 'application/json';
-    handler: () => { hits: number; misses: number; skips: number; hitRate: number; size: number | null };
+    handler: () => {
+      hits: number;
+      misses: number;
+      skips: number;
+      semanticHits: number;
+      semanticMisses: number;
+      embedderErrors: number;
+      hitRate: number;
+      size: number | null;
+      semanticIndexSize: number;
+    };
   };
 }
+
+/** Cosine similarity — exported for tests / custom scoring. @since 1.32.0 */
+export function cosine(a: number[], b: number[]): number;
 
 /**
  * Memoizes identical `chat()` calls by key = SHA-256(model, system, messages,

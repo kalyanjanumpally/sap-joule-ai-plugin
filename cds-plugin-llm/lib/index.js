@@ -43,8 +43,10 @@ module.exports = {
   usageMeteringToCap: require('./middleware/usageMeteringToCap').usageMeteringToCap,
   DEFAULT_LLM_USAGE_ENTITY: require('./middleware/usageMeteringToCap').DEFAULT_ENTITY,
   // Response cache middleware — memoizes identical chat() calls (new in 1.26.0)
+  // Semantic (embedding-based) lookup added in 1.32.0
   responseCache: require('./middleware/responseCache').responseCache,
   InMemoryLRU: require('./middleware/responseCache').InMemoryLRU,
+  cosine: require('./middleware/responseCache').cosine,
   // Guardrails — input/output filters for PII, injection, blocklists (new in 1.28.0)
   guardrails: require('./middleware/guardrails').guardrails,
   GuardrailBlockedError: require('./middleware/guardrails').GuardrailBlockedError,
