@@ -66,6 +66,9 @@ module.exports = {
   // Rate-limit-driven retry middleware (new in 1.47.0)
   retryOnRateLimit: require('./middleware/retryOnRateLimit').retryOnRateLimit,
   RateLimitGiveUpError: require('./middleware/retryOnRateLimit').RateLimitGiveUpError,
+  // Static middleware-ordering validator (new in 1.48.0)
+  validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
+  filterWarnings: require('./validateMiddlewareOrder').filterWarnings,
   // Cost budgets + alerts — per-tenant/model/total ceilings (new in 1.29.0)
   costBudget: require('./middleware/costBudget').costBudget,
   BudgetExceededError: require('./middleware/costBudget').BudgetExceededError,

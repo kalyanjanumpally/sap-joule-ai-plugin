@@ -4,6 +4,52 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.48.0] — 2026-08-06
+
+### Added
+
+- **`validateMiddlewareOrder(chain)` — static ordering validator.** Accepts a canonical chain description (matches `config://chain` MCP payload) and flags mis-orderings that break composition invariants. Returns `{ ok, warnings: [{ code, severity, message, fixit, involved }] }` with `error / warning / info` severities.
+
+  ```js
+  const { validateMiddlewareOrder } = require('@saptarishi/cds-plugin-llm');
+
+  const result = validateMiddlewareOrder([
+    { kind: 'promptInjectionGuard' },
+    { kind: 'guardrails' },
+    { kind: 'costBudget' },
+    { kind: 'retryOnRateLimit' },
+    { kind: 'usageMeteringToCap' },
+    { kind: 'responseCache' },
+  ]);
+  // → { ok: true, warnings: [] } for the canonical demo-app pattern
+  ```
+
+- **Rules shipped:**
+  - **`BUDGET_INNER_OF_RETRY`** (warning) — `costBudget` INNER of `retryOnRateLimit` means retries hit the provider without a re-check against the budget → budget-exhausted flow can burn through retries.
+  - **`INJECTION_INNER_OF_GUARDRAILS`** (warning) — `promptInjectionGuard` INNER of `guardrails` means PII / NFKC normalization can erase homoglyph + zero-width signals before the injection guard sees them.
+  - **`CACHE_OUTER_OF_BUDGET`** (info) — `responseCache` OUTER of `costBudget` means cache hits skip the pre-flight budget check. Often desired.
+  - **`CACHE_OUTER_OF_METERING`** (info) — `responseCache` OUTER of `usageMetering` means cache hits skip the metering counter entirely. Sometimes desired (zero metering overhead on hits), sometimes not (no $0 rows in LlmSpend, no `totalCostSaved`).
+  - **`NO_RETRY`** (info) — no `retryOnRateLimit` → throttled requests fail without recovery.
+  - **`NO_METERING`** (info) — no `usageMetering / usageMeteringToCap` → cost accounting missing.
+  - **`NO_SECURITY_LAYER`** (info) — neither `guardrails` nor `promptInjectionGuard` wired.
+  - **`DUPLICATE_KIND`** (warning) — same middleware appears twice with different position indices.
+  - **`UNKNOWN_KIND`** (info) — third-party middleware; validator has no ordering rules for it.
+
+- **`filterWarnings(result, ignoredCodes)`** — convenience for suppressing specific codes in tests or intentional exceptions.
+
+- **`KNOWN_KINDS` set exported** — covers exactly the 7 middleware kinds the plugin ships (usageMeteringToCap counted as a variant of usageMetering for ordering purposes).
+
+- **19 new tests** (883 total): input validation, canonical chain produces zero warnings, each of the 9 rules fires correctly (positive + negative), `filterWarnings` drops requested codes, all warning objects carry the required fields.
+
+- **TS defs:** `MiddlewareOrderingWarningCode` string-literal union, `MiddlewareOrderingWarning`, `MiddlewareOrderingResult`, `validateMiddlewareOrder`, `filterWarnings`.
+
+### Notes
+
+- **`ok` is `false` only for `error`-severity warnings.** None of the shipped rules are errors — they're advisory. Consumers can promote a rule to error-severity by wrapping the validator + throwing when a specific code appears in `warnings`.
+- **`CACHE_OUTER_OF_METERING` is deliberately info-severity.** The reversed ordering (metering OUTER of cache — the demo-app's pattern) is the DESIRED behavior for cache-hit observability: metering sees `cached: true` on hits and records $0 rows + increments `totalCostSaved`. The rule fires the other direction as a *design-choice* nudge, not a bug alarm.
+- **Rules assume the OUTER→INNER order** shipped by `config://chain` (top of array runs first on the way DOWN). If you use a different ordering convention, reverse the array before validating.
+- **Roadmap:** the demo app's `config://chain` MCP resource will surface `warnings` from this validator in a follow-up release. External MCP clients will see the health of the middleware stack at a glance.
+
 ## [1.47.1] — 2026-08-06
 
 ### Added

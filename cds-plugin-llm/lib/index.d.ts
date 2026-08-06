@@ -1484,6 +1484,46 @@ export class RateLimitGiveUpError extends Error {
   readonly cause: Error;
 }
 
+// ---- Middleware ordering validator (new in 1.48.0) --------------------
+
+export type MiddlewareOrderingWarningCode =
+  | 'CACHE_OUTER_OF_METERING'
+  | 'BUDGET_INNER_OF_RETRY'
+  | 'INJECTION_INNER_OF_GUARDRAILS'
+  | 'CACHE_OUTER_OF_BUDGET'
+  | 'NO_RETRY'
+  | 'NO_METERING'
+  | 'NO_SECURITY_LAYER'
+  | 'DUPLICATE_KIND'
+  | 'UNKNOWN_KIND';
+
+export interface MiddlewareOrderingWarning {
+  code: MiddlewareOrderingWarningCode | string;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  fixit: string;
+  involved: string[];
+}
+
+export interface MiddlewareOrderingResult {
+  /** false iff any 'error'-severity warning present. */
+  ok: boolean;
+  warnings: MiddlewareOrderingWarning[];
+}
+
+/**
+ * Static validator for llm.use() middleware ordering. Flags common
+ * mis-orderings that break composition invariants — e.g. `usageMetering`
+ * OUTER of `responseCache` inflates cache-hit counts, `costBudget` INNER of
+ * `retryOnRateLimit` bypasses the ceiling on retries. Returns structured
+ * warnings with severity + fixit hints.
+ * @since 1.48.0
+ */
+export function validateMiddlewareOrder(chain: Array<{ kind?: string }>): MiddlewareOrderingResult;
+
+/** Filter out warnings by code — useful in tests or intentional exceptions. @since 1.48.0 */
+export function filterWarnings(result: MiddlewareOrderingResult, ignoredCodes?: string[]): MiddlewareOrderingResult;
+
 export class BudgetExceededError extends Error {
   readonly code: 'BUDGET_EXCEEDED';
   readonly scope: BudgetScope;
