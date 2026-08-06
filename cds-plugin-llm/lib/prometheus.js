@@ -209,7 +209,50 @@ function emitMetering(meter) {
       out.push(line('llm_usage_requests_by_provider_total', b.requests ?? 0, { provider: p }));
     }
   }
+
+  // Rate-limit snapshots per provider (new in 1.38.0). Gauges — the value
+  // is the LATEST seen state, not cumulative. Provider slots without
+  // rate-limit reporting yield no series.
+  if (typeof meter.rateLimits === 'function') {
+    const rl = meter.rateLimits();
+    const entries = Object.entries(rl ?? {});
+    if (entries.length > 0) {
+      out.push(header('llm_rate_limit_remaining_requests', 'Latest x-ratelimit-remaining-requests (or vendor equivalent) — how many more calls fit before rate-limit reset', 'gauge'));
+      for (const [p, s2] of entries) {
+        if (s2.requestsRemaining != null) {
+          out.push(line('llm_rate_limit_remaining_requests', s2.requestsRemaining, { provider: p }));
+        }
+      }
+      out.push(header('llm_rate_limit_remaining_tokens', 'Latest x-ratelimit-remaining-tokens — how many more tokens the request bucket allows before reset', 'gauge'));
+      for (const [p, s2] of entries) {
+        if (s2.tokensRemaining != null) {
+          out.push(line('llm_rate_limit_remaining_tokens', s2.tokensRemaining, { provider: p }));
+        }
+      }
+      out.push(header('llm_rate_limit_reset_requests_seconds', 'Seconds until the requests bucket resets, based on the latest reset header', 'gauge'));
+      for (const [p, s2] of entries) {
+        const secs = isoToSecondsFromNow(s2.requestsResetAt);
+        if (secs != null) out.push(line('llm_rate_limit_reset_requests_seconds', secs, { provider: p }));
+      }
+      out.push(header('llm_rate_limit_reset_tokens_seconds', 'Seconds until the tokens bucket resets, based on the latest reset header', 'gauge'));
+      for (const [p, s2] of entries) {
+        const secs = isoToSecondsFromNow(s2.tokensResetAt);
+        if (secs != null) out.push(line('llm_rate_limit_reset_tokens_seconds', secs, { provider: p }));
+      }
+      out.push(header('llm_rate_limit_retry_after_seconds', 'Retry-After value from the LAST 429/503 seen for this provider (0 if none)', 'gauge'));
+      for (const [p, s2] of entries) {
+        out.push(line('llm_rate_limit_retry_after_seconds', s2.retryAfterSeconds ?? 0, { provider: p }));
+      }
+    }
+  }
   return out;
+}
+
+function isoToSecondsFromNow(iso) {
+  if (!iso) return null;
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return null;
+  return Math.max(0, Math.round((ts - Date.now()) / 1000));
 }
 
 // ---- Public API -----------------------------------------------------

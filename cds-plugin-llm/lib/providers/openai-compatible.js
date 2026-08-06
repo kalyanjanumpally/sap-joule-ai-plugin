@@ -1,6 +1,7 @@
 const cds = require('@sap/cds');
 const LLMService = require('../LLMService');
 const { throwFromResponse } = require('../util');
+const { parseOpenAIRateLimit } = require('../rateLimits');
 
 /**
  * Generic OpenAI-compatible provider.
@@ -118,6 +119,10 @@ class OpenAICompatibleLLMService extends LLMService {
       input: safeParseJson(tc.function?.arguments) ?? {},
     }));
 
+    // Rate-limit headers (new in 1.38.0). Non-fatal parse — providers that
+    // don't emit them yield null and _rateLimit is omitted.
+    const _rateLimit = parseOpenAIRateLimit(res.headers, res.status);
+
     return {
       text: choice?.message?.content ?? '',
       toolCalls: toolCalls.length ? toolCalls : undefined,
@@ -128,6 +133,7 @@ class OpenAICompatibleLLMService extends LLMService {
       },
       stopReason: choice?.finish_reason === 'tool_calls' ? 'tool_use' : choice?.finish_reason,
       model: data.model,
+      ...(_rateLimit ? { _rateLimit } : {}),
     };
   }
 }

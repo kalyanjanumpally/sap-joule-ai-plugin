@@ -4,6 +4,51 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.38.0] — 2026-08-06
+
+### Added
+
+- **Rate-limit-aware cost tracking.** `usageMetering` now records provider-reported rate-limit headers (remaining requests, remaining tokens, reset timestamps, retry-after) alongside token counts. New `mw.rateLimits()` accessor returns the last-seen state per provider alias. Ties into Prometheus + budget for early-warning alerts BEFORE rate-limit rejections start.
+
+  ```js
+  const meter = usageMetering({ providerOf: (ctx) => ctx.raw?.providerAlias });
+  llm.use(meter);
+
+  await llm.chat({ messages: [...], providerAlias: 'openai' });
+
+  meter.rateLimits('openai');
+  // → {
+  //     provider: 'openai',
+  //     requestsLimit: 5000, requestsRemaining: 4998, requestsResetAt: '2026-08-06T00:00:01Z',
+  //     tokensLimit:   250000, tokensRemaining:   249900, tokensResetAt:   '2026-08-06T00:00:00Z',
+  //     retryAfterSeconds: undefined,
+  //     updatedAt: '2026-08-06T00:00:00Z',
+  //   }
+  ```
+
+- **Provider wiring** — the OpenAI-compat provider parses response headers via the new `parseOpenAIRateLimit()` and attaches `_rateLimit` on the returned response object. All 6 OpenAI-compat subclasses (Azure OpenAI, GenAI Hub, Groq, DeepSeek, Mistral, Fireworks) inherit this automatically.
+- **Header parsers** — `parseOpenAIRateLimit(headers, statusCode)` and `parseAnthropicRateLimit(headers, statusCode)` both exported for consumers doing their own metering. Handle OpenAI's compound-duration reset values (`1s`, `500ms`, `1m5s`, `1h32m`) as well as ISO passthrough; interpret `retry-after` only on 429/503 responses.
+- **`mw.rateLimits(providerAlias?)`** — with no args, returns the full `{ [alias]: snapshot }` map; with an alias, returns just that provider's snapshot or `null` when unknown.
+- **`mw.reset()`** now clears rate-limit state too.
+- **`mw.asMcpResource()` payload extended** — `config://usage` now carries a `rateLimits` field with the current per-provider snapshot.
+- **5 new Prometheus metrics** (via `prometheusHandler({ metering })`):
+  - `llm_rate_limit_remaining_requests{provider}` — latest x-ratelimit-remaining-requests value
+  - `llm_rate_limit_remaining_tokens{provider}` — latest x-ratelimit-remaining-tokens value
+  - `llm_rate_limit_reset_requests_seconds{provider}` — seconds until requests bucket resets
+  - `llm_rate_limit_reset_tokens_seconds{provider}` — seconds until tokens bucket resets
+  - `llm_rate_limit_retry_after_seconds{provider}` — from the LAST 429/503 seen (0 otherwise)
+
+- **19 new tests** (757 total): `parseResetToIso` (durations `1s/500ms/1m5s`, ISO passthrough, unparseable), `parseOpenAIRateLimit` (full header set, 429 retry-after, 200 ignores retry-after, no-headers → null, Headers-object shape), `parseAnthropicRateLimit` (ISO passthrough), `usageMetering.rateLimits()` (latest-wins semantics, alias scoping, stream done-chunk records, reset clears, MCP payload extension), `promMetrics` (all 5 metric families emitted; no series when no state), and OpenAI-compat provider wiring end-to-end (mocked fetch verifies `_rateLimit` reaches the response).
+
+- **TS defs:** new `RateLimitSnapshot` interface; `UsageMeteringMiddleware.rateLimits()` overloads; `parseOpenAIRateLimit` + `parseAnthropicRateLimit` signatures.
+
+### Notes
+
+- **Anthropic + Gemini + Bedrock + Ollama providers do not yet attach `_rateLimit`** — Anthropic uses the SDK's abstracted transport (headers not directly exposed on the streaming path); Gemini + Bedrock use vendor SDKs; Ollama doesn't publish rate-limit headers. Follow-up work will plumb these through — for now, only OpenAI-compat family provides rate-limit state.
+- **Snapshot semantics: latest wins.** The middleware overwrites the per-provider slot on every response. If you need history, hook `onRecord` and store the `_rateLimit` field per request.
+- **Reset semantics: seconds-from-now.** Prometheus emits reset times as `_seconds` gauges (seconds until reset). Convert to absolute clock time in Grafana with `time() + llm_rate_limit_reset_requests_seconds{provider="openai"}` if you want an ETA.
+- **Alert recipe:** `llm_rate_limit_remaining_requests{provider="openai"} / llm_rate_limit_limit_requests{provider="openai"} < 0.1` — 10% remaining, page ops. Combine with `retry_after_seconds > 0` for hard-block alerts.
+
 ## [1.37.0] — 2026-08-06
 
 ### Added

@@ -61,6 +61,21 @@ function usageMetering(options = {}) {
     byProvider: {},
   };
 
+  // Rate-limit state (new in 1.38.0). Providers report their remaining
+  // budget + reset time via response headers; the provider layer parses
+  // those headers into `result._rateLimit` and we snapshot the latest per
+  // provider alias here. Downstream consumers (Prometheus exporter, MCP
+  // resource) read this to alert BEFORE rejections start.
+  const rateLimitState = {};
+
+  // Store the LATEST rate-limit snapshot per provider alias. Overwrite is
+  // intentional — we want the freshest view, not history.
+  function recordRateLimit(provider, snapshot) {
+    if (!snapshot) return;
+    const key = provider ?? 'default';
+    rateLimitState[key] = { provider: key, ...snapshot };
+  }
+
   function recordUsage({ provider, model, tenant, inputTokens, outputTokens, method, cached }) {
     const p = priceTable[model];
     const iTok = inputTokens || 0;
@@ -129,12 +144,17 @@ function usageMetering(options = {}) {
               method: 'stream',
             });
           }
+          if (chunk?._rateLimit) recordRateLimit(provider, chunk._rateLimit);
           yield chunk;
         }
       })();
     }
 
     const result = await next();
+
+    // Snapshot rate-limit state whenever the provider attaches it. Cheap +
+    // side-effect-free; the actual metric emission happens in the exporter.
+    if (result?._rateLimit) recordRateLimit(provider, result._rateLimit);
 
     if (ctx.method === 'chat' && result?.usage) {
       recordUsage({
@@ -169,6 +189,16 @@ function usageMetering(options = {}) {
   mw.byModel = (modelId) => summary.byModel[modelId] ? structuredClone(summary.byModel[modelId]) : null;
   mw.byTenant = (tenantId) => summary.byTenant[tenantId] ? structuredClone(summary.byTenant[tenantId]) : null;
   mw.byProvider = (providerId) => summary.byProvider[providerId] ? structuredClone(summary.byProvider[providerId]) : null;
+  /**
+   * Return the last-seen rate-limit snapshot for a provider alias, or the
+   * full { [alias]: snapshot } map when called without args. Null when the
+   * provider hasn't reported rate-limit headers yet (or doesn't support them).
+   * @since 1.38.0
+   */
+  mw.rateLimits = (providerAlias) => {
+    if (providerAlias === undefined) return structuredClone(rateLimitState);
+    return rateLimitState[providerAlias] ? structuredClone(rateLimitState[providerAlias]) : null;
+  };
   mw.reset = () => {
     summary.totalRequests = 0;
     summary.totalInputTokens = 0;
@@ -179,15 +209,17 @@ function usageMetering(options = {}) {
     summary.byModel = {};
     summary.byTenant = {};
     summary.byProvider = {};
+    for (const k of Object.keys(rateLimitState)) delete rateLimitState[k];
   };
   // Test / integration hook: consumers can drop this into an MCPServer
-  // as a resource handler for `config://usage`.
+  // as a resource handler for `config://usage`. Payload now includes
+  // the latest rate-limit snapshot per provider (new in 1.38.0).
   mw.asMcpResource = () => ({
     uri: 'config://usage',
     name: 'LLM usage',
-    description: 'Aggregate token counts + cost across all requests since the process (or reset) started.',
+    description: 'Aggregate token counts + cost across all requests since the process (or reset) started, plus latest rate-limit snapshot per provider.',
     mimeType: 'application/json',
-    handler: () => mw.summary(),
+    handler: () => ({ ...mw.summary(), rateLimits: mw.rateLimits() }),
   });
   return mw;
 }

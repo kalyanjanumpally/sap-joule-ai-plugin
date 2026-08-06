@@ -74,6 +74,9 @@ module.exports = {
   // surface (new in 1.35.0)
   promMetrics: require('./prometheus').promMetrics,
   prometheusHandler: require('./prometheus').prometheusHandler,
+  // Rate-limit header parsers (new in 1.38.0)
+  parseOpenAIRateLimit: require('./rateLimits').parseOpenAIRateLimit,
+  parseAnthropicRateLimit: require('./rateLimits').parseAnthropicRateLimit,
   // OpenAI Files API helper (new in 1.14.0)
   uploadPdfFromUrl: require('./openaiFiles').uploadPdfFromUrl,
   // MCP HTTP transport helpers (new in 1.16.0)

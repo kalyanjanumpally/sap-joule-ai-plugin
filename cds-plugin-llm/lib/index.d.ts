@@ -969,22 +969,42 @@ export interface UsageMeteringOptions {
   pricingUnit?: number;
 }
 
+/** @since 1.38.0 */
+export interface RateLimitSnapshot {
+  provider: string;
+  requestsLimit?: number;
+  requestsRemaining?: number;
+  requestsResetAt?: string;    // ISO
+  tokensLimit?: number;
+  tokensRemaining?: number;
+  tokensResetAt?: string;      // ISO
+  retryAfterSeconds?: number;  // set on 429/503 responses
+  updatedAt: string;           // when we last saw this state
+}
+
 export interface UsageMeteringMiddleware extends Middleware {
   summary(): UsageSummary;
   byModel(modelId: string): UsageBucket | null;
   byTenant(tenantId: string): UsageBucket | null;
   byProvider(providerId: string): UsageBucket | null;
+  /**
+   * Last-seen rate-limit snapshot(s). Call with no args for the full map;
+   * pass a provider alias to get just that provider (or null if unknown).
+   * @since 1.38.0
+   */
+  rateLimits(): Record<string, RateLimitSnapshot>;
+  rateLimits(providerAlias: string): RateLimitSnapshot | null;
   reset(): void;
   /**
-   * Ready-to-register MCP resource that returns the summary as JSON.
-   * Drop into `new MCPServer({ resources: [meter.asMcpResource(), ...] })`.
+   * Ready-to-register MCP resource that returns the summary + rate-limit
+   * snapshot as JSON. Drop into `new MCPServer({ resources: [meter.asMcpResource(), ...] })`.
    */
   asMcpResource(): {
     uri: 'config://usage';
     name: string;
     description: string;
     mimeType: 'application/json';
-    handler: () => UsageSummary;
+    handler: () => UsageSummary & { rateLimits: Record<string, RateLimitSnapshot> };
   };
 }
 
@@ -1629,3 +1649,19 @@ export function promMetrics(mw?: PrometheusMiddlewareBundle, options?: PromMetri
  */
 export function prometheusHandler(mw?: PrometheusMiddlewareBundle, options?: PromMetricsOptions):
   (req: unknown, res: unknown) => Promise<void>;
+
+/**
+ * Normalize OpenAI-family rate-limit headers into a snapshot the usageMetering
+ * middleware can track. Same shape used by Groq, DeepSeek, Mistral, Fireworks,
+ * Azure OpenAI. Returns null when no rate-limit headers are present.
+ * @since 1.38.0
+ */
+export function parseOpenAIRateLimit(headers: unknown, statusCode?: number): RateLimitSnapshot | null;
+
+/**
+ * Normalize Anthropic rate-limit headers into a snapshot the usageMetering
+ * middleware can track. Anthropic uses ISO timestamps for reset headers
+ * (unlike OpenAI's duration format).
+ * @since 1.38.0
+ */
+export function parseAnthropicRateLimit(headers: unknown, statusCode?: number): RateLimitSnapshot | null;
