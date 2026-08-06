@@ -4,6 +4,32 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.40.0] — 2026-08-06
+
+### Added
+
+- **Anthropic rate-limit plumbing.** The Anthropic provider now attaches `_rateLimit` on chat + stream responses, matching the OpenAI-compat behavior shipped in 1.38.0. `usageMetering.rateLimits('anthropic')` now returns a snapshot; Prometheus emits the same `llm_rate_limit_*` gauges for Anthropic traffic; MCP `config://usage` payload includes it.
+
+  ```js
+  await llm.chat({ ..., providerAlias: 'anthropic' });
+  meter.rateLimits('anthropic');
+  // → {
+  //     requestsLimit: 1000, requestsRemaining: 999, requestsResetAt: '2026-08-06T12:00:00Z',
+  //     tokensLimit: 400000, tokensRemaining: 399900, tokensResetAt: '2026-08-06T12:00:00Z',
+  //     retryAfterSeconds: undefined, updatedAt: '2026-08-06T00:00:00Z',
+  //   }
+  ```
+
+- **`extractAnthropicRateLimit(stream)`** — defensive helper wired into both `_chat` and `_stream` paths. Handles the three Anthropic SDK response-accessor shapes (function, Promise property, absent) plus a swallow-and-skip path for SDK errors. Rate-limit tracking is best-effort observability, never a reason to fail a chat call.
+
+- **7 new tests** (776 total): `_chat` attaches `_rateLimit` when SDK exposes `response()` as a function, works with the Promise-property shape, gracefully skips when the accessor is missing (older SDK), swallows extraction errors, omits `_rateLimit` when headers carry no rate-limit info, `_stream` attaches `_rateLimit` on the done chunk, end-to-end with `usageMetering.rateLimits('anthropic')`.
+
+### Notes
+
+- **Anthropic snapshot uses ISO-format reset timestamps** — parsed via the existing `parseAnthropicRateLimit` shipped in 1.38.0; no plugin changes needed elsewhere. Prometheus `llm_rate_limit_reset_*_seconds` gauges convert the ISO to seconds-from-now the same way as OpenAI-compat.
+- **Gemini + Bedrock + Ollama still don't attach `_rateLimit`** — Gemini + Bedrock use vendor SDKs whose transport layer abstracts headers; Ollama doesn't publish rate-limit headers. Follow-up work.
+- **SDK compatibility.** Tested against `@anthropic-ai/sdk` v0.36 (currently the pinned version). Future SDK versions may relocate the response accessor — the defensive shape check falls through cleanly so upgrades don't break; consumers who need continued rate-limit tracking can pin the SDK version until the plugin catches up.
+
 ## [1.39.0] — 2026-08-06
 
 ### Added

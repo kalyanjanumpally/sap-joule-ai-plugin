@@ -1,5 +1,6 @@
 const cds = require('@sap/cds');
 const LLMService = require('../LLMService');
+const { parseAnthropicRateLimit } = require('../rateLimits');
 
 class AnthropicLLMService extends LLMService {
   async init() {
@@ -39,6 +40,7 @@ class AnthropicLLMService extends LLMService {
 
     const stream = this.client.messages.stream(params);
     const message = await stream.finalMessage();
+    const _rateLimit = await extractAnthropicRateLimit(stream);
 
     const text = message.content
       .filter(b => b.type === 'text')
@@ -57,6 +59,7 @@ class AnthropicLLMService extends LLMService {
       usage: message.usage,
       stopReason: message.stop_reason,
       model: message.model,
+      ...(_rateLimit ? { _rateLimit } : {}),
     };
   }
 }
@@ -92,6 +95,7 @@ AnthropicLLMService.prototype._stream = async function* _stream(
   }
 
   const message = await stream.finalMessage();
+  const _rateLimit = await extractAnthropicRateLimit(stream);
   const text = message.content
     .filter(b => b.type === 'text')
     .map(b => b.text)
@@ -103,6 +107,7 @@ AnthropicLLMService.prototype._stream = async function* _stream(
     usage: message.usage,
     stopReason: message.stop_reason,
     model: message.model,
+    ...(_rateLimit ? { _rateLimit } : {}),
   };
 };
 
@@ -208,6 +213,32 @@ function normalizeBatchResultEntry(entry) {
     errorType: r.type,
     raw: entry,
   };
+}
+
+/**
+ * Grab response headers from an Anthropic SDK MessageStream and parse
+ * rate-limit headers out of them. Defensive across SDK versions — different
+ * releases expose the response object differently:
+ *   v0.36 → `stream.response()` async method returning a fetch Response
+ *   v0.34+ → `stream.response` property that is a Promise<Response>
+ *   Older → not exposed; we skip and return null.
+ * Any failure returns null — rate-limit tracking is best-effort observability,
+ * never a reason to fail a chat call.
+ * @since 1.40.0
+ */
+async function extractAnthropicRateLimit(stream) {
+  try {
+    let response;
+    if (stream && typeof stream.response === 'function') {
+      response = await stream.response();
+    } else if (stream && stream.response && typeof stream.response.then === 'function') {
+      response = await stream.response;
+    }
+    if (!response?.headers) return null;
+    return parseAnthropicRateLimit(response.headers, response.status);
+  } catch {
+    return null;
+  }
 }
 
 /**
