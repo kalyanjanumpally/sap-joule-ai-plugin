@@ -155,13 +155,20 @@ class LLMService extends cds.Service {
     const dispatch = (i) => {
       if (i >= chain.length) return Promise.resolve(coreFn());
       const mw = chain[i];
-      const nextCalled = { done: false };
+      // `next()` may be called multiple times SEQUENTIALLY to support retry
+      // patterns (retryOnRateLimit, backoff wrappers). Concurrent overlapping
+      // calls still get flagged — that's a real bug. Relaxed in 1.47.0.
+      let pending = false;
       const next = () => {
-        if (nextCalled.done) {
-          return Promise.reject(new Error('middleware called next() more than once'));
+        if (pending) {
+          return Promise.reject(new Error('middleware called next() concurrently (must await previous call before invoking again)'));
         }
-        nextCalled.done = true;
-        return dispatch(i + 1);
+        pending = true;
+        const p = dispatch(i + 1);
+        // Reset the flag whether the call resolves or rejects, so the same
+        // middleware can `try { await next(); } catch { await next(); }` for retry.
+        p.then(() => { pending = false; }, () => { pending = false; });
+        return p;
       };
       try {
         return Promise.resolve(mw(ctx, next));

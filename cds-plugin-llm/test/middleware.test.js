@@ -145,16 +145,30 @@ test('meta is shared across middleware in a single call', async () => {
   assert.deepEqual(res._meta, { start: 100, end: 150 });
 });
 
-test('calling next() twice from the same middleware throws', async () => {
+test('calling next() sequentially is allowed (supports retry patterns since 1.47.0)', async () => {
+  const svc = new StubProvider('llm', null, { modelId: 'm' });
+  await svc.init();
+  let count = 0;
+  svc.use(async (ctx, next) => {
+    await next();
+    count++;
+    return await next();  // second call — legal for retry semantics
+  });
+  await svc.chat({ messages: [{ role: 'user', content: 'x' }] });
+  assert.equal(count, 1, 'middleware body ran between the two next() calls');
+});
+
+test('calling next() CONCURRENTLY (without awaiting the previous) throws', async () => {
   const svc = new StubProvider('llm', null, { modelId: 'm' });
   await svc.init();
   svc.use(async (ctx, next) => {
-    await next();
-    return await next();  // illegal
+    const p1 = next();
+    const p2 = next();  // illegal — two next() promises in flight
+    await p1; await p2;
   });
   await assert.rejects(
     () => svc.chat({ messages: [{ role: 'user', content: 'x' }] }),
-    /next\(\) more than once/,
+    /concurrently/,
   );
 });
 

@@ -1434,6 +1434,56 @@ export interface CostBudgetMiddleware extends Middleware {
  */
 export function costBudget(options?: CostBudgetOptions): CostBudgetMiddleware;
 
+// ---- Rate-limit retry middleware (new in 1.47.0) ---------------------
+
+export interface RetryOnRateLimitOptions {
+  /** Max total attempts (including the initial call). Default 3. */
+  maxAttempts?: number;
+  /** Wait time in ms when no `retry-after` header/hint is present. Default 5000. */
+  fallbackWaitMs?: number;
+  /** Additional random jitter in [0, jitterMs) added to each wait. Default 250. */
+  jitterMs?: number;
+  /** Statuses treated as retryable. Default [429, 503]. */
+  retryOnStatuses?: number[];
+  onRetry?: (info: { ctx: MiddlewareContext; attempt: number; waitMs: number; status: number | null; error: Error; method: string }) => void | Promise<void>;
+  onGiveUp?: (info: { ctx: MiddlewareContext; attempts: Array<{ attempt: number; waitMs: number; status: number | null; error: string }>; finalError: Error; method: string }) => void | Promise<void>;
+}
+
+export interface RetryOnRateLimitStats {
+  requests:        number;
+  retriedRequests: number;
+  totalRetries:    number;
+  givenUp:         number;
+  totalWaitMs:     number;
+}
+
+export interface RetryOnRateLimitMiddleware extends Middleware {
+  readonly stats: RetryOnRateLimitStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://rate-limit-retry';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => RetryOnRateLimitStats & { maxAttempts: number; fallbackWaitMs: number; jitterMs: number; retryOnStatuses: number[] };
+  };
+}
+
+/**
+ * Middleware that catches rate-limit errors (via `err.retryAfterSec` / matching
+ * status codes / `RetryableError` from providers) and retries after the hinted
+ * or fallback delay. Complements `usageMetering`'s `_rateLimit` state (surfacing)
+ * with automated recovery. Composable with `costBudget`, `responseCache`, etc.
+ * @since 1.47.0
+ */
+export function retryOnRateLimit(options?: RetryOnRateLimitOptions): RetryOnRateLimitMiddleware;
+
+export class RateLimitGiveUpError extends Error {
+  readonly code: 'RATE_LIMIT_GIVE_UP';
+  readonly attempts: Array<{ attempt: number; waitMs: number; status: number | null; error: string }>;
+  readonly cause: Error;
+}
+
 export class BudgetExceededError extends Error {
   readonly code: 'BUDGET_EXCEEDED';
   readonly scope: BudgetScope;

@@ -63,6 +63,9 @@ module.exports = {
   // Prompt injection detection — dedicated middleware layer (new in 1.31.0)
   promptInjectionGuard: require('./middleware/promptInjectionGuard').promptInjectionGuard,
   PromptInjectionError: require('./middleware/promptInjectionGuard').PromptInjectionError,
+  // Rate-limit-driven retry middleware (new in 1.47.0)
+  retryOnRateLimit: require('./middleware/retryOnRateLimit').retryOnRateLimit,
+  RateLimitGiveUpError: require('./middleware/retryOnRateLimit').RateLimitGiveUpError,
   // Cost budgets + alerts — per-tenant/model/total ceilings (new in 1.29.0)
   costBudget: require('./middleware/costBudget').costBudget,
   BudgetExceededError: require('./middleware/costBudget').BudgetExceededError,

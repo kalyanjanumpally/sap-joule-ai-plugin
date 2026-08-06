@@ -4,6 +4,42 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.47.0] — 2026-08-06
+
+### Added
+
+- **`retryOnRateLimit({ maxAttempts, fallbackWaitMs, jitterMs, retryOnStatuses, onRetry, onGiveUp })` — rate-limit-driven retry middleware.** Completes the rate-limit loop shipped over 1.38.0–1.45.0: those releases surfaced provider throttling state via `_rateLimit` on responses; this release automatically WAITS + RETRIES when a call gets throttled. Reads `err.retryAfterSec` from `RetryableError` (or matching status codes), waits that duration, retries. Complements `costBudget` (blocks BEFORE the call) with reactive recovery AFTER.
+
+  ```js
+  const retry = retryOnRateLimit({
+    maxAttempts:    3,       // total attempts including the initial call
+    fallbackWaitMs: 5000,    // when no retry-after hint is present
+    jitterMs:       250,     // 0..250ms random jitter per wait
+    onRetry:  (info) => cds.log('llm:retry').warn(`retry ${info.attempt} after ${info.waitMs}ms: ${info.error.message}`),
+    onGiveUp: (info) => cds.log('llm:retry').error(`gave up after ${info.attempts.length} retries`),
+  });
+  llm.use(retry);
+  ```
+
+- **Recommended chain (top = outermost):** `promptInjectionGuard → guardrails → costBudget → retryOnRateLimit → usageMetering → responseCache → provider`. Placing OUTER of `usageMetering` means retries don't inflate the counter (one logical request = one metering row); INNER of `costBudget` so a budget check still trips on the second attempt.
+
+- **`RateLimitGiveUpError`** — thrown after exhausting `maxAttempts`. Carries `.code = 'RATE_LIMIT_GIVE_UP'`, `.attempts` (array of `{attempt, waitMs, status, error}`), and `.cause` (the underlying provider error) so consumers can log the full retry timeline for post-mortems.
+
+- **Stats surface** — `mw.stats: { requests, retriedRequests, totalRetries, givenUp, totalWaitMs }`, `mw.reset()`, and `mw.asMcpResource()` returning `config://rate-limit-retry` with the counters + configuration.
+
+- **15 new tests** covering validation, happy path, single/multi-retry via `RetryableError`, plain-Error-with-status detection, non-retryable status pass-through, custom `retryOnStatuses`, `RateLimitGiveUpError` with attempt history, `onRetry` + `onGiveUp` observer callbacks, error-swallowing in observer callbacks, total-wait-ms aggregation, `reset()`, `asMcpResource()` payload shape.
+
+### Changed
+
+- **`_runMiddleware` now allows sequential re-calls to `next()`** to support retry patterns. Previously any middleware that called `next()` more than once threw `middleware called next() more than once` — that was too strict. Concurrent overlapping calls (two `next()` promises in flight from the same middleware body) still throw with a clearer `next() concurrently` message. The existing test `calling next() twice from the same middleware throws` was renamed + updated: sequential retries are now legal, but concurrent calls remain a bug. Net +1 test.
+
+### Notes
+
+- **Interaction with `defaultRetries` on the provider.** The base `LLMService._chatCore` also wraps the provider call in `withRetry(fn, retries)` (see `lib/util.js`). By default that's `{ max: 3, baseMs: 500 }`. If you want `retryOnRateLimit` to see every rate-limit error, disable the built-in via `chat({ ..., retries: { max: 0 } })` per request, or set `defaultRetries: { max: 0 }` at provider instantiation. Otherwise the built-in retries first (with exponential backoff), and only surfaces to the middleware after those attempts also fail.
+- **Streams:** the middleware wraps the initial `next()` call which returns the async iterable. If the provider throws BEFORE the stream opens (typical rate-limit case), retry works. If the stream opens then errors mid-iteration, retry is not attempted — retrying would re-play already-yielded chunks to the caller. Consumers who need mid-stream retry should build a stream-aware layer.
+- **`RetryableError.retryAfterSec = 0`** is treated as "retry now" — useful for tests that need fast retries without artificial waits. Providers that don't set the field but throw with a matching status get `fallbackWaitMs + jitter`.
+- **All 4 provider families now cooperate with `retryOnRateLimit`.** `throwFromResponse` in `lib/util.js` throws `RetryableError` on 429/503 for OpenAI-compat + Anthropic; `parseGeminiRateLimit` / `parseBedrockRateLimit` populate `retryAfterSeconds` for the 4th layer of visibility.
+
 ## [1.46.0] — 2026-08-06
 
 ### Added
