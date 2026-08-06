@@ -71,33 +71,25 @@ async function startObservabilityMcp({
 // ---- Resources -------------------------------------------------------
 
 function buildResources({ getCache, getBudget, getGuardrails, getInjectionGuard, getMetering }) {
-  // Adapter: MCPServer expects `read: async () => value`, middleware ships
-  // `.asMcpResource()` returning `{ uri, name, description, mimeType, handler }`.
-  const fromMiddleware = (mwResource) => ({
-    uri:         mwResource.uri,
-    name:        mwResource.name,
-    description: mwResource.description,
-    mimeType:    mwResource.mimeType ?? 'application/json',
-    read:        async () => await mwResource.handler(),
-  });
-
+  // As of cds-plugin-llm 1.40.1, MCPServer.registerResource() accepts the
+  // { handler } shape shipped by middleware.asMcpResource() directly — no
+  // adapter shim needed. Pass through as-is.
   const resources = [];
 
   const cache = getCache();
-  if (cache?.asMcpResource) resources.push(fromMiddleware(cache.asMcpResource()));
+  if (cache?.asMcpResource) resources.push(cache.asMcpResource());
 
   const budget = getBudget();
-  if (budget?.asMcpResource) resources.push(fromMiddleware(budget.asMcpResource()));
+  if (budget?.asMcpResource) resources.push(budget.asMcpResource());
 
   const guard = getInjectionGuard();
-  if (guard?.asMcpResource) resources.push(fromMiddleware(guard.asMcpResource()));
+  if (guard?.asMcpResource) resources.push(guard.asMcpResource());
 
   const meter = getMetering();
-  if (meter?.asMcpResource) resources.push(fromMiddleware(meter.asMcpResource()));
+  if (meter?.asMcpResource) resources.push(meter.asMcpResource());
 
-  // Guardrails ships its own asMcpResource since 1.35.1 — no more hand-rolled adapter.
   const gr = getGuardrails();
-  if (gr?.asMcpResource) resources.push(fromMiddleware(gr.asMcpResource()));
+  if (gr?.asMcpResource) resources.push(gr.asMcpResource());
 
   // Live LlmBudget config rows from the DB. Complements config://budget
   // which shows CURRENT-WINDOW spend + effective limits; this shows the
@@ -121,7 +113,7 @@ function buildResources({ getCache, getBudget, getGuardrails, getInjectionGuard,
   // plugin. Useful for LLM-driven tool discovery: an agent can list the
   // available shapes then read schema://{name} to construct a matching
   // request. Powered by cds-plugin-llm 1.37.0.
-  if (schemas?.asMcpResource) resources.push(fromMiddleware(schemas.asMcpResource()));
+  if (schemas?.asMcpResource) resources.push(schemas.asMcpResource());
 
   return resources;
 }
@@ -148,18 +140,9 @@ function buildResourceTemplates() {
   ];
 
   // schema://{name} — resolves any shipped schema to its raw JSON. Powered
-  // by cds-plugin-llm 1.37.0 (bridged handler → read the same way as the
-  // static resources above).
-  if (schemas?.asMcpResourceTemplate) {
-    const t = schemas.asMcpResourceTemplate();
-    out.push({
-      uriTemplate: t.uriTemplate,
-      name:        t.name,
-      description: t.description,
-      mimeType:    t.mimeType ?? 'application/json',
-      read:        async (params) => t.handler(params),
-    });
-  }
+  // by cds-plugin-llm 1.37.0; passed through as-is thanks to the handler→read
+  // shim shipped in 1.40.1.
+  if (schemas?.asMcpResourceTemplate) out.push(schemas.asMcpResourceTemplate());
 
   return out;
 }
