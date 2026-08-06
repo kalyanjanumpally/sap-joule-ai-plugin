@@ -9,6 +9,7 @@ const {
   costBudget, BudgetExceededError,
   promptInjectionGuard, PromptInjectionError,
   schemas,
+  prometheusHandler,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -361,6 +362,18 @@ module.exports = class AIService extends cds.ApplicationService {
         if (!g) return res.status(503).json({ error: 'injection guard not initialized yet' });
         res.json(g.stats);
       });
+      // Prometheus /metrics — same counters as the /*-stats endpoints but
+      // serialized to Prom 0.0.4 text-exposition. Scrape-friendly for
+      // Grafana + DataDog agent + Kubernetes ServiceMonitor. cardinality
+      // for a demo is fine; a real deployment with 1000s of tenants should
+      // pass { excludeBreakdowns: true } to drop the per-tenant series.
+      cds.app.get('/metrics', prometheusHandler({
+        cache:          getCache(),
+        budget:         getBudget(),
+        guardrails:     getGuardrails(),
+        injectionGuard: getInjectionGuard(),
+        metering:       getMetering(),
+      }));
       // Budget dashboard — current-window spend + configured limits.
       // Complements the OData `FinanceService.getBudgetStatus()` action
       // with a simpler HTTP endpoint (no OData $inlinecount overhead) for
