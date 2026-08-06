@@ -231,6 +231,99 @@ function pdfFromBase64(base64Data) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Audio content-block helpers (new in v1.36.0)
+// ---------------------------------------------------------------------------
+//
+// Provider matrix (as of shipping):
+//
+//   Gemini              base64 native (inlineData with audio/*)
+//   OpenAI-compat       base64 via `input_audio` content block; requires a
+//                       model that speaks it (GPT-4o Audio, and OpenAI-compat
+//                       gateways that mirror the shape). Others 400 upstream.
+//   Anthropic           NOT supported — Claude Voice is a separate API surface.
+//   Ollama              NOT supported — no audio input in vision models today.
+//   Bedrock             partial (Nova has audio); other models 400 upstream.
+//
+// URL sources: only Gemini can reference remote audio when the URL is a
+// Google Cloud Storage URI (gs://...). HTTP URLs are NOT fetched by providers
+// today — download client-side and use audioFromFile / audioFromBase64.
+
+const AUDIO_MEDIA_TYPES = {
+  '.wav':  'audio/wav',
+  '.mp3':  'audio/mpeg',
+  '.m4a':  'audio/mp4',        // .m4a = AAC in an MP4 container
+  '.ogg':  'audio/ogg',
+  '.flac': 'audio/flac',
+  '.aac':  'audio/aac',
+  '.opus': 'audio/opus',
+  '.webm': 'audio/webm',
+};
+
+/**
+ * Load an audio file from disk and return a plugin-shape audio block.
+ * Auto-detects media type from extension.
+ *
+ *   const audio = await audioFromFile('/tmp/voice-note.mp3');
+ *   const { text } = await llm.chat({
+ *     model: 'gemini-2.5-flash',
+ *     messages: [{
+ *       role: 'user',
+ *       content: [audio, { type: 'text', text: 'Transcribe and extract action items.' }],
+ *     }],
+ *   });
+ *
+ * Provider support: Gemini (native), OpenAI-compat with GPT-4o Audio (input_audio
+ * block). Anthropic / Ollama / most Bedrock models will throw a clear error.
+ */
+async function audioFromFile(filePath) {
+  const path = require('node:path');
+  const fs = require('node:fs/promises');
+  const ext = path.extname(filePath).toLowerCase();
+  const media_type = AUDIO_MEDIA_TYPES[ext];
+  if (!media_type) {
+    throw new Error(
+      `audioFromFile: unsupported extension '${ext}'. Supported: ${Object.keys(AUDIO_MEDIA_TYPES).join(', ')}`
+    );
+  }
+  const buf = await fs.readFile(filePath);
+  return {
+    type: 'audio',
+    source: { type: 'base64', media_type, data: buf.toString('base64') },
+  };
+}
+
+/**
+ * Reference remote audio by URL.
+ *
+ * Google Cloud Storage URIs (gs://bucket/key.mp3) work with Gemini natively.
+ * HTTP URLs are NOT fetched by any provider today — download client-side and
+ * use audioFromBase64 or audioFromFile. Wired here for future compatibility.
+ */
+function audioFromUrl(url, mediaType) {
+  return {
+    type: 'audio',
+    source: { type: 'url', url, media_type: mediaType },
+  };
+}
+
+/**
+ * Wrap raw base64 audio bytes into a plugin-shape audio block. mediaType is
+ * required (audio formats don't self-describe from bytes alone the way image
+ * magic numbers do; provider APIs need it in the payload).
+ */
+function audioFromBase64(base64Data, mediaType) {
+  if (!mediaType) {
+    throw new Error(
+      "audioFromBase64: mediaType is required (e.g. 'audio/mpeg', 'audio/wav', 'audio/mp4')."
+    );
+  }
+  return {
+    type: 'audio',
+    source: { type: 'base64', media_type: mediaType, data: base64Data },
+  };
+}
+
 module.exports = {
   withRetry,
   RetryableError,
@@ -244,4 +337,7 @@ module.exports = {
   pdfFromFile,
   pdfFromUrl,
   pdfFromBase64,
+  audioFromFile,
+  audioFromUrl,
+  audioFromBase64,
 };

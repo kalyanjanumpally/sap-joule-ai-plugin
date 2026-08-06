@@ -68,7 +68,28 @@ export interface DocumentBlock {
   source: DocumentUrlSource | DocumentBase64Source | DocumentFileIdSource;
 }
 
-export type ContentBlock = TextBlock | ImageBlock | DocumentBlock;
+/** @since 1.36.0 */
+export interface AudioBase64Source {
+  type: 'base64';
+  /** IANA media type — audio/wav, audio/mpeg, audio/mp4, audio/ogg, audio/flac, audio/aac, audio/opus, audio/webm */
+  media_type: string;
+  /** Base64-encoded audio bytes (no data-URL prefix). */
+  data: string;
+}
+/** @since 1.36.0 */
+export interface AudioUrlSource {
+  type: 'url';
+  /** gs:// URI for Gemini. Other providers do not fetch audio by URL. */
+  url: string;
+  media_type?: string;
+}
+/** @since 1.36.0 */
+export interface AudioBlock {
+  type: 'audio';
+  source: AudioBase64Source | AudioUrlSource;
+}
+
+export type ContentBlock = TextBlock | ImageBlock | DocumentBlock | AudioBlock;
 
 // ---------------------------------------------------------------------------
 // Tool calls
@@ -483,6 +504,31 @@ export function pdfFromUrl(url: string): DocumentBlock;
  * Wrap raw base64 PDF bytes into a plugin-shape document block. Anthropic-only.
  */
 export function pdfFromBase64(base64Data: string): DocumentBlock;
+
+/**
+ * Load an audio file from disk, base64-encode, auto-detect media type from
+ * extension. Provider support: Gemini (native inline audio), OpenAI-compat
+ * with GPT-4o Audio (input_audio content block). Anthropic / Ollama / most
+ * Bedrock models throw a clear error. Supported extensions: .wav, .mp3,
+ * .m4a, .ogg, .flac, .aac, .opus, .webm.
+ * @since 1.36.0
+ */
+export function audioFromFile(filePath: string): Promise<AudioBlock>;
+
+/**
+ * Reference remote audio by URL. Google Cloud Storage URIs (gs://...) work
+ * with Gemini natively. HTTP URLs are not fetched by any provider today —
+ * download client-side and use audioFromBase64 or audioFromFile.
+ * @since 1.36.0
+ */
+export function audioFromUrl(url: string, mediaType?: string): AudioBlock;
+
+/**
+ * Wrap raw base64 audio bytes into a plugin-shape audio block. mediaType is
+ * required (audio formats don't self-describe from bytes alone).
+ * @since 1.36.0
+ */
+export function audioFromBase64(base64Data: string, mediaType: string): AudioBlock;
 
 /**
  * Fetch a PDF from `url`, upload to the OpenAI Files API at `<baseUrl>/files`,

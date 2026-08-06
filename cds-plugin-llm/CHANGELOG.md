@@ -4,6 +4,49 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.36.0] — 2026-08-06
+
+### Added
+
+- **Multi-modal audio input support.** New helpers `audioFromFile()`, `audioFromUrl()`, `audioFromBase64()` extend the vision + PDF helper family. Providers that speak audio (Gemini native, OpenAI-compat GPT-4o Audio) accept the block directly; providers that don't (Anthropic, Ollama, most Bedrock) throw a clear diagnostic instead of a cryptic upstream 400.
+
+  ```js
+  const { audioFromFile } = require('@saptarishi/cds-plugin-llm');
+
+  const voice = await audioFromFile('/tmp/voice-note.mp3');
+  const { text } = await llm.chat({
+    model: 'gemini-2.5-flash',
+    messages: [{
+      role: 'user',
+      content: [voice, { type: 'text', text: 'Transcribe and extract action items.' }],
+    }],
+  });
+  ```
+
+- **Helper shapes** (mirroring the image + PDF helpers):
+  - **`audioFromFile(path)`** — reads from disk, base64-encodes, auto-detects media type from extension. Supported: `.wav`, `.mp3`, `.m4a`, `.ogg`, `.flac`, `.aac`, `.opus`, `.webm`. Unknown extensions throw with the list of supported ones.
+  - **`audioFromUrl(url, mediaType?)`** — reference remote audio. Google Cloud Storage URIs (`gs://bucket/key.mp3`) work on Gemini natively. HTTP URLs get a clear error at dispatch time — providers don't fetch audio by URL today.
+  - **`audioFromBase64(data, mediaType)`** — `mediaType` is required (audio formats don't self-describe from bytes the way image magic numbers do; provider APIs need it in the payload).
+
+- **Provider wiring:**
+  - **Gemini** — `inlineData` with `audio/*` mimeType (same wire shape as inline images). `gs://` URIs get `fileData` blocks. HTTP URLs throw with a "download client-side" hint.
+  - **OpenAI-compatible** — translates to the `input_audio` content block that GPT-4o Audio (and OpenAI-compat gateways mirroring the shape) accept. Format mapping: `audio/mpeg` → `mp3`, `audio/wav` → `wav`, `audio/mp4` → `mp4`, etc. Groq / DeepSeek / etc. will 400 upstream — that's the honest signal that the target model doesn't speak audio.
+  - **Anthropic** — new `rejectUnsupportedBlocks()` message-level guard throws before the SDK dispatches. Points users at transcribing client-side (whisper.cpp, Deepgram) OR switching providers.
+  - **Ollama** — throws with a whisper.cpp hint + provider switch suggestion.
+  - **Bedrock** — throws with Nova Sonic / InvokeModelCommand path guidance (Converse API doesn't route audio yet).
+  - **All OpenAI-compat subclasses (Azure OpenAI, GenAI Hub, Groq, DeepSeek, Mistral, Fireworks)** inherit the `input_audio` translation automatically. Ones without audio support 400 upstream.
+
+- **TS defs:** new `AudioBlock`, `AudioBase64Source`, `AudioUrlSource` types; `ContentBlock` union extended; `audioFromFile / audioFromUrl / audioFromBase64` signatures.
+
+- **12 new tests** (735 total): `audioFromBase64` mediaType requirement + shape, `audioFromUrl` shape (with + without mediaType), `audioFromFile` unsupported extension + `.mp3/.wav/.m4a/.flac` extensions map to correct MIME types, Anthropic audio-block rejection (`Claude Voice` diagnostic), OpenAI-compat translation to `input_audio` block (verified via mocked `fetch` capturing the request payload), OpenAI-compat URL-audio rejection.
+
+### Notes
+
+- **Real-time / streaming voice not in scope.** These helpers deliver PRE-RECORDED audio into a chat turn. For live voice, use provider-native realtime APIs (Gemini Live, OpenAI Realtime).
+- **Provider support matrix will drift** — hosted OpenAI-compat gateways adopt/drop audio support model-by-model. The plugin translates the block correctly and lets the provider surface accept/reject. Consumers who need pre-flight compatibility can gate on `model` before wiring an audio block.
+- **URL-based audio is only usable on Gemini today** — and only for `gs://` URIs. Every other provider rejects URL-source audio at dispatch. Download client-side and pass base64.
+- **The Anthropic message-level guard also caches** for future block types — a new `rejectUnsupportedBlocks()` helper we'll extend as we learn about more block types the provider doesn't handle.
+
 ## [1.35.1] — 2026-08-06
 
 ### Added

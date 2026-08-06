@@ -1,6 +1,7 @@
 const {
   imageFromFile, imageFromUrl, imageFromBase64,
   pdfFromFile, pdfFromUrl, pdfFromBase64,
+  audioFromFile, audioFromUrl, audioFromBase64,
 } = require('./util');
 const { runTools } = require('./toolRunner');
 
@@ -25,6 +26,10 @@ module.exports = {
   pdfFromFile,
   pdfFromUrl,
   pdfFromBase64,
+  // Audio helpers (Gemini native + OpenAI-compat GPT-4o Audio) — new in 1.36.0
+  audioFromFile,
+  audioFromUrl,
+  audioFromBase64,
   // Tool runner — automatic multi-turn agent loop (new in 1.1.0)
   runTools,
   // Multi-agent orchestration (new in 1.27.0)

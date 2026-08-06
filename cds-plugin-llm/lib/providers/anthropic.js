@@ -14,6 +14,7 @@ class AnthropicLLMService extends LLMService {
   }
 
   async _chat({ model, maxTokens, system, messages, tools, format, thinking, cache }) {
+    rejectUnsupportedBlocks(messages);
     const params = {
       model,
       max_tokens: maxTokens,
@@ -67,6 +68,7 @@ class AnthropicLLMService extends LLMService {
 AnthropicLLMService.prototype._stream = async function* _stream(
   { model, maxTokens, system, messages, tools, format, thinking, cache },
 ) {
+  rejectUnsupportedBlocks(messages);
   const params = {
     model,
     max_tokens: maxTokens,
@@ -206,6 +208,28 @@ function normalizeBatchResultEntry(entry) {
     errorType: r.type,
     raw: entry,
   };
+}
+
+/**
+ * Anthropic supports text + image + document + tool_use content blocks.
+ * Audio isn't in scope (Claude Voice is a separate API surface). Throw a
+ * clear error at dispatch so users get a diagnostic instead of a cryptic
+ * 400 from the SDK.
+ */
+function rejectUnsupportedBlocks(messages) {
+  if (!Array.isArray(messages)) return;
+  for (const m of messages) {
+    if (!Array.isArray(m?.content)) continue;
+    for (const b of m.content) {
+      if (b?.type === 'audio') {
+        throw new Error(
+          'Audio blocks are not supported on Anthropic (Claude Voice is a separate API surface). ' +
+          'Transcribe the audio client-side (whisper.cpp, Deepgram, etc.) and pass the transcript ' +
+          'as a text block, or switch the provider to Gemini or an OpenAI-compat GPT-4o Audio endpoint.',
+        );
+      }
+    }
+  }
 }
 
 module.exports = AnthropicLLMService;

@@ -201,6 +201,13 @@ function translateMessage(m) {
         'PDF/document blocks are not supported via the Bedrock Converse API. ' +
         'For Claude-on-Bedrock PDFs, use the InvokeModelCommand path directly.',
       );
+    } else if (block?.type === 'audio') {
+      throw new Error(
+        'Audio blocks are not supported via the Bedrock Converse path today. ' +
+        'Nova Sonic + Nova speech models require the InvokeModelCommand path or ' +
+        'the Bidirectional Streaming API. Transcribe client-side (Amazon Transcribe) ' +
+        'and pass the transcript as a text block for now.',
+      );
     }
   }
   return { role: m.role, content };

@@ -198,6 +198,23 @@ function translateMessage(m) {
           'Convert the URL client-side or use imageFromFile() for local files.',
         );
       }
+    } else if (block?.type === 'audio') {
+      const src = block.source ?? {};
+      if (src.type === 'base64') {
+        // Gemini supports inline audio (wav / mp3 / m4a / ogg / flac / aac) up
+        // to the request-size limit. Same wire shape as inline images.
+        parts.push({ inlineData: { mimeType: src.media_type ?? 'audio/mpeg', data: src.data } });
+      } else if (src.type === 'url') {
+        // Google Cloud Storage URIs (gs://...) are the only URL scheme Gemini
+        // will fetch. HTTP URLs get a clear error so users know to download.
+        if (typeof src.url === 'string' && src.url.startsWith('gs://')) {
+          parts.push({ fileData: { mimeType: src.media_type ?? 'audio/mpeg', fileUri: src.url } });
+        } else {
+          throw new Error(
+            'Gemini fetches audio only from gs:// URIs. For HTTP URLs, download client-side and pass via audioFromBase64() or audioFromFile().',
+          );
+        }
+      }
     } else if (block?.type === 'tool_use') {
       parts.push({ functionCall: { name: block.name, args: block.input } });
     } else if (block?.type === 'tool_result') {

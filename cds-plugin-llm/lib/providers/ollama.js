@@ -118,6 +118,13 @@ function translateMessage(m) {
         'and pass them as image blocks to a vision model like llava or llama3.2-vision.'
       );
     }
+    else if (block?.type === 'audio') {
+      throw new Error(
+        'Audio blocks are not supported on Ollama today. Transcribe the audio client-side ' +
+        '(e.g. via whisper.cpp) and pass the transcript as a text block, or switch the '  +
+        "provider to Gemini (native inline audio) or an OpenAI-compat GPT-4o Audio endpoint."
+      );
+    }
   }
   const out = { role: m.role, content: textParts.join('\n') };
   if (images.length) out.images = images;

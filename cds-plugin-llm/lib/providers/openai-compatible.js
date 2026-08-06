@@ -229,7 +229,40 @@ function translateBlock(block) {
     }
     throw new Error(`Unsupported document source type: ${src.type}`);
   }
+  if (block.type === 'audio') {
+    const src = block.source ?? {};
+    if (src.type === 'base64') {
+      // OpenAI-compat audio content-block. GPT-4o Audio + gateways that mirror
+      // that shape accept this. Format value is the extension without the
+      // leading dot: 'wav', 'mp3', 'flac', etc. Other providers 400 upstream —
+      // that's the honest signal that the model doesn't speak audio.
+      const format = mediaTypeToOpenAiFormat(src.media_type);
+      return { type: 'input_audio', input_audio: { data: src.data, format } };
+    }
+    if (src.type === 'url') {
+      throw new Error(
+        'OpenAI-compat providers do not accept audio by URL directly. Fetch client-side and pass via audioFromBase64() or audioFromFile().',
+      );
+    }
+    throw new Error(`Unsupported audio source type: ${src.type}`);
+  }
   return null;
+}
+
+function mediaTypeToOpenAiFormat(mediaType) {
+  // OpenAI's input_audio.format expects the codec/container name, not the
+  // MIME type. Map the media types we support in audioFromFile.
+  const map = {
+    'audio/wav':  'wav',
+    'audio/mpeg': 'mp3',
+    'audio/mp4':  'mp4',
+    'audio/ogg':  'ogg',
+    'audio/flac': 'flac',
+    'audio/aac':  'aac',
+    'audio/opus': 'opus',
+    'audio/webm': 'webm',
+  };
+  return map[mediaType] ?? 'mp3';
 }
 
 /**
