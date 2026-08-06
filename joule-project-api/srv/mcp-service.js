@@ -118,7 +118,99 @@ function buildResources({ getCache, getBudget, getGuardrails, getInjectionGuard,
   // request. Powered by cds-plugin-llm 1.37.0.
   if (schemas?.asMcpResource) resources.push(schemas.asMcpResource());
 
+  // config://chain — snapshot of the wired middleware order + per-middleware
+  // config. Lets an MCP client (or a Joule reasoning step) inspect the plugin
+  // stack live, without reading source. Order below MUST match the actual
+  // llm.use() call order in ai-service.js (see the "Middleware stack" comment).
+  resources.push({
+    uri:         'config://chain',
+    name:        'LLM middleware chain',
+    description: 'The wired middleware order with per-middleware config. Order is OUTER→INNER (top of list runs first on the way DOWN, last on the way UP).',
+    mimeType:    'application/json',
+    read:        async () => buildChainSnapshot({
+      getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
+    }),
+  });
+
   return resources;
+}
+
+/**
+ * Snapshot the middleware chain as wired in ai-service.js's getLLM(). The
+ * order is hand-maintained in this function AND in ai-service.js — if you
+ * add / remove / reorder llm.use() calls there, mirror the change here.
+ * The reason we don't just walk `svc.middleware` is that middleware
+ * functions don't carry a self-identifying label; asMcpResource() URIs do,
+ * so we key by the middleware instance we already have via getters.
+ */
+async function buildChainSnapshot({ getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry }) {
+  const order = [];
+  let position = 0;
+  const push = async (kind, mw) => {
+    if (!mw) return;
+    let config = null;
+    try {
+      if (typeof mw.asMcpResource === 'function') {
+        const res = mw.asMcpResource();
+        if (typeof res?.handler === 'function') {
+          const payload = await res.handler();
+          // Strip live counters — snapshot is about CONFIG, not state.
+          // asMcpResource() payloads for observability primitives return
+          // both. Consumers wanting counters read the per-primitive
+          // resource (config://cache, config://budget, ...) directly.
+          config = stripCounters(payload);
+        }
+      }
+    } catch (e) {
+      config = { error: e.message };
+    }
+    order.push({ position: position++, kind, config });
+  };
+
+  // Order matches ai-service.js's getLLM() llm.use() sequence:
+  //   promptInjectionGuard → guardrails → costBudget → retryOnRateLimit →
+  //   usageMeteringToCap → responseCache
+  await push('promptInjectionGuard', getInjectionGuard?.());
+  await push('guardrails',           getGuardrails?.());
+  await push('costBudget',           getBudget?.());
+  await push('retryOnRateLimit',     getRetry?.());
+  await push('usageMeteringToCap',   getMetering?.());
+  await push('responseCache',        getCache?.());
+
+  return {
+    order,
+    summary: {
+      count:           order.length,
+      hasInjection:    order.some((m) => m.kind === 'promptInjectionGuard'),
+      hasGuardrails:   order.some((m) => m.kind === 'guardrails'),
+      hasBudget:       order.some((m) => m.kind === 'costBudget'),
+      hasRetry:        order.some((m) => m.kind === 'retryOnRateLimit'),
+      hasMetering:     order.some((m) => m.kind === 'usageMeteringToCap'),
+      hasCache:        order.some((m) => m.kind === 'responseCache'),
+    },
+  };
+}
+
+// Live counters we deliberately strip from the config snapshot. The chain
+// resource is about STRUCTURE + tuning; state belongs on the per-primitive
+// resources (config://cache, config://budget, ...).
+const COUNTER_KEYS = new Set([
+  'hits', 'misses', 'skips', 'semanticHits', 'semanticMisses', 'embedderErrors',
+  'hitRate', 'size', 'semanticIndexSize',
+  'total', 'perTenant', 'perModel', 'current',
+  'inputBlocks', 'outputBlocks', 'inputRedacts', 'outputRedacts',
+  'scanned', 'blocked', 'sanitized', 'warned', 'byDetector',
+  'totalRequests', 'totalInputTokens', 'totalOutputTokens', 'totalCost', 'totalCachedHits', 'totalCostSaved',
+  'byModel', 'byTenant', 'byProvider', 'rateLimits',
+  'requests', 'retriedRequests', 'totalRetries', 'givenUp', 'totalWaitMs',
+]);
+function stripCounters(payload) {
+  if (!payload || typeof payload !== 'object') return payload;
+  const out = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (!COUNTER_KEYS.has(k)) out[k] = v;
+  }
+  return out;
 }
 
 // ---- Resource templates ---------------------------------------------
