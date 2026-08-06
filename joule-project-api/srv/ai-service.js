@@ -11,6 +11,8 @@ const {
   promptInjectionGuard, PromptInjectionError,
   schemas,
   prometheusHandler,
+  streamTools,
+  DEFAULT_COORDINATOR_SYSTEM,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -236,6 +238,128 @@ function getMetering() { return _metering; }
  *     data: {"type":"text_delta","text":"Steel "}\n\n
  *     data: {"type":"done","text":"...","usage":{...},"model":"..."}\n\n
  */
+/**
+ * SSE handler for the multi-agent analyzeScenario flow. Wraps the same
+ * 3-specialist setup as the OData action, but runs it through streamTools
+ * so tool-call events flow to the browser as they happen.
+ *
+ * Uses the same specialist→tool conversion that runAgents() does internally:
+ * each specialist becomes an `invoke_<name>` tool with a single `question`
+ * arg. The coordinator (an LLMService instance backed by our alias) drives
+ * the loop via streamTools; every event is written to the SSE stream.
+ */
+function makeAnalyzeScenarioStreamHandler(llm) {
+  return async (req, res) => {
+    const { scenario } = req.body ?? {};
+    if (!scenario) {
+      res.status(400).json({ error: 'scenario is required in JSON body' });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const write = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+    try {
+      const specialists = buildScenarioSpecialists(llm);
+      const tools = specialists.map((agent) => ({
+        name: `invoke_${agent.name}`,
+        description: agent.description,
+        input_schema: {
+          type: 'object',
+          properties: {
+            question: {
+              type: 'string',
+              description: `The question or task for the ${agent.name} specialist. Be specific — the specialist can't see the original user task.`,
+            },
+          },
+          required: ['question'],
+        },
+        run: async ({ question }) => {
+          const result = await agent.run({ input: question });
+          return typeof result === 'string' ? result : (result?.text ?? '');
+        },
+      }));
+
+      for await (const evt of streamTools({
+        llm,
+        system: DEFAULT_COORDINATOR_SYSTEM,
+        messages: [{ role: 'user', content: scenario }],
+        tools,
+        maxSteps: 8,
+      })) {
+        // Client disconnect: any write throws → catch aborts the loop
+        write(evt);
+      }
+      res.end();
+    } catch (e) {
+      try { write({ type: 'error', message: e.message }); res.end(); }
+      catch { /* socket gone */ }
+    }
+  };
+}
+
+/**
+ * Build the same specialist trio used by the OData analyzeScenario action.
+ * Shared so streaming + non-streaming paths route through identical prompts
+ * and tool wiring (contract-lookup uses the @rag hybrid search).
+ */
+function buildScenarioSpecialists(llm) {
+  const searchContracts = {
+    name: 'search_contracts',
+    description: 'Semantic + keyword search over supplier contracts. Returns the top matching contracts as JSON.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Natural-language question or exact ID like CTR-2026-101.' },
+        topK:  { type: 'integer', description: '1-10; default 5' },
+      },
+      required: ['query'],
+    },
+    run: async ({ query, topK }) => {
+      const hits = await cds.vectorHana.searchByMeaning({
+        entity: 'ProcurementService.SupplierContracts',
+        query,
+        topK: topK ?? 5,
+      });
+      return JSON.stringify(hits.map((h) => ({
+        ID:           h.id,
+        supplierName: h.metadata?.supplierName,
+        contractType: h.metadata?.contractType,
+        region:       h.metadata?.region,
+        text:         h.text,
+      })), null, 2);
+    },
+  };
+
+  return [
+    new Agent({
+      name: 'contract-lookup',
+      description: 'Answers questions about supplier contracts. Give it the question in plain English (or a literal contract ID).',
+      llm,
+      system: CONTRACT_LOOKUP_SYSTEM,
+      tools: [searchContracts],
+      maxSteps: 3,
+    }),
+    new Agent({
+      name: 'price-analyst',
+      description: 'Extracts pricing terms from a piece of contract text. Give it the contract text or a summary, plus the question.',
+      llm,
+      system: PRICE_ANALYST_SYSTEM,
+    }),
+    new Agent({
+      name: 'compliance-checker',
+      description: 'Flags compliance concerns (REACH, RoHS, GDPR, sanctions, green claims) in a contract or scenario.',
+      llm,
+      system: COMPLIANCE_CHECKER_SYSTEM,
+    }),
+  ];
+}
+
 function makeStreamHandler(llm) {
   return async (req, res) => {
     const { purchaseOrderId, poJson } = req.body ?? {};
@@ -325,6 +449,26 @@ module.exports = class AIService extends cds.ApplicationService {
         '/stream/summarizePurchaseOrder',
         express.json({ limit: '1mb' }),
         makeStreamHandler(llm),
+      );
+
+      // Multi-agent analyzeScenario with LIVE progress over SSE (new in 0.10.0).
+      // Runs the same 3-specialist supervisor flow as the OData
+      // POST /ai/analyzeScenario action, but yields streamTools() events one
+      // at a time so a chat UI can render tool-call badges while the
+      // coordinator + specialists work. Powered by cds-plugin-llm 1.39.0.
+      //
+      //   POST /stream/analyzeScenario
+      //   body: { scenario }
+      //   response: text/event-stream — one JSON event per line
+      //     data: {"type":"turn_start","step":1}
+      //     data: {"type":"text","step":1,"text":"I'll check the contracts first..."}
+      //     data: {"type":"tool_call_start","step":1,"name":"invoke_contract-lookup","input":{...}}
+      //     data: {"type":"tool_call_result","step":1,"name":"invoke_contract-lookup","result":"...","isError":false}
+      //     data: {"type":"done","step":3,"text":"...","toolCalls":[...],"usage":{...}}
+      cds.app.post(
+        '/stream/analyzeScenario',
+        express.json({ limit: '1mb' }),
+        makeAnalyzeScenarioStreamHandler(llm),
       );
 
       // Ops dashboard for the response cache. Combined with the
@@ -523,60 +667,12 @@ module.exports = class AIService extends cds.ApplicationService {
     // usageMeteringToCap rows in FinanceService.LlmSpend per LLM call.
     this.on('analyzeScenario', async (req) => {
       const { scenario } = req.data;
-
-      // Tool wired to the vector-hana plugin's hybrid search. The agent
-      // will call this whenever the scenario mentions a supplier / contract.
-      const searchContracts = {
-        name: 'search_contracts',
-        description: 'Semantic + keyword search over supplier contracts. Returns the top matching contracts as JSON.',
-        input_schema: {
-          type: 'object',
-          properties: {
-            query: { type: 'string', description: 'Natural-language question or exact ID like CTR-2026-101.' },
-            topK:  { type: 'integer', description: '1-10; default 5' },
-          },
-          required: ['query'],
-        },
-        run: async ({ query, topK }) => {
-          const hits = await cds.vectorHana.searchByMeaning({
-            entity: 'ProcurementService.SupplierContracts',
-            query,
-            topK: topK ?? 5,
-          });
-          return JSON.stringify(hits.map((h) => ({
-            ID:           h.id,
-            supplierName: h.metadata?.supplierName,
-            contractType: h.metadata?.contractType,
-            region:       h.metadata?.region,
-            text:         h.text,
-          })), null, 2);
-        },
-      };
-
-      const contractLookup = new Agent({
-        name: 'contract-lookup',
-        description: 'Answers questions about supplier contracts. Give it the question in plain English (or a literal contract ID).',
-        llm,
-        system: CONTRACT_LOOKUP_SYSTEM,
-        tools: [searchContracts],
-        maxSteps: 3,
-      });
-      const priceAnalyst = new Agent({
-        name: 'price-analyst',
-        description: 'Extracts pricing terms from a piece of contract text. Give it the contract text or a summary, plus the question.',
-        llm,
-        system: PRICE_ANALYST_SYSTEM,
-      });
-      const complianceChecker = new Agent({
-        name: 'compliance-checker',
-        description: 'Flags compliance concerns (REACH, RoHS, GDPR, sanctions, green claims) in a contract or scenario.',
-        llm,
-        system: COMPLIANCE_CHECKER_SYSTEM,
-      });
-
+      // Shared with the /stream/analyzeScenario SSE endpoint — both flows
+      // use identical prompts + tool wiring (contract-lookup uses the
+      // @rag hybrid search). See buildScenarioSpecialists() above.
       const result = await runAgents({
         coordinator: llm,
-        agents: [contractLookup, priceAnalyst, complianceChecker],
+        agents: buildScenarioSpecialists(llm),
         input: scenario,
         maxSteps: 8,
       });
