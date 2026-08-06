@@ -234,6 +234,16 @@ curl -s -X POST http://127.0.0.1:3334/mcp \
   -d '{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"config://budget"}}' | jq -r '.result.contents[0].text' | jq
 ```
 
+### Live agent-progress UI
+
+`app/analyze-scenario/` ships a zero-framework, vanilla-JS SSE client that visualises the `/stream/analyzeScenario` endpoint (from demo-app 0.10.0 + `streamAgents` in cds-plugin-llm 1.41.0). Open http://localhost:4004/analyze-scenario/index.html once cds-serve is up. The page renders:
+
+- **Coordinator bubble** streaming token-by-token as `text_delta` events arrive (1.42.0+ providers) with a blinking cursor; falls back to atomic-text commits when the provider only emits `text` events.
+- **Per-specialist cards** for `contract-lookup / price-analyst / compliance-checker`: cards flip to yellow (running) on `agent_call_start`, then green (done) or red (error) on `agent_call_result`. Each card shows the coordinator's question + the specialist's answer.
+- **Final trace panel** on `done` — one row per specialist invocation matching the `runAgents()` return shape, plus aggregated usage tokens + stopReason.
+
+Uses `fetch` + `ReadableStream` reader (not `EventSource`) because SSE-over-POST is required. AbortController wired to the Stop button. About 200 lines of JS + 200 lines of CSS, no bundler, no dependencies. Screenshare-ready.
+
 ### Try the multi-agent orchestrator
 
 Ask a scenario question that spans multiple procurement lenses. The supervisor decides which specialists to call, in what order, and folds their answers together:

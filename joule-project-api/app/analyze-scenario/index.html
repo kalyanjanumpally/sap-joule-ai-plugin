@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Procurement scenario analyzer — live stream</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <strong>Procurement Copilot</strong>
+      <span class="tag">multi-agent · live SSE</span>
+    </div>
+    <div class="conn">
+      <span id="conn-status" class="dot idle" title="disconnected"></span>
+      <span id="conn-label">idle</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="prompt">
+      <label for="scenario">Scenario</label>
+      <textarea id="scenario" rows="4" placeholder="e.g. Our aluminum supplier in EMEA missed the last two deliveries. Renegotiate rate cards? Check compliance for a fallback in APAC.">Our aluminum supplier in EMEA missed the last two deliveries. Check the contract for penalty clauses, then compare with any alternative EMEA suppliers, and flag compliance concerns for a fallback in APAC.</textarea>
+      <div class="controls">
+        <button id="run" type="button">Analyze</button>
+        <button id="stop" type="button" disabled>Stop</button>
+        <span class="turn-badge" id="turn-badge" hidden></span>
+      </div>
+    </section>
+
+    <section class="stream">
+      <div class="agents" id="agents"></div>
+      <div class="coordinator">
+        <h3>Coordinator</h3>
+        <div id="coordinator-text" class="chat-bubble"></div>
+      </div>
+    </section>
+
+    <section class="done" id="done-panel" hidden>
+      <h3>Final trace</h3>
+      <div id="trace"></div>
+      <p class="stats" id="stats"></p>
+    </section>
+  </main>
+
+  <script src="./client.js"></script>
+</body>
+</html>
