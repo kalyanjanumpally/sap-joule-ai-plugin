@@ -1,5 +1,5 @@
 const cds = require('@sap/cds');
-const { createStreamableHttpTransport } = require('@saptarishi/cds-plugin-llm');
+const { createStreamableHttpTransport, schemas } = require('@saptarishi/cds-plugin-llm');
 const { MCPServer } = require('@saptarishi/cds-plugin-llm/lib/mcp/server');
 
 /**
@@ -117,13 +117,19 @@ function buildResources({ getCache, getBudget, getGuardrails, getInjectionGuard,
     },
   });
 
+  // schema://list — enumerates every structured-output schema shipped in the
+  // plugin. Useful for LLM-driven tool discovery: an agent can list the
+  // available shapes then read schema://{name} to construct a matching
+  // request. Powered by cds-plugin-llm 1.37.0.
+  if (schemas?.asMcpResource) resources.push(fromMiddleware(schemas.asMcpResource()));
+
   return resources;
 }
 
 // ---- Resource templates ---------------------------------------------
 
 function buildResourceTemplates() {
-  return [
+  const out = [
     {
       uriTemplate: 'finance://llm-spend/recent?limit={limit}',
       name:        'Recent LlmSpend rows',
@@ -140,6 +146,22 @@ function buildResourceTemplates() {
       },
     },
   ];
+
+  // schema://{name} — resolves any shipped schema to its raw JSON. Powered
+  // by cds-plugin-llm 1.37.0 (bridged handler → read the same way as the
+  // static resources above).
+  if (schemas?.asMcpResourceTemplate) {
+    const t = schemas.asMcpResourceTemplate();
+    out.push({
+      uriTemplate: t.uriTemplate,
+      name:        t.name,
+      description: t.description,
+      mimeType:    t.mimeType ?? 'application/json',
+      read:        async (params) => t.handler(params),
+    });
+  }
+
+  return out;
 }
 
 // ---- Tools -----------------------------------------------------------
