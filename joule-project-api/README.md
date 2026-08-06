@@ -234,6 +234,16 @@ curl -s -X POST http://127.0.0.1:3334/mcp \
   -d '{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"config://budget"}}' | jq -r '.result.contents[0].text' | jq
 ```
 
+### Live ops dashboard
+
+`app/ops-dashboard/` ships a single-pane observability view at http://localhost:4004/ops-dashboard/index.html. Polls all the `/*-stats` HTTP endpoints (plus MCP `config://chain`) on a configurable interval and renders:
+
+- **Budget panel** — total spend with a green→amber→red gradient bar; per-tenant + per-model breakdowns with individual mini-bars showing ratio-to-limit.
+- **KPI tiles** (cache hit rate, retry rate, guardrails blocks, injection scans) — one glance shows whether anything's degraded.
+- **Middleware chain** — snapshot from `config://chain` MCP resource showing OUTER→INNER order + a one-line config preview per middleware.
+
+Header controls: polling interval (1–60s), pause/resume, live-connection dot with last-updated timestamp. Zero framework, zero deps, ~250 LOC JS + CSS. Sits nicely next to the `/analyze-scenario/` streaming demo for a full "operator vs. user" pair in demos.
+
 ### Live agent-progress UI
 
 `app/analyze-scenario/` ships a zero-framework, vanilla-JS SSE client that visualises the `/stream/analyzeScenario` endpoint (from demo-app 0.10.0 + `streamAgents` in cds-plugin-llm 1.41.0). Open http://localhost:4004/analyze-scenario/index.html once cds-serve is up. The page renders:

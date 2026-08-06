@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Ops — live dashboard</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <strong>Procurement Copilot — Ops</strong>
+      <span class="tag">live · polls every <span id="poll-interval">3</span>s</span>
+    </div>
+    <div class="controls">
+      <label for="interval">Interval (s)</label>
+      <input id="interval" type="number" min="1" max="60" value="3" />
+      <button id="pause" type="button">Pause</button>
+      <span class="conn">
+        <span id="conn-status" class="dot idle"></span>
+        <span id="conn-label">idle</span>
+      </span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Row 1: cost budget -->
+    <section class="panel budget">
+      <div class="panel-header">
+        <h3>Budget · daily spend</h3>
+        <span class="subtitle" id="budget-window">–</span>
+      </div>
+      <div class="budget-total" id="budget-total"></div>
+      <div class="budget-breakdown">
+        <div class="col">
+          <h4>Per tenant</h4>
+          <div id="budget-tenants" class="rows"></div>
+        </div>
+        <div class="col">
+          <h4>Per model</h4>
+          <div id="budget-models" class="rows"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Row 2: cache + retry + guardrails + injection (KPI grid) -->
+    <section class="kpi-grid">
+      <div class="panel kpi">
+        <h3>Cache</h3>
+        <div class="kpi-primary" id="cache-hitrate">–</div>
+        <div class="kpi-sub" id="cache-sub">exact 0 · semantic 0 · miss 0</div>
+      </div>
+      <div class="panel kpi">
+        <h3>Retry</h3>
+        <div class="kpi-primary" id="retry-retried">–</div>
+        <div class="kpi-sub" id="retry-sub">0 attempts · 0s waited · 0 gave up</div>
+      </div>
+      <div class="panel kpi">
+        <h3>Guardrails</h3>
+        <div class="kpi-primary" id="guardrails-blocks">–</div>
+        <div class="kpi-sub" id="guardrails-sub">blocks in/out · redacts in/out</div>
+      </div>
+      <div class="panel kpi">
+        <h3>Injection guard</h3>
+        <div class="kpi-primary" id="injection-scanned">–</div>
+        <div class="kpi-sub" id="injection-sub">blocked / sanitized / warned</div>
+      </div>
+    </section>
+
+    <!-- Row 3: chain snapshot -->
+    <section class="panel chain">
+      <div class="panel-header">
+        <h3>Middleware chain</h3>
+        <span class="subtitle">OUTER → INNER</span>
+      </div>
+      <ol class="chain-list" id="chain-list"></ol>
+    </section>
+  </main>
+
+  <script src="./client.js"></script>
+</body>
+</html>
