@@ -305,3 +305,39 @@ test('guardrails: input redact composes with output redact', async () => {
   // Input scrubbed to '[IN]', LLM echoes 'the [IN] value', output scrubs '[IN]' → '[OUT]'
   assert.equal(res.text, 'the [OUT] value');
 });
+
+// ---- reset() + asMcpResource() (new in 1.35.1) -----------------------
+
+test('guardrails: reset() zeroes all four counters', async () => {
+  const svc = makeSvc(); await svc.init();
+  const gr = guardrails({
+    inputFilters:  [filters.blocklist(['SECRET'], { mode: 'block' })],
+    outputFilters: [filters.blocklist(['LEAK'],   { mode: 'redact', replacement: 'X' })],
+  });
+  svc.use(gr);
+  await svc.chat({ messages: [{ role: 'user', content: 'contains SECRET' }] }).catch(() => {});
+  assert.equal(gr.stats.inputBlocks, 1);
+  gr.reset();
+  assert.equal(gr.stats.inputBlocks, 0);
+  assert.equal(gr.stats.outputBlocks, 0);
+  assert.equal(gr.stats.inputRedacts, 0);
+  assert.equal(gr.stats.outputRedacts, 0);
+});
+
+test('guardrails: asMcpResource returns config://guardrails with live counters', async () => {
+  const svc = makeSvc(); await svc.init();
+  const gr = guardrails({
+    inputFilters:  [filters.blocklist(['SECRET'], { mode: 'block' })],
+    outputFilters: [filters.blocklist(['LEAK'],   { mode: 'redact', replacement: 'X' })],
+  });
+  svc.use(gr);
+  await svc.chat({ messages: [{ role: 'user', content: 'contains SECRET' }] }).catch(() => {});
+  const r = gr.asMcpResource();
+  assert.equal(r.uri, 'config://guardrails');
+  assert.equal(r.mimeType, 'application/json');
+  const payload = r.handler();
+  assert.equal(payload.inputBlocks, 1);
+  assert.equal(payload.outputBlocks, 0);
+  assert.equal(payload.inputFilters,  1);
+  assert.equal(payload.outputFilters, 1);
+});

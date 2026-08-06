@@ -4,6 +4,33 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.1] — 2026-08-06
+
+### Added
+
+- **`guardrails().reset()` + `guardrails().asMcpResource()`** — brings the guardrails middleware in line with the observability pattern used by `costBudget`, `responseCache`, `promptInjectionGuard`, and `usageMetering`. Consumers who register `mw.asMcpResource()` on an MCP server no longer need a hand-rolled adapter for `config://guardrails`.
+
+  ```js
+  const gr = guardrails({ inputFilters: [...], outputFilters: [...] });
+  llm.use(gr);
+  mcpServer.registerResource({ ...gr.asMcpResource(), read: gr.asMcpResource().handler });
+  gr.reset();   // zero all counters (useful in tests + after admin review)
+  ```
+
+  Resource shape (`config://guardrails`, JSON):
+  ```json
+  { "inputBlocks": 0, "outputBlocks": 0, "inputRedacts": 0, "outputRedacts": 0,
+    "inputFilters": 3, "outputFilters": 1 }
+  ```
+
+- **TS defs updated:** `GuardrailsMiddleware` now declares `reset(): void` + `asMcpResource(): { uri: 'config://guardrails', ... }`.
+
+- **2 new tests** (723 total): `reset()` zeroes all four counters after a real block; `asMcpResource()` returns `config://guardrails` with live counters + filter counts.
+
+### Notes
+
+- **Fully backward-compatible.** `guardrails()` returns the same middleware function; the new methods are attached to it. Existing consumers of `gr.stats` are unchanged.
+
 ## [1.35.0] — 2026-08-06
 
 ### Added

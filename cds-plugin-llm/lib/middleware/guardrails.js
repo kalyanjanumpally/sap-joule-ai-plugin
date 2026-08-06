@@ -113,6 +113,29 @@ function guardrails(options = {}) {
   };
 
   mw.stats = stats;
+  mw.reset = () => {
+    stats.inputBlocks = 0;
+    stats.outputBlocks = 0;
+    stats.inputRedacts = 0;
+    stats.outputRedacts = 0;
+  };
+  // Ready-to-register MCP resource — matches the pattern used by
+  // costBudget / responseCache / promptInjectionGuard / usageMetering.
+  // Consumers wire this into an MCPServer directly.
+  mw.asMcpResource = () => ({
+    uri: 'config://guardrails',
+    name: 'Guardrails input/output filters',
+    description: 'Block + redact counters across input + output filter stages.',
+    mimeType: 'application/json',
+    handler: () => ({
+      inputBlocks:   stats.inputBlocks,
+      outputBlocks:  stats.outputBlocks,
+      inputRedacts:  stats.inputRedacts,
+      outputRedacts: stats.outputRedacts,
+      inputFilters:  inputFilters.length,
+      outputFilters: outputFilters.length,
+    }),
+  });
   return mw;
 }
 

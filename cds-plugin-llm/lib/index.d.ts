@@ -1137,6 +1137,16 @@ export interface GuardrailsStats {
 
 export interface GuardrailsMiddleware extends Middleware {
   stats: GuardrailsStats;
+  /** Zero all counters. @since 1.35.1 */
+  reset(): void;
+  /** MCP resource dumping the stats — matches the pattern on other observability middleware. @since 1.35.1 */
+  asMcpResource(): {
+    uri: 'config://guardrails';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => GuardrailsStats & { inputFilters: number; outputFilters: number };
+  };
 }
 
 /**
