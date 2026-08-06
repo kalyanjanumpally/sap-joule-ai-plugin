@@ -148,25 +148,25 @@ async function runTools({
  *
  * Event types (all include `step: 1..maxSteps`):
  *   { type: 'turn_start', step }
- *   { type: 'text', step, text }                              — assistant text for the turn (atomic; not deltas)
+ *   { type: 'text_delta', step, text }                        — token-level text (1.42.0+ when llm.stream() available)
+ *   { type: 'text', step, text }                              — assistant text for the turn (atomic; end of turn)
  *   { type: 'tool_call_start',  step, id, name, input }       — tool about to run
  *   { type: 'tool_call_result', step, id, name, result, isError }
  *   { type: 'done', step, text, messages, usage, steps, toolCalls, model, stopReason }
  *
- * `text` is emitted atomically per turn (one string per assistant response,
- * not token-level deltas). Token-level streaming requires provider changes
- * to preserve tool_calls state through the stream and is a follow-up.
- * Consumers wanting text_delta today should use `llm.stream()` directly
- * for non-agent flows.
+ * If the provided LLM exposes `stream()`, the loop uses it and emits per-token
+ * `text_delta` events during a turn, then a final `text` event with the
+ * fully-accumulated turn text. If only `chat()` is available (or per-request
+ * override `stream: false`), text is emitted atomically per turn.
  *
  *   for await (const evt of streamTools({ llm, system, messages, tools, maxSteps: 8 })) {
- *     if (evt.type === 'text') writeToChat(evt.text);
+ *     if (evt.type === 'text_delta') appendToChatBubble(evt.text);
  *     if (evt.type === 'tool_call_start') showBadge(evt.name, evt.input);
  *     if (evt.type === 'tool_call_result') hideBadge(evt.name);
  *     if (evt.type === 'done') finalize(evt);
  *   }
  *
- * @since 1.39.0
+ * @since 1.39.0 (initial atomic-text version), 1.42.0 (text_delta streaming)
  */
 async function* streamTools({
   llm,
@@ -199,49 +199,80 @@ async function* streamTools({
   let history = messages.slice();
   const executedCalls = [];
   const usage = { input_tokens: 0, output_tokens: 0 };
+  // Prefer streaming when the LLM exposes it AND the caller didn't opt out.
+  // Providers wire tool_calls onto the done chunk (see openai-compatible.js,
+  // anthropic.js) so a streamed turn is functionally equivalent to a chat turn.
+  const useStream = rest.stream !== false && typeof llm.stream === 'function';
 
   for (let step = 1; step <= maxSteps; step++) {
     yield { type: 'turn_start', step };
 
-    const response = await llm.chat({
-      ...rest,
-      system,
-      messages: history,
-      tools: providerTools,
-    });
-
-    usage.input_tokens  += response.usage?.input_tokens  ?? 0;
-    usage.output_tokens += response.usage?.output_tokens ?? 0;
-
-    if (response.text) {
-      yield { type: 'text', step, text: response.text };
+    let text = '', toolCalls, model, stopReason, turnUsage = {};
+    if (useStream) {
+      let accumulated = '';
+      for await (const chunk of llm.stream({
+        ...rest,
+        system,
+        messages: history,
+        tools: providerTools,
+      })) {
+        if (chunk?.type === 'text_delta' && typeof chunk.text === 'string') {
+          accumulated += chunk.text;
+          yield { type: 'text_delta', step, text: chunk.text };
+        } else if (chunk?.type === 'done') {
+          text       = chunk.text ?? accumulated;
+          toolCalls  = chunk.toolCalls;
+          model      = chunk.model;
+          stopReason = chunk.stopReason;
+          turnUsage  = chunk.usage ?? {};
+        }
+      }
+    } else {
+      const response = await llm.chat({
+        ...rest,
+        system,
+        messages: history,
+        tools: providerTools,
+      });
+      text       = response.text ?? '';
+      toolCalls  = response.toolCalls;
+      model      = response.model;
+      stopReason = response.stopReason;
+      turnUsage  = response.usage ?? {};
     }
 
-    if (!response.toolCalls?.length) {
+    usage.input_tokens  += turnUsage.input_tokens  ?? 0;
+    usage.output_tokens += turnUsage.output_tokens ?? 0;
+
+    if (text) {
+      yield { type: 'text', step, text };
+    }
+
+    if (!toolCalls?.length) {
       const finalMessages = [
         ...history,
-        { role: 'assistant', content: response.text ?? '' },
+        { role: 'assistant', content: text },
       ];
       yield {
         type: 'done',
         step,
-        text: response.text ?? '',
+        text,
         messages: finalMessages,
         usage,
         steps: step,
         toolCalls: executedCalls,
-        model: response.model,
-        stopReason: response.stopReason,
+        model,
+        stopReason,
       };
       return;
     }
 
     history = [
       ...history,
-      { role: 'assistant', content: response.text ?? null, toolCalls: response.toolCalls },
+      { role: 'assistant', content: text || null, toolCalls },
     ];
 
-    for (const call of response.toolCalls) {
+    for (const call of toolCalls) {
       yield { type: 'tool_call_start', step, id: call.id, name: call.name, input: call.input ?? {} };
 
       const tool = toolIndex.get(call.name);

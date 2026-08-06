@@ -4,6 +4,38 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.42.0] — 2026-08-06
+
+### Added
+
+- **Token-level `text_delta` streaming in `streamTools()` + `streamAgents()`.** Closes the follow-up noted in 1.39.0 CHANGELOG. Chat UIs now stream assistant text word-by-word during a turn instead of waiting for atomic per-turn text. Automatic when the LLM exposes `stream()`; falls back to the existing atomic-text path when only `chat()` is available.
+
+  ```js
+  for await (const evt of streamTools({ llm, system, messages, tools })) {
+    switch (evt.type) {
+      case 'text_delta':          appendToChatBubble(evt.text);   break;  // NEW in 1.42.0
+      case 'text':                commitBubble(evt.text);          break;  // still emitted at end-of-turn
+      case 'tool_call_start':     showBadge(evt.name);             break;
+      case 'tool_call_result':    hideBadge(evt.name);             break;
+      case 'done':                finalize(evt);                    break;
+    }
+  }
+  ```
+
+- **Provider streams surface `toolCalls` on the done chunk.** `openai-compatible.js` `_stream` now accumulates `tool_calls` deltas across chunks (they arrive as fragments — `id + function.name` in the first delta, `function.arguments` string built up incrementally across subsequent deltas). `anthropic.js` `_stream` surfaces `tool_use` content blocks the same way. Both use the same `{ id, name, input }` normalized shape as `chat()` — downstream code (streamTools, streamAgents, custom consumers) can treat streamed responses identically to non-streamed ones.
+
+- **`stream: false` opt-out** — pass at the top level to force `streamTools`/`streamAgents` onto the atomic `chat()` path for a specific run. Useful when a caller wants deterministic per-turn timing or when a middleware breaks on streamed chunks.
+
+- **11 new tests** (801 total): `streamTools` uses `stream()` when available (event sequence `turn_start → text_delta+ → text → done`), single-turn tool call with deltas interleaved (7 events in strict order across 2 turns), `stream: false` forces `chat()` (backward-compat), fallback to `chat()` when `llm.stream` is missing, aggregate usage across streamed turns, `streamAgents` inherits streaming behavior end-to-end. Plus OpenAI-compat `_stream` accumulation (single call fragmented across deltas, multiple parallel tool_calls at different indices, text_delta chunks yielded alongside tool-call accumulation) and Anthropic `_stream` (tool_use content blocks surface as toolCalls on done, text-only response omits toolCalls).
+
+### Notes
+
+- **`text` events still emitted at end of turn** with the fully-accumulated turn text. Consumers using the atomic-text path don't need to change — the delta events are additive. UIs that stream deltas can ignore the final `text` event or use it as a "commit bubble" signal.
+- **Backward-compat maintained.** Every scripted-LLM stub in existing test suites uses `chat()` only, so the new streaming path only kicks in when the caller's LLM exposes both `chat()` and `stream()`. All 22 existing `streamTools + streamAgents` tests still pass unchanged.
+- **`text_delta` events do not have a `text` fallback field.** Consumers ignoring the delta events (i.e. old code) see the same event sequence as before: `turn_start`, `text`, `tool_call_start`, `tool_call_result`, `done`. Only NEW consumers subscribing to `text_delta` change behavior.
+- **Provider support:** OpenAI-compat (all subclasses — Azure OpenAI, GenAI Hub, Groq, DeepSeek, Mistral, Fireworks) + Anthropic. Gemini + Bedrock + Ollama streams don't yet surface `toolCalls` on the done chunk; streamTools falls back to atomic text there. Follow-up work.
+- **`stopReason: 'tool_use'`** is set when the model finishes with tool calls (matching the non-streaming path). Consumers can gate agent-loop continuation on this.
+
 ## [1.41.0] — 2026-08-06
 
 ### Added

@@ -315,6 +315,13 @@ OpenAICompatibleLLMService.prototype._stream = async function* _stream(
   let stopReason;
   let respModel = model;
 
+  // Tool-call accumulation (new in 1.42.0). OpenAI-compat deltas may spread
+  // tool_calls across many chunks: the first delta carries `id + function.name`,
+  // subsequent deltas carry incremental `function.arguments` fragments that
+  // concatenate into a JSON string parseable at stream close. We accumulate
+  // per index and emit the fully-assembled toolCalls list on the done chunk.
+  const partialToolCalls = new Map();  // index → { id, name, argsText }
+
   for await (const chunk of res.body) {
     buffer += decoder.decode(chunk, { stream: true });
     // SSE events are separated by blank lines. Keep the tail as it may be partial.
@@ -337,6 +344,18 @@ OpenAICompatibleLLMService.prototype._stream = async function* _stream(
         accumulatedText += delta;
         yield { type: 'text_delta', text: delta };
       }
+      // tool-call deltas — accumulate per index. See partialToolCalls comment above.
+      const toolCallDeltas = choice?.delta?.tool_calls;
+      if (Array.isArray(toolCallDeltas)) {
+        for (const tc of toolCallDeltas) {
+          const idx = tc.index ?? 0;
+          const existing = partialToolCalls.get(idx) ?? { id: undefined, name: undefined, argsText: '' };
+          if (tc.id) existing.id = tc.id;
+          if (tc.function?.name) existing.name = tc.function.name;
+          if (typeof tc.function?.arguments === 'string') existing.argsText += tc.function.arguments;
+          partialToolCalls.set(idx, existing);
+        }
+      }
       if (choice?.finish_reason) stopReason = choice.finish_reason === 'tool_calls' ? 'tool_use' : choice.finish_reason;
       if (evt.usage) {
         usage = {
@@ -348,7 +367,21 @@ OpenAICompatibleLLMService.prototype._stream = async function* _stream(
     }
   }
 
-  yield { type: 'done', text: accumulatedText, usage, stopReason, model: respModel };
+  // Parse accumulated argsText per tool call. Bad JSON → empty object; the
+  // agent loop surfaces the raw text through the tool result so the caller
+  // can decide what to do. Same tolerance as the non-streaming path.
+  const toolCalls = Array.from(partialToolCalls.values())
+    .filter(t => t.name)
+    .map(t => ({ id: t.id, name: t.name, input: safeParseJson(t.argsText) ?? {} }));
+
+  yield {
+    type: 'done',
+    text: accumulatedText,
+    usage,
+    stopReason,
+    model: respModel,
+    ...(toolCalls.length ? { toolCalls } : {}),
+  };
 };
 
 /**

@@ -101,12 +101,21 @@ AnthropicLLMService.prototype._stream = async function* _stream(
     .map(b => b.text)
     .join('');
 
+  // Tool-use blocks on the done chunk (new in 1.42.0). Anthropic's SDK
+  // already assembles the JSON input from input_json_delta events by the
+  // time finalMessage() resolves — we just have to project them into the
+  // unified { id, name, input } shape shared with the OpenAI-compat path.
+  const toolCalls = message.content
+    .filter(b => b.type === 'tool_use')
+    .map(b => ({ id: b.id, name: b.name, input: b.input }));
+
   yield {
     type: 'done',
     text,
     usage: message.usage,
     stopReason: message.stop_reason,
     model: message.model,
+    ...(toolCalls.length ? { toolCalls } : {}),
     ...(_rateLimit ? { _rateLimit } : {}),
   };
 };
