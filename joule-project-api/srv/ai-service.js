@@ -402,14 +402,18 @@ module.exports = class AIService extends cds.ApplicationService {
       const expand = createQueryExpander({ llm, strategy: 'hyde' });
       const rerank = llmRerank({ llm });
       cds.vectorHana.askAbout = async (params = {}) => {
-        const { entity, query, topK, filter, systemInstructions, ...chatOpts } = params;
+        const { entity, query, topK, filter, alpha, systemInstructions, ...chatOpts } = params;
         const store = cds.vectorHana.getStore(entity);
         if (!store) throw new Error(`no @rag store registered for '${entity}' — is the entity annotated?`);
         const rag = new RAG({ llm, store, mode: 'hybrid', expand, rerank });
+        // filter + alpha (both new in vector-hana 0.11.0) are forwarded so
+        // consumers can call the OData action with either or both:
+        //   { query, filter: '{"region":"EMEA"}', alpha: 0.7 }
+        // Undefined values pass through — RAG only exercises them when set.
         return rag.answer({
           query,
           topK: topK ?? 5,
-          filter, systemInstructions, ...chatOpts,
+          filter, alpha, systemInstructions, ...chatOpts,
         });
       };
       cds.vectorHana._ragPipelineInstalled = true;

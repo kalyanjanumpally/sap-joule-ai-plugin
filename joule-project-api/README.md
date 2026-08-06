@@ -45,6 +45,24 @@ curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementServ
 curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.askAbout \
   -H 'content-type: application/json' \
   -d '{"query": "Which suppliers can deliver aluminum in EMEA within 2 weeks and require green-electricity certificates?"}' | jq
+
+# Filtered search — only rows matching the metadata filter get considered.
+# Uses the OData `filter` param (JSON string) added in cds-plugin-vector-hana 0.11.0.
+curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.searchByMeaning \
+  -H 'content-type: application/json' \
+  -d '{"query":"aluminum short lead time","filter":"{\"region\":\"EMEA\"}","topK":5}' | jq
+
+# Hybrid weighting knob — `alpha` in [0, 1]. alpha=1 pure vector, alpha=0 pure keyword,
+# alpha=0.5 balanced RRF (default). Lean vector for abstract queries, lean keyword for
+# exact-token searches (contract IDs, supplier codes). Added in vector-hana 0.11.0.
+curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.searchByMeaning \
+  -H 'content-type: application/json' \
+  -d '{"query":"CTR-2026-101","alpha":0.1,"topK":3}' | jq   # near-pure keyword
+
+# Combined: filter + alpha + topK — e.g. "aluminum in EMEA, prefer semantic match, top 5"
+curl -X POST http://localhost:4004/procurement/SupplierContracts/ProcurementService.askAbout \
+  -H 'content-type: application/json' \
+  -d '{"query":"which supplier can ship aluminum within 2 weeks?","filter":"{\"region\":\"EMEA\"}","alpha":0.7,"topK":5}' | jq
 ```
 
 The `askAbout` handler is customized in `srv/ai-service.js` to run the **full 5-stage RAG pipeline** (all wired up on plugin primitives from cds-plugin-vector-hana 0.10.0):
