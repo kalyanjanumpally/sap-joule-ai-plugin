@@ -8,6 +8,7 @@ const {
   guardrails, filters,
   costBudget, BudgetExceededError,
   promptInjectionGuard, PromptInjectionError,
+  schemas,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -405,16 +406,10 @@ module.exports = class AIService extends cds.ApplicationService {
         messages: [{ role: 'user', content: `Invoice ${invoiceId}:\n${invoiceJson}` }],
         cache: true,
         maxTokens: 400,
-        // Structured output: plugin post-parses the response into `data`
-        format: {
-          type: 'object',
-          properties: {
-            risk: { type: 'string', enum: ['low', 'medium', 'high'] },
-            rationale: { type: 'string' },
-          },
-          required: ['risk', 'rationale'],
-          additionalProperties: false,
-        },
+        // Structured output — use the shipped SupplierRisk schema. Same
+        // {risk enum, rationale, confidence, factors[]} shape as the new
+        // assessSupplierRisk action; UI can render them identically.
+        format: schemas.SupplierRisk,
       });
 
       if (!data?.risk) {
@@ -426,6 +421,8 @@ module.exports = class AIService extends cds.ApplicationService {
         invoiceId,
         risk: data.risk,
         rationale: data.rationale,
+        confidence: data.confidence,
+        factors:    data.factors ?? [],
         tokensUsed: (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0),
         model,
       };
@@ -472,35 +469,9 @@ module.exports = class AIService extends cds.ApplicationService {
           ],
         }],
         maxTokens: 1500,
-        format: {
-          type: 'object',
-          properties: {
-            vendor:        { type: 'string' },
-            invoiceNumber: { type: 'string' },
-            invoiceDate:   { type: 'string' },
-            dueDate:       { type: 'string' },
-            currency:      { type: 'string' },
-            subtotal:      { type: 'number' },
-            tax:           { type: 'number' },
-            total:         { type: 'number' },
-            lineItems: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  description: { type: 'string' },
-                  quantity:    { type: 'number' },
-                  unitPrice:   { type: 'number' },
-                  lineTotal:   { type: 'number' },
-                },
-                required: ['description', 'quantity', 'unitPrice', 'lineTotal'],
-                additionalProperties: false,
-              },
-            },
-          },
-          required: ['vendor', 'total', 'currency', 'lineItems'],
-          additionalProperties: false,
-        },
+        // Shipped Invoice schema. Field-for-field match with the previous
+        // hand-rolled schema — dropped ~30 lines of duplicated shape.
+        format: schemas.Invoice,
       });
 
       if (!data) {
@@ -605,6 +576,40 @@ module.exports = class AIService extends cds.ApplicationService {
           isError:  t.isError,
         })),
         steps: result.steps,
+      };
+    });
+
+    // ---- assessSupplierRisk — free-form supplier risk assessment ------
+    //
+    // Same {risk, rationale, confidence, factors[]} shape as
+    // explainInvoiceRisk, but takes free-text scenario (recent incidents,
+    // geopolitical context, financial signals) instead of a specific
+    // invoice. Uses schemas.SupplierRisk directly — one line vs. ~15 for
+    // a hand-rolled equivalent.
+    this.on('assessSupplierRisk', async (req) => {
+      const { supplierId, scenario } = req.data;
+      const { data, usage, model, text } = await llm.chat({
+        system: `You assess procurement supplier risk. Rate as low/medium/high based on the evidence. Cite the specific factors driving the rating; do not fabricate. If key data is missing, lower the confidence score.`,
+        messages: [{
+          role: 'user',
+          content: `Supplier ${supplierId}\n\nContext:\n${scenario}\n\nAssess the risk and list the driving factors.`,
+        }],
+        cache: true,
+        maxTokens: 800,
+        format: schemas.SupplierRisk,
+      });
+      if (!data?.risk) {
+        req.error(500, `LLM did not return a parseable risk assessment: ${text?.slice(0, 200)}`);
+        return;
+      }
+      return {
+        supplierId,
+        risk:       data.risk,
+        rationale:  data.rationale,
+        confidence: data.confidence,
+        factors:    data.factors ?? [],
+        tokensUsed: (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0),
+        model,
       };
     });
 

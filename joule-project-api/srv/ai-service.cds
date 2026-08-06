@@ -7,12 +7,31 @@ service AIService @(path: '/ai') {
     model           : String;
   }
 
+  type RiskFactor {
+    factor   : String;
+    impact   : String enum { increases; decreases; neutral };
+    evidence : String;
+  }
+
   type InvoiceRisk {
-    invoiceId : String;
-    risk      : String enum { low; medium; high };
-    rationale : String;
-    tokensUsed: Integer;
-    model     : String;
+    invoiceId  : String;
+    risk       : String enum { low; medium; high };
+    rationale  : String;
+    // New in 0.7.0 — surfaced from the shipped schemas.SupplierRisk shape
+    confidence : Decimal(3, 2);        // 0.00 - 1.00
+    factors    : many RiskFactor;
+    tokensUsed : Integer;
+    model      : String;
+  }
+
+  type SupplierRiskAssessment {
+    supplierId : String;
+    risk       : String enum { low; medium; high };
+    rationale  : String;
+    confidence : Decimal(3, 2);
+    factors    : many RiskFactor;
+    tokensUsed : Integer;
+    model      : String;
   }
 
   type InvoiceLineItem {
@@ -88,4 +107,17 @@ service AIService @(path: '/ai') {
   action analyzeScenario(
     scenario : String not null
   ) returns OrchestrationResult;
+
+  /**
+   * Free-form supplier risk assessment. Pass a supplier ID plus any
+   * context you have (recent orders, delivery incidents, geopolitical
+   * situation, financial signals). Returns the shipped SupplierRisk
+   * shape (risk enum + rationale + confidence + factors[]). Uses the
+   * `schemas.SupplierRisk` JSON Schema from cds-plugin-llm@1.34+ —
+   * same shape as explainInvoiceRisk so the UI can render both.
+   */
+  action assessSupplierRisk(
+    supplierId : String not null,
+    scenario   : String not null
+  ) returns SupplierRiskAssessment;
 }

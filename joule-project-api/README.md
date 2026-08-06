@@ -10,6 +10,7 @@ CAP backend for the **Procurement Copilot** Joule agent. Hosts LLM-backed action
 | `POST /ai/explainInvoiceRisk` | AP triage risk rating (low/medium/high) + rationale |
 | `POST /ai/extractInvoiceLineItems` | Structured extraction from an invoice image or PDF |
 | `POST /ai/analyzeScenario` | **Multi-agent orchestration**. Supervisor coordinator + 3 specialists (contract-lookup with the `@rag` hybrid search tool, price-analyst, compliance-checker). Returns `{ answer, trace: [{ agent, question, answer, isError }], steps }`. |
+| `POST /ai/assessSupplierRisk` | **Supplier risk assessment.** Pass a supplier ID + free-text context (incidents, geopolitical situation, financial signals). Returns the shipped `schemas.SupplierRisk` shape: `{ risk: low\|medium\|high, rationale, confidence, factors: [{factor, impact, evidence}] }`. Same shape as `explainInvoiceRisk` so the UI renders both consistently. |
 | `POST /procurement/SupplierContracts/ProcurementService.searchByMeaning` | **Semantic search over supplier contracts (auto-declared by `@rag`)** |
 | `POST /procurement/SupplierContracts/ProcurementService.askAbout` | **Q&A with cited sources over supplier contracts (auto-declared by `@rag`)** |
 | `GET  /finance/LlmSpend` | **Per-request LLM cost accounting — auto-persisted by `usageMeteringToCap` middleware. Queryable via OData: `$filter=tenant eq 'acme'`, `$orderby=totalCost desc`, etc.** |
