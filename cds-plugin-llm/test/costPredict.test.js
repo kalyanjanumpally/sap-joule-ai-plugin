@@ -19,6 +19,7 @@ function makeCtx(opts = {}, positionals = []) {
         'max-tokens':    opts['max-tokens'],
         file:            opts.file,
         provider:        opts.provider,
+        tokenizer:       opts.tokenizer,
       },
       positionals,
       stdout: { write: (s) => outChunks.push(s) },
@@ -227,4 +228,47 @@ test('cost-predict: human output flags unpriced models with ?', async () => {
   const s = out();
   assert.match(s, /\? my-custom-model/);
   assert.match(s, /unpriced/);
+});
+
+// ---- --tokenizer flag (new in 1.46.0) --------------------------------
+
+test('cost-predict: --tokenizer defaults to auto (heuristic when nothing installed)', async () => {
+  const file = writeJsonl([{ prompt: 'hello world', model: 'claude-opus-4-7', maxTokens: 500 }]);
+  const { ctx, out } = makeCtx({ json: true }, [file]);
+  assert.equal(await costPredict(ctx), 0);
+  const p = JSON.parse(out());
+  assert.equal(p.tokenizerMode, 'auto');
+  assert.equal(p.models[0].tokenizer, 'heuristic');
+});
+
+test('cost-predict: --tokenizer heuristic is honored even when a real one would be available', async () => {
+  const file = writeJsonl([{ prompt: 'hello world', model: 'gpt-4o', maxTokens: 500 }]);
+  const { ctx, out } = makeCtx({ json: true, tokenizer: 'heuristic' }, [file]);
+  assert.equal(await costPredict(ctx), 0);
+  const p = JSON.parse(out());
+  assert.equal(p.tokenizerMode, 'heuristic');
+  assert.equal(p.models[0].tokenizer, 'heuristic');
+});
+
+test('cost-predict: --tokenizer tiktoken fails when tiktoken is not installed', async () => {
+  const file = writeJsonl([{ prompt: 'hello world', model: 'gpt-4o', maxTokens: 500 }]);
+  const { ctx, err } = makeCtx({ tokenizer: 'tiktoken' }, [file]);
+  const code = await costPredict(ctx);
+  assert.equal(code, 2);
+  assert.match(err(), /--tokenizer tiktoken requested but no real tokenizer available/);
+});
+
+test('cost-predict: invalid --tokenizer value → 2', async () => {
+  const file = writeJsonl([{ prompt: 'x', model: 'gpt-4o' }]);
+  const { ctx, err } = makeCtx({ tokenizer: 'nope' }, [file]);
+  assert.equal(await costPredict(ctx), 2);
+  assert.match(err(), /--tokenizer must be 'auto' \| 'tiktoken' \| 'heuristic'/);
+});
+
+test('cost-predict: TOKZ column appears in human-readable output', async () => {
+  const file = writeJsonl([{ prompt: 'hello world', model: 'claude-opus-4-7', maxTokens: 500 }]);
+  const { ctx, out } = makeCtx({}, [file]);
+  assert.equal(await costPredict(ctx), 0);
+  assert.match(out(), /TOKZ/);
+  assert.match(out(), /heuristic/);
 });

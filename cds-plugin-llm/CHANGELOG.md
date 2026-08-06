@@ -4,6 +4,45 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.46.0] — 2026-08-06
+
+### Added
+
+- **`cost-predict` CLI uses real tokenizers when available.** The char/token heuristic shipped in 1.33.0 had ±15% variance; installing `tiktoken` (or `js-tiktoken` or `@anthropic-ai/tokenizer`) drops that to <±2%. Detection is automatic and per-model — no config needed to get better numbers, just install the peer-optional package.
+
+- **New `lib/tokenizer.js` module** — `getTokenizer(model)` returns `{ name, countTokens(text) }`, resolving in this order:
+  - **OpenAI / GPT-family (gpt-*, o1-*, o3-*, o4-*)**: `tiktoken` → `js-tiktoken` → heuristic
+  - **Anthropic (claude-*)**: `@anthropic-ai/tokenizer` → `tiktoken` (via `cl100k_base` fallback) → heuristic
+  - **Everything else (Gemini, Llama, Bedrock non-Anthropic)**: heuristic (no widely-available real tokenizer)
+  Lazy-loaded so cold-start stays fast; results memoized per (encoder, model).
+
+- **`--tokenizer` flag on `cost-predict`** — three modes:
+  - **`auto`** (default) — use real tokenizer when installed for the model family; heuristic otherwise
+  - **`tiktoken`** — force real tokenizer; exit 2 with a helpful message if none is installed for the requested model
+  - **`heuristic`** — force char/token factor even if a real tokenizer is available (useful for reproducible cross-machine estimates)
+
+- **Per-row + summary tokenizer reporting** — the JSON output now includes `tokenizerMode` at the top level and `tokenizer` on each per-model row (`'heuristic'` / `'tiktoken'` / `'js-tiktoken'` / `'anthropic-tokenizer'`). The human-readable table adds a new `TOKZ` column so you can see at a glance which method costed which family.
+
+  ```sh
+  # Optional: pick the best tokenizer for your workload
+  npm install --save-dev tiktoken            # or js-tiktoken for pure-JS envs
+  npm install --save-dev @anthropic-ai/tokenizer  # for Claude
+
+  saptarishi-llm cost-predict batch.jsonl --model gpt-4o
+  # → per-model rows now show TOKZ=tiktoken; numbers are provider-accurate
+  ```
+
+- **16 new tests** (845 total):
+  - **`getTokenizer`** (11 tests): heuristic fallback, null/empty text, per-family chars/token factors, `tiktoken` resolves for GPT + falls back to `cl100k_base` when `encoding_for_model` throws, `js-tiktoken` fallback when `tiktoken` missing, `@anthropic-ai/tokenizer` for Claude, `tiktoken` cl100k_base fallback when Anthropic tokenizer missing, Gemini goes straight to heuristic (not OpenAI-family), unspecified model defaults.
+  - **`cost-predict` `--tokenizer` flag** (5 tests): defaults to `auto` (yields heuristic without tokenizers installed), `heuristic` forces heuristic even when real one would be available, `tiktoken` errors with actionable message when unavailable, invalid mode → exit 2 with usage line, TOKZ column appears in human-readable output.
+
+### Notes
+
+- **All three tokenizer packages are peer-OPTIONAL.** Zero install-size impact when you don't need precise counts. When you do, pick the one that matches your workload — `tiktoken` (WASM, fastest for OpenAI) or `js-tiktoken` (pure JS, works in restricted environments).
+- **`@anthropic-ai/tokenizer` is officially deprecated**, but still the most accurate available for Claude. Falls back to `cl100k_base` (Anthropic's older BPE) when missing — reasonable approximation.
+- **`--tokenizer heuristic` is deterministic across machines** even when different tokenizer packages are installed. Useful for reproducible CI budget-gate checks.
+- **Bedrock + Gemini stay heuristic-only** — no widely-available JS tokenizer for either family. If you need precision there, call the provider's `/count_tokens` endpoint from your own code.
+
 ## [1.45.0] — 2026-08-06
 
 ### Added

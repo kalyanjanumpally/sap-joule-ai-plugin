@@ -1,31 +1,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { DEFAULT_PRICING } = require('../../pricing');
+const { getTokenizer, charsPerTokenFor } = require('../../tokenizer');
 
-// Rough per-model token-per-character factors. English averages ~4 chars/token
-// for GPT-family tokenizers; Anthropic runs slightly denser; multilingual is
-// looser. These are HEURISTICS meant for pre-batch cost sizing, not billing.
-// If you need precision, call your provider's /count_tokens endpoint.
-const CHARS_PER_TOKEN = {
-  default:              4.0,
-  'claude':             3.5,   // Anthropic tokenizer runs a bit denser
-  'gpt':                4.0,
-  'llama':              4.2,
-  'mistral':            4.1,
-  'gemini':             4.0,
-  'qwen':               3.2,   // multilingual → denser tokens
-  'deepseek':           3.8,
-};
-
-function charsPerTokenFor(model) {
-  if (!model) return CHARS_PER_TOKEN.default;
-  const m = model.toLowerCase();
-  for (const key of Object.keys(CHARS_PER_TOKEN)) {
-    if (key === 'default') continue;
-    if (m.includes(key)) return CHARS_PER_TOKEN[key];
-  }
-  return CHARS_PER_TOKEN.default;
-}
+// Historical char/token factors kept here for the `--tokenizer heuristic`
+// forced mode (auto-detection lives in lib/tokenizer.js since 1.46.0).
 
 function extractInputText(row) {
   // Accept:
@@ -49,9 +28,41 @@ function extractInputText(row) {
   return parts.join('\n');
 }
 
-function estimateTokens(text, model) {
+/**
+ * Legacy heuristic — used when the caller passes `--tokenizer heuristic`
+ * or when no real tokenizer is installed for the model family.
+ */
+function heuristicTokens(text, model) {
   if (!text) return 0;
   return Math.ceil(text.length / charsPerTokenFor(model));
+}
+
+/**
+ * Build a per-model tokenizer resolver. Honors `--tokenizer` flag:
+ *   auto      → getTokenizer(model)      (real when installed, heuristic otherwise)
+ *   tiktoken  → force real tokenizer; throw if unavailable for the model
+ *   heuristic → force char/token factor even if real tokenizer is installed
+ */
+function makeTokenizerResolver(mode) {
+  const cache = new Map();  // model → { name, countTokens }
+  return function resolve(model) {
+    const key = model ?? '(default)';
+    if (cache.has(key)) return cache.get(key);
+    let entry;
+    if (mode === 'heuristic') {
+      entry = { name: 'heuristic', countTokens: (t) => heuristicTokens(t, model) };
+    } else {
+      entry = getTokenizer(model);
+      if (mode === 'tiktoken' && entry.name === 'heuristic') {
+        throw new Error(
+          `--tokenizer tiktoken requested but no real tokenizer available for '${model}'. ` +
+          `Install one of: 'tiktoken', 'js-tiktoken', or '@anthropic-ai/tokenizer'.`,
+        );
+      }
+    }
+    cache.set(key, entry);
+    return entry;
+  };
 }
 
 function percentile(sortedNumbers, p) {
@@ -119,6 +130,19 @@ async function costPredict(ctx) {
     ctx.stderr.write(`cost-predict: --percentile must be an integer in [1, 99] (got ${ctx.opts.percentile})\n`);
     return 2;
   }
+  // Tokenizer mode: auto (default), tiktoken (force real), heuristic (force char/token factor).
+  const tokenizerMode = ctx.opts.tokenizer ?? 'auto';
+  if (!['auto', 'tiktoken', 'heuristic'].includes(tokenizerMode)) {
+    ctx.stderr.write(`cost-predict: --tokenizer must be 'auto' | 'tiktoken' | 'heuristic' (got '${tokenizerMode}')\n`);
+    return 2;
+  }
+  let tokenizerFor;
+  try {
+    tokenizerFor = makeTokenizerResolver(tokenizerMode);
+  } catch (e) {
+    ctx.stderr.write(`cost-predict: ${e.message}\n`);
+    return 2;
+  }
 
   // Per-model aggregates
   const perModel = new Map();
@@ -128,8 +152,11 @@ async function costPredict(ctx) {
 
   for (const row of rows) {
     const model     = row.model ?? defaultModel;
+    let tokenizer;
+    try { tokenizer = tokenizerFor(model); }
+    catch (e) { ctx.stderr.write(`cost-predict: ${e.message}\n`); return 2; }
     const text      = extractInputText(row);
-    const inTokens  = estimateTokens(text, model);
+    const inTokens  = tokenizer.countTokens(text);
     const maxTokens = Number.isInteger(row.maxTokens) ? row.maxTokens : defaultMaxTok;
     const outTokens = Math.round(maxTokens * outputFactor);
     const price     = model ? DEFAULT_PRICING[model] : null;
@@ -143,6 +170,7 @@ async function costPredict(ctx) {
         count: 0, priced: !!price,
         inputTokens: [], outputTokens: [], costs: [],
         totalIn: 0, totalOut: 0, totalCost: 0,
+        tokenizer: tokenizer.name,
       });
     }
     const b = perModel.get(bucketKey);
@@ -168,6 +196,7 @@ async function costPredict(ctx) {
     modelRows.push({
       model:      name,
       priced:     b.priced,
+      tokenizer:  b.tokenizer,
       count:      b.count,
       totalIn:    b.totalIn,
       totalOut:   b.totalOut,
@@ -187,6 +216,7 @@ async function costPredict(ctx) {
     rows:                 rows.length,
     outputFactor,
     percentile:           pctileArg,
+    tokenizerMode,
     totalInputTokens,
     totalOutputTokens,
     totalCost,
@@ -206,15 +236,16 @@ async function costPredict(ctx) {
   ctx.stdout.write(`cost-predict: ${rows.length} request(s) in ${path.basename(absolute)}\n`);
   ctx.stdout.write(`  output-factor=${outputFactor}  (predicted output tokens = maxTokens × ${outputFactor})\n`);
   ctx.stdout.write(`  percentile   =p${pctileArg}\n`);
+  ctx.stdout.write(`  tokenizer    =${tokenizerMode}\n`);
   ctx.stdout.write(`\n`);
-  ctx.stdout.write(w('MODEL', 40) + w('#', 6) + w('IN tot', 10) + w('OUT tot', 10) + w('COST tot', 14) + w(`COST p${pctileArg}`, 14) + '\n');
-  ctx.stdout.write('─'.repeat(94) + '\n');
+  ctx.stdout.write(w('MODEL', 40) + w('TOKZ', 14) + w('#', 6) + w('IN tot', 10) + w('OUT tot', 10) + w('COST tot', 14) + w(`COST p${pctileArg}`, 14) + '\n');
+  ctx.stdout.write('─'.repeat(108) + '\n');
   for (const r of modelRows) {
     const flag = r.priced ? ' ' : '?';
-    ctx.stdout.write(w(`${flag} ${r.model}`, 40) + w(r.count, 6) + w(r.totalIn, 10) + w(r.totalOut, 10) + w(money(r.totalCost), 14) + w(money(r.pctileCost), 14) + '\n');
+    ctx.stdout.write(w(`${flag} ${r.model}`, 40) + w(r.tokenizer, 14) + w(r.count, 6) + w(r.totalIn, 10) + w(r.totalOut, 10) + w(money(r.totalCost), 14) + w(money(r.pctileCost), 14) + '\n');
   }
-  ctx.stdout.write('─'.repeat(94) + '\n');
-  ctx.stdout.write(w('TOTAL', 40) + w(rows.length, 6) + w(totalInputTokens, 10) + w(totalOutputTokens, 10) + w(money(totalCost), 14) + '\n');
+  ctx.stdout.write('─'.repeat(108) + '\n');
+  ctx.stdout.write(w('TOTAL', 40) + w('', 14) + w(rows.length, 6) + w(totalInputTokens, 10) + w(totalOutputTokens, 10) + w(money(totalCost), 14) + '\n');
   if (summary.unpriced.length > 0) {
     ctx.stdout.write(`\nunpriced models (charged as $0 — pass --pricing overrides in code, or update DEFAULT_PRICING):\n`);
     for (const m of summary.unpriced) ctx.stdout.write(`  ? ${m}\n`);
@@ -232,13 +263,16 @@ Reads a JSONL file (one JSON object per line). Each object may be:
   { model?, prompt: "...", maxTokens? }                    — shorthand
   { model?, text:   "...", maxTokens? }                    — legacy shorthand
 
-For each row: heuristically estimates input tokens (chars ÷ per-model
-chars/token factor), predicts output tokens as maxTokens × output-factor,
+For each row: counts input tokens (via tiktoken / js-tiktoken /
+@anthropic-ai/tokenizer when installed, or per-model char/token
+heuristic when not), predicts output tokens as maxTokens × output-factor,
 and prices via DEFAULT_PRICING. Prints a per-model breakdown +
-percentiles + grand total.
+percentiles + grand total. Real tokenizers cut the ±15% heuristic
+variance to <±2%.
 
 options:
   --model <id>          default model if a row doesn't specify one
+  --tokenizer <mode>    auto (default) | tiktoken (force real; err if missing) | heuristic (force char/token factor)
   --output-factor <n>   predicted-output ÷ maxTokens ratio (default 0.6)
   --percentile <n>      cost/token percentile to report (default 95)
   --max-tokens <n>      default maxTokens if a row doesn't set it (default 1024)

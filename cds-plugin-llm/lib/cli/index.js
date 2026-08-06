@@ -39,6 +39,7 @@ const GLOBAL_OPTS = {
   'providers-config': { type: 'string' },
   'output-factor': { type: 'string' },
   'percentile':    { type: 'string' },
+  'tokenizer':     { type: 'string' },
 };
 
 async function run(argv) {
