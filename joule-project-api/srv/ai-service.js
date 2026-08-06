@@ -7,6 +7,7 @@ const {
   Agent, runAgents,
   guardrails, filters,
   costBudget, BudgetExceededError,
+  promptInjectionGuard, PromptInjectionError,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -93,6 +94,7 @@ let _llmPromise;
 let _cache;
 let _guardrails;
 let _budget;
+let _injectionGuard;
 // Shared limits object — passed by reference to costBudget() so
 // FinanceService can mutate it live from LlmBudget rows without a
 // restart. costBudget reads from this via limitFor() on every call.
@@ -100,10 +102,32 @@ const _budgetLimits = { total: undefined, perTenant: {}, perModel: {} };
 function getLLM() {
   if (!_llmPromise) {
     _llmPromise = cds.connect.to('llm').then((llm) => {
+      // Prompt injection guard — sits OUTER of everything else so the
+      // sanitized (or refused) payload is what guardrails + cache + meter +
+      // provider all see. Runs BEFORE guardrails so it can spot zero-width
+      // chars and homoglyphs before NFKC normalization would erase them.
+      // action='sanitize' means classic override attempts (base64-smuggled,
+      // fake-turn markers, <|im_start|>) get stripped rather than blocked —
+      // preserves user intent while removing the attack surface. Genuine
+      // jailbreak attempts still cross threshold via the regex layer and
+      // get scrubbed to `[role-marker-removed]` etc.
+      _injectionGuard = promptInjectionGuard({
+        action:    'sanitize',
+        threshold: 0.6,
+        maxUserMessageChars: 8000,
+        onDetect: (info) => {
+          cds.log('llm:injection').warn(
+            `[injection] ${info.action} @ score=${info.score.toFixed(2)}: ${info.evidence.join('; ')}`,
+          );
+        },
+      });
+      llm.use(_injectionGuard);
       _guardrails = guardrails({
         inputFilters: [
-          // Deliberately shallow — layer with least-privilege tools + output
-          // constraints for defense in depth. See CHANGELOG note in 1.28.0.
+          // Fast first-line filter — same regex family as the guard above,
+          // kept here as a hard-block backstop for the highest-confidence
+          // patterns. Redundant with the guard's regex detector; cost is
+          // one extra regex pass on user text (negligible).
           filters.promptInjection(),
           // Internal-only string blocklist — e.g. codes, endpoints, secret
           // names that must never leave the SAP tenant boundary. Add real
@@ -168,6 +192,8 @@ function getBudgetLimits() { return _budgetLimits; }
 function getCache() { return _cache; }
 /** Exported for `/ai/guardrails-stats` — hits/blocks/redacts dashboard. */
 function getGuardrails() { return _guardrails; }
+/** Exported for `/injection-stats` — prompt-injection detection dashboard. */
+function getInjectionGuard() { return _injectionGuard; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -281,6 +307,14 @@ module.exports = class AIService extends cds.ApplicationService {
         const gr = getGuardrails();
         if (!gr) return res.status(503).json({ error: 'guardrails not initialized yet' });
         res.json(gr.stats);
+      });
+      // Prompt-injection guard dashboard — scanned / blocked / sanitized /
+      // warned counters + per-detector breakdown. Combines with
+      // /guardrails-stats to give a complete picture of every rejection layer.
+      cds.app.get('/injection-stats', (_req, res) => {
+        const g = getInjectionGuard();
+        if (!g) return res.status(503).json({ error: 'injection guard not initialized yet' });
+        res.json(g.stats);
       });
       // Budget dashboard — current-window spend + configured limits.
       // Complements the OData `FinanceService.getBudgetStatus()` action
