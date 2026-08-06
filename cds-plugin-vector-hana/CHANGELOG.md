@@ -4,6 +4,41 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] — 2026-08-06
+
+### Added
+
+- **`@rag.metadataFields`** — array of row fields to copy into the vector-store metadata dict on every upsert, so `filter: { region: 'EMEA' }` on `searchByMeaning` / `askAbout` actually filters. Closes the gap noted in the demo app: 0.11.0 shipped the `filter` param plumbing, but only the implicit `{ entity }` key was persisted in metadata, so `filter: '{"region":"EMEA"}'` matched nothing.
+
+  ```js
+  @rag: {
+    fields:         ['supplierName', 'contractType', 'terms'],    // → embedded text
+    metadataFields: ['region', 'category', 'supplierName'],       // → filterable metadata
+    dimension:      768,
+    store:          'sqlite',
+    search:         'hybrid',
+  }
+
+  // Later:
+  await cds.vectorHana.searchByMeaning({
+    entity: 'ProcurementService.SupplierContracts',
+    query:  'aluminum short lead time',
+    filter: { region: 'EMEA', category: 'raw-materials' },
+    topK:   5,
+  });
+  ```
+
+- **Default: `metadataFields: []`** — pure backward-compat. Existing consumers see zero change; only rows re-upserted after adding `metadataFields` carry the new keys.
+
+- **7 new tests** (204 total): `buildItem` copies metadataFields into metadata dict, skips null values, keeps `text` unchanged (metadata is separate from the embedding source), defaults to empty array; `normalizeConfig` defaults, rejects non-array, passes through configured values.
+
+### Notes
+
+- **Metadata is separate from embedding source.** `fields` controls what gets embedded (the vector). `metadataFields` controls what's stored as filterable metadata. Fields listed in both get double-duty — that's fine. Fields in `metadataFields` only don't affect embedding quality.
+- **Re-upsert required for existing rows.** New `metadataFields` don't back-fill retroactively. Two paths: (a) delete the vector rows for the entity and let CAP's `CREATE` handler re-index them; (b) call `cds.vectorHana.backfill(entityName)` explicitly.
+- **Filter semantics** on SQLite are exact-match via `json_extract(metadata, '$.key') = ?` (added in 0.6.0). HANA uses the same shape (added in 0.8.0). Both backends already support the `filter` param — this release just makes the metadata dict richer so filters have something to match against.
+- **Type limits.** SQLite `json_extract` compares as strings when the stored value was a string. Numeric filters (`{ tier: 3 }`) work but string comparison rules apply. If you need range queries, roll a custom `keywordSearch` or drop to raw SQL.
+
 ## [0.11.0] — 2026-08-06
 
 ### Added

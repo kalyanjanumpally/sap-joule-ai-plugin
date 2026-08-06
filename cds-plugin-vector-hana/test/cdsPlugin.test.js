@@ -273,6 +273,65 @@ test('buildItem: metadata is null when no text was produced (all fields empty)',
   assert.equal(item.metadata, null);
 });
 
+// ---- metadataFields (new in 0.12.0) ---------------------------------
+
+test('buildItem: metadataFields copies row values into metadata dict', () => {
+  const item = buildItem(
+    { ID: 'sup-1', name: 'Acme', region: 'EMEA', category: 'raw-materials' },
+    { fields: ['name'], metadataFields: ['region', 'category'], idField: 'ID' },
+  );
+  assert.equal(item.metadata.region, 'EMEA');
+  assert.equal(item.metadata.category, 'raw-materials');
+});
+
+test('buildItem: metadataFields skips null values (JSON-extract queries would misbehave)', () => {
+  const item = buildItem(
+    { ID: 'sup-1', name: 'Acme', region: 'EMEA', category: null },
+    { fields: ['name'], metadataFields: ['region', 'category'], idField: 'ID' },
+  );
+  assert.equal(item.metadata.region, 'EMEA');
+  assert.equal('category' in item.metadata, false);
+});
+
+test('buildItem: metadataFields not in fields → still copied to metadata (metadata != embedding source)', () => {
+  const item = buildItem(
+    { ID: 'sup-1', name: 'Acme', region: 'EMEA' },
+    { fields: ['name'], metadataFields: ['region'], idField: 'ID' },
+  );
+  // `region` shouldn't appear in the embedded text
+  assert.equal(item.text, 'Acme');
+  // But `region` IS in the metadata so the filter works
+  assert.equal(item.metadata.region, 'EMEA');
+});
+
+test('buildItem: metadataFields defaults to []', () => {
+  const item = buildItem(
+    { ID: 'sup-1', name: 'Acme', region: 'EMEA' },
+    { fields: ['name'], idField: 'ID' },   // no metadataFields
+  );
+  assert.deepEqual(item.metadata, { entity: undefined });
+});
+
+test('normalizeConfig: metadataFields defaults to []', () => {
+  const cfg = normalizeConfig({ fields: ['x'], dimension: 3 }, 'S.T');
+  assert.deepEqual(cfg.metadataFields, []);
+});
+
+test('normalizeConfig: metadataFields must be an array', () => {
+  assert.throws(
+    () => normalizeConfig({ fields: ['x'], dimension: 3, metadataFields: 'not-array' }, 'S.T'),
+    /metadataFields must be an array/,
+  );
+});
+
+test('normalizeConfig: metadataFields passes through', () => {
+  const cfg = normalizeConfig(
+    { fields: ['name'], dimension: 3, metadataFields: ['region', 'category'] },
+    'S.T',
+  );
+  assert.deepEqual(cfg.metadataFields, ['region', 'category']);
+});
+
 test('buildItem: throws when id field missing', () => {
   assert.throws(
     () => buildItem({ name: 'x' }, { fields: ['name'], idField: 'ID' }),

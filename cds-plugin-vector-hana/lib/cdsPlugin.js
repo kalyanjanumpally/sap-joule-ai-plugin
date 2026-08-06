@@ -219,8 +219,20 @@ function normalizeConfig(rag, entityName) {
   if (search !== 'vector' && search !== 'hybrid') {
     throw new Error(`@rag.search must be 'vector' or 'hybrid', got '${search}'`);
   }
+  // `metadataFields` (new in 0.12.0) — array of row fields to store alongside
+  // the embedding so callers can filter by them via the `filter` param on
+  // searchByMeaning / askAbout. Default: `[]` (backward-compat; only the
+  // implicit `entity` key ships with every row). Fields listed here get
+  // copied verbatim into the metadata dict on every upsert. Common usage:
+  //   @rag: { fields: [...], metadataFields: ['region', 'category'] }
+  //   → filter: '{"region":"EMEA"}' now works as expected
+  const metadataFields = rag.metadataFields ?? [];
+  if (!Array.isArray(metadataFields)) {
+    throw new Error('@rag.metadataFields must be an array of field names');
+  }
   return {
     fields: rag.fields.slice(),
+    metadataFields: metadataFields.slice(),
     dimension: rag.dimension,
     provider: rag.provider ?? 'llm',
     chatter: rag.chatter ?? rag.provider ?? 'llm',
@@ -291,6 +303,13 @@ function buildItem(row, config) {
   }
   const text = parts.join('\n\n');
   const metadata = { entity: config.entityName ?? undefined };
+  // Copy `metadataFields` values into the metadata dict so `filter:
+  // {region: 'EMEA'}` on searchByMeaning / askAbout can match. Nulls +
+  // undefined skipped so JSON-extract queries don't stumble on empty values.
+  for (const f of config.metadataFields ?? []) {
+    const v = row[f];
+    if (v != null) metadata[f] = v;
+  }
   return { id: String(id), text, metadata: text ? metadata : null };
 }
 
