@@ -4,6 +4,62 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.49.0] — 2026-08-06
+
+### Added
+
+- **`circuitBreaker` middleware — sustained-outage guard.** After `threshold` consecutive failures per provider bucket, opens the circuit and short-circuits subsequent calls with `CircuitOpenError` for `cooldownMs`. A half-open probe re-tests after cooldown; success closes the circuit, failure re-opens it.
+
+  ```js
+  const { circuitBreaker } = require('@saptarishi/cds-plugin-llm');
+
+  const breaker = circuitBreaker({
+    threshold:        5,          // 5 consecutive failures → open
+    cooldownMs:       30_000,     // stay open 30s before half-open probe
+    halfOpenAttempts: 1,          // one probe allowed while half-open
+    perProvider:      true,       // per-provider buckets (default)
+    isFailure: (err) => err?.status >= 500,   // default: 5xx + network, not 4xx
+    onOpen:  (info) => cds.log('llm:breaker').warn('circuit opened', info),
+    onClose: (info) => cds.log('llm:breaker').info('circuit closed', info),
+  });
+  llm.use(breaker);
+  ```
+
+- **Composes with `retryOnRateLimit`:** place `circuitBreaker` OUTER of retry. Retries handle transient throttling (429/503); breaker handles sustained outage. If the provider is truly down, the breaker short-circuits BEFORE retries burn budget.
+
+  ```
+  promptInjectionGuard → guardrails → costBudget → circuitBreaker →
+  retryOnRateLimit → usageMetering → responseCache → provider
+  ```
+
+- **Per-provider bucketing.** By default, each provider (openai, anthropic, bedrock, gemini) gets its own circuit — one bad provider can't take down calls to a different provider. `perProvider: false` uses a single global bucket.
+
+- **Failure predicate.** Default `isFailure` counts 5xx + network errors, ignores 4xx (client bugs shouldn't open the circuit). Override with `isFailure: (err) => err?.status === 429` to (e.g.) only trip on sustained rate-limiting.
+
+- **Introspection + control:**
+  - `breaker.state(provider?)` → `{ state, consecutiveFailures, openedAt, cooldownRemainingMs }`
+  - `breaker.stats` → `{ requests, shortCircuited, opens, closes, halfOpens, failures, successes }`
+  - `breaker.forceOpen(provider?)` / `breaker.forceClose(provider?)` — manual control for kill-switches / recovery
+  - `breaker.reset(provider?)` — clear a bucket or all state
+  - `breaker.asMcpResource()` → `config://circuit-breaker` for MCP resource subscriptions
+
+- **Prometheus:** `emitCircuitBreaker` wired into `promMetrics` — new counters `llm_breaker_requests_total`, `llm_breaker_short_circuited_total`, `llm_breaker_opens_total`, `llm_breaker_closes_total`, `llm_breaker_half_opens_total`, plus per-bucket gauges `llm_breaker_state` (0=closed, 1=halfOpen, 2=open), `llm_breaker_consecutive_failures`, `llm_breaker_cooldown_remaining_seconds`.
+
+- **`validateMiddlewareOrder` extensions:**
+  - New rule `BREAKER_INNER_OF_RETRY` (warning) — circuitBreaker INNER of retryOnRateLimit means retries fire even when the provider is objectively down.
+  - New rule `NO_CIRCUIT_BREAKER` (info) — no circuitBreaker in chain means sustained outage will burn through retry + budget on every request.
+  - `circuitBreaker` added to `KNOWN_KINDS`.
+
+### Type definitions
+
+- `CircuitState = 'closed' | 'open' | 'halfOpen'`
+- `CircuitBreakerOptions`, `CircuitBreakerStats`, `CircuitBreakerBucketState`, `CircuitBreakerMiddleware`
+- `MiddlewareOrderingWarningCode` extended with `BREAKER_INNER_OF_RETRY` and `NO_CIRCUIT_BREAKER`
+
+### Backwards compatibility
+
+Additive — no breaking changes. Existing chains without circuit breaker continue to work; the validator's new `NO_CIRCUIT_BREAKER` finding is info-severity and can be suppressed via `filterWarnings(result, ['NO_CIRCUIT_BREAKER'])`.
+
 ## [1.48.0] — 2026-08-06
 
 ### Added

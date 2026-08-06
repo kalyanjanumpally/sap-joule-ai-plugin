@@ -66,6 +66,9 @@ module.exports = {
   // Rate-limit-driven retry middleware (new in 1.47.0)
   retryOnRateLimit: require('./middleware/retryOnRateLimit').retryOnRateLimit,
   RateLimitGiveUpError: require('./middleware/retryOnRateLimit').RateLimitGiveUpError,
+  // Circuit breaker middleware — sustained-outage guard (new in 1.49.0)
+  circuitBreaker: require('./middleware/circuitBreaker').circuitBreaker,
+  CircuitOpenError: require('./middleware/circuitBreaker').CircuitOpenError,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

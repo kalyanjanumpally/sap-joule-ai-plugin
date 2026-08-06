@@ -30,6 +30,7 @@ test('validateMiddlewareOrder: canonical ai-service.js order produces zero warni
     { kind: 'promptInjectionGuard' },
     { kind: 'guardrails' },
     { kind: 'costBudget' },
+    { kind: 'circuitBreaker' },
     { kind: 'retryOnRateLimit' },
     { kind: 'usageMeteringToCap' },
     { kind: 'responseCache' },
@@ -40,6 +41,36 @@ test('validateMiddlewareOrder: canonical ai-service.js order produces zero warni
   // CACHE_OUTER_OF_BUDGET is INFO — canonical chain has responseCache INNER of budget,
   // so it should NOT fire here.
   assert.equal(r.warnings.find((w) => w.code === 'CACHE_OUTER_OF_BUDGET'), undefined);
+  // NO_CIRCUIT_BREAKER should also NOT fire — breaker is present.
+  assert.equal(r.warnings.find((w) => w.code === 'NO_CIRCUIT_BREAKER'), undefined);
+});
+
+// ---- Circuit breaker rules --------------------------------------------
+
+test('validateMiddlewareOrder: BREAKER_INNER_OF_RETRY fires when breaker follows retry', () => {
+  const r = validateMiddlewareOrder([
+    { kind: 'retryOnRateLimit' },
+    { kind: 'circuitBreaker' },
+  ]);
+  const w = r.warnings.find((x) => x.code === 'BREAKER_INNER_OF_RETRY');
+  assert.ok(w);
+  assert.equal(w.severity, 'warning');
+  assert.match(w.message, /burning retry budget|short-circuit/);
+});
+
+test('validateMiddlewareOrder: breaker OUTER of retry does NOT fire BREAKER_INNER_OF_RETRY', () => {
+  const r = validateMiddlewareOrder([
+    { kind: 'circuitBreaker' },
+    { kind: 'retryOnRateLimit' },
+  ]);
+  assert.equal(r.warnings.find((x) => x.code === 'BREAKER_INNER_OF_RETRY'), undefined);
+});
+
+test('validateMiddlewareOrder: NO_CIRCUIT_BREAKER info fires when no circuitBreaker', () => {
+  const r = validateMiddlewareOrder([{ kind: 'retryOnRateLimit' }]);
+  const w = r.warnings.find((x) => x.code === 'NO_CIRCUIT_BREAKER');
+  assert.ok(w);
+  assert.equal(w.severity, 'info');
 });
 
 // ---- Specific bad orderings -------------------------------------------
@@ -160,6 +191,7 @@ test('validateMiddlewareOrder: KNOWN_KINDS covers exactly the shipped middleware
     'guardrails',
     'costBudget',
     'retryOnRateLimit',
+    'circuitBreaker',
     'usageMetering',
     'usageMeteringToCap',
     'responseCache',

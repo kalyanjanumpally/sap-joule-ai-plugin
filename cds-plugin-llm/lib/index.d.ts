@@ -1484,6 +1484,80 @@ export class RateLimitGiveUpError extends Error {
   readonly cause: Error;
 }
 
+// ---- Circuit breaker middleware (new in 1.49.0) -----------------------
+
+export type CircuitState = 'closed' | 'open' | 'halfOpen';
+
+export interface CircuitBreakerOptions {
+  /** Consecutive failures before opening. Default 5. */
+  threshold?: number;
+  /** How long to stay open before a half-open probe (ms). Default 30_000. */
+  cooldownMs?: number;
+  /** Probes allowed while half-open. Default 1. */
+  halfOpenAttempts?: number;
+  /** Bucket state per provider (ctx.service.name). Default true. */
+  perProvider?: boolean;
+  /** Custom predicate — default counts 5xx + network errors, ignores 4xx. */
+  isFailure?: (err: any) => boolean;
+  onOpen?: (info: { provider: string; consecutiveFailures: number; lastError: Error; method: string }) => void | Promise<void>;
+  onClose?: (info: { provider: string; method: string }) => void | Promise<void>;
+  onHalfOpen?: (info: { provider: string; method: string }) => void | Promise<void>;
+}
+
+export interface CircuitBreakerStats {
+  requests:       number;
+  shortCircuited: number;
+  opens:          number;
+  closes:         number;
+  halfOpens:      number;
+  failures:       number;
+  successes:      number;
+}
+
+export interface CircuitBreakerBucketState {
+  state: CircuitState;
+  consecutiveFailures: number;
+  openedAt: number | null;
+  cooldownRemainingMs: number;
+}
+
+export interface CircuitBreakerMiddleware extends Middleware {
+  readonly stats: CircuitBreakerStats;
+  state(provider?: string): CircuitBreakerBucketState;
+  reset(provider?: string): void;
+  forceOpen(provider?: string): void;
+  forceClose(provider?: string): void;
+  asMcpResource(): {
+    uri: 'config://circuit-breaker';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => CircuitBreakerStats & {
+      threshold: number;
+      cooldownMs: number;
+      halfOpenAttempts: number;
+      perProvider: boolean;
+      buckets: Record<string, CircuitBreakerBucketState>;
+    };
+  };
+}
+
+/**
+ * Circuit-breaker middleware. Tracks consecutive failures per provider bucket;
+ * after `threshold` failures, opens the circuit and short-circuits subsequent
+ * calls for `cooldownMs`. Complements `retryOnRateLimit`: retries handle
+ * transient throttling, breaker handles sustained outage.
+ * @since 1.49.0
+ */
+export function circuitBreaker(options?: CircuitBreakerOptions): CircuitBreakerMiddleware;
+
+export class CircuitOpenError extends Error {
+  readonly code: 'CIRCUIT_OPEN';
+  readonly provider: string;
+  readonly cooldownRemainingMs: number;
+  readonly cause?: Error;
+}
+
 // ---- Middleware ordering validator (new in 1.48.0) --------------------
 
 export type MiddlewareOrderingWarningCode =
@@ -1491,9 +1565,11 @@ export type MiddlewareOrderingWarningCode =
   | 'BUDGET_INNER_OF_RETRY'
   | 'INJECTION_INNER_OF_GUARDRAILS'
   | 'CACHE_OUTER_OF_BUDGET'
+  | 'BREAKER_INNER_OF_RETRY'
   | 'NO_RETRY'
   | 'NO_METERING'
   | 'NO_SECURITY_LAYER'
+  | 'NO_CIRCUIT_BREAKER'
   | 'DUPLICATE_KIND'
   | 'UNKNOWN_KIND';
 

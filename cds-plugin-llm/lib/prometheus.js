@@ -177,6 +177,45 @@ function emitRetry(retry) {
   return out;
 }
 
+function emitCircuitBreaker(breaker) {
+  if (!breaker?.stats) return [];
+  const s = breaker.stats;
+  const out = [];
+  out.push(header('llm_breaker_requests_total', 'Total requests observed by circuitBreaker', 'counter'));
+  out.push(line('llm_breaker_requests_total', s.requests ?? 0));
+  out.push(header('llm_breaker_short_circuited_total', 'Requests short-circuited by an OPEN circuit (never reached provider)', 'counter'));
+  out.push(line('llm_breaker_short_circuited_total', s.shortCircuited ?? 0));
+  out.push(header('llm_breaker_opens_total', 'Times the circuit transitioned from closed/half-open to open', 'counter'));
+  out.push(line('llm_breaker_opens_total', s.opens ?? 0));
+  out.push(header('llm_breaker_closes_total', 'Times the circuit transitioned from half-open to closed after a successful probe', 'counter'));
+  out.push(line('llm_breaker_closes_total', s.closes ?? 0));
+  out.push(header('llm_breaker_half_opens_total', 'Times the circuit transitioned from open to half-open on cooldown expiration', 'counter'));
+  out.push(line('llm_breaker_half_opens_total', s.halfOpens ?? 0));
+
+  // Per-bucket gauges — one series per provider bucket.
+  if (typeof breaker.asMcpResource === 'function') {
+    const snap = breaker.asMcpResource().handler();
+    const buckets = snap.buckets ?? {};
+    const entries = Object.entries(buckets);
+    if (entries.length > 0) {
+      out.push(header('llm_breaker_state', 'Current circuit state per bucket (0=closed, 1=halfOpen, 2=open)', 'gauge'));
+      const stateNum = { closed: 0, halfOpen: 1, open: 2 };
+      for (const [k, b] of entries) {
+        out.push(line('llm_breaker_state', stateNum[b.state] ?? 0, { provider: k }));
+      }
+      out.push(header('llm_breaker_consecutive_failures', 'Current consecutive-failure count per bucket', 'gauge'));
+      for (const [k, b] of entries) {
+        out.push(line('llm_breaker_consecutive_failures', b.consecutiveFailures ?? 0, { provider: k }));
+      }
+      out.push(header('llm_breaker_cooldown_remaining_seconds', 'Seconds until an open circuit transitions to half-open (0 if closed/half-open)', 'gauge'));
+      for (const [k, b] of entries) {
+        out.push(line('llm_breaker_cooldown_remaining_seconds', (b.cooldownRemainingMs ?? 0) / 1000, { provider: k }));
+      }
+    }
+  }
+  return out;
+}
+
 function emitMetering(meter) {
   if (!meter?.summary) return [];
   const s = meter.summary();
@@ -285,6 +324,7 @@ function isoToSecondsFromNow(iso) {
  * @param {object} [mw.injectionGuard]  promptInjectionGuard middleware
  * @param {object} [mw.metering]        usageMetering / usageMeteringToCap middleware
  * @param {object} [mw.retry]           retryOnRateLimit middleware (new in 1.47.1)
+ * @param {object} [mw.breaker]         circuitBreaker middleware (new in 1.49.0)
  * @param {object} [options]
  * @param {boolean} [options.excludeBreakdowns=false]  Skip per-tenant/model/provider breakdowns
  *                                                     (cardinality control for large fleets).
@@ -298,6 +338,7 @@ async function promMetrics(mw = {}, options = {}) {
   lines.push(...emitGuardrails(mw.guardrails));
   lines.push(...emitInjectionGuard(mw.injectionGuard));
   lines.push(...emitRetry(mw.retry));
+  lines.push(...emitCircuitBreaker(mw.breaker));
   let meteringLines = emitMetering(mw.metering);
   if (excludeBreakdowns) {
     meteringLines = meteringLines.filter(

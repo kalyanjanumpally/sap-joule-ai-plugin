@@ -284,3 +284,52 @@ test('promMetrics: retry-metrics HELP/TYPE lines round-trip correctly in a full 
   assert.equal(helpCount, typeCount, 'HELP/TYPE parity holds when retry mw included');
   assert.match(text, /llm_retry_requests_total 1/);
 });
+
+// ---- Circuit breaker metrics (new in 1.49.0) ----------------------
+
+test('promMetrics: no breaker series when no breaker middleware bound', async () => {
+  const text = await promMetrics({});
+  assert.doesNotMatch(text, /llm_breaker_/);
+});
+
+test('promMetrics: emits llm_breaker_* counters + per-bucket state gauge when breaker mw bound', async () => {
+  const { circuitBreaker } = require('../lib/middleware/circuitBreaker');
+  const breaker = circuitBreaker({ threshold: 3, cooldownMs: 30_000 });
+  // Populate stats manually
+  breaker.stats.requests       = 100;
+  breaker.stats.shortCircuited = 5;
+  breaker.stats.opens          = 2;
+  breaker.stats.closes          = 1;
+  breaker.stats.halfOpens      = 1;
+  // Also mutate a bucket by force-opening
+  breaker.forceOpen('openai');
+
+  const text = await promMetrics({ breaker });
+  assert.match(text, /^# TYPE llm_breaker_requests_total counter/m);
+  assert.match(text, /llm_breaker_requests_total 100/);
+  assert.match(text, /llm_breaker_short_circuited_total 5/);
+  assert.match(text, /llm_breaker_opens_total 3/);   // 2 stat-set + 1 forceOpen
+  assert.match(text, /llm_breaker_closes_total 1/);
+  assert.match(text, /llm_breaker_half_opens_total 1/);
+  // Bucket gauges
+  assert.match(text, /^# TYPE llm_breaker_state gauge/m);
+  assert.match(text, /llm_breaker_state\{provider="openai"\} 2/);
+  assert.match(text, /^# TYPE llm_breaker_cooldown_remaining_seconds gauge/m);
+});
+
+test('promMetrics: breaker-metrics HELP/TYPE parity in a full bundle', async () => {
+  const { circuitBreaker } = require('../lib/middleware/circuitBreaker');
+  const breaker = circuitBreaker({ threshold: 3 });
+  const svc = makeSvc(); await svc.init();
+  svc.use(breaker);
+  await svc.chat({ messages: [{ role: 'user', content: 'x' }] });
+  const text = await promMetrics({ breaker });
+  const lines = text.split('\n').filter(Boolean);
+  let helpCount = 0, typeCount = 0;
+  for (const l of lines) {
+    if (l.startsWith('# HELP ')) helpCount++;
+    else if (l.startsWith('# TYPE ')) typeCount++;
+  }
+  assert.equal(helpCount, typeCount, 'HELP/TYPE parity holds when breaker mw included');
+  assert.match(text, /llm_breaker_requests_total 1/);
+});

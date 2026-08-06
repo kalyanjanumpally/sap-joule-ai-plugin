@@ -36,6 +36,7 @@ const KNOWN_KINDS = new Set([
   'guardrails',
   'costBudget',
   'retryOnRateLimit',
+  'circuitBreaker',
   'usageMetering',
   'usageMeteringToCap',
   'responseCache',
@@ -142,6 +143,20 @@ function validateMiddlewareOrder(chain) {
     });
   }
 
+  // Rule: circuitBreaker INNER of retryOnRateLimit → retries fire even
+  // when the provider is objectively down (the breaker never gets to
+  // short-circuit before retries burn budget). Warning-severity.
+  const breakerIdx = idxOf('circuitBreaker');
+  if (breakerIdx !== -1 && retryIdx !== -1 && breakerIdx > retryIdx) {
+    warnings.push({
+      code:     'BREAKER_INNER_OF_RETRY',
+      severity: 'warning',
+      message:  'circuitBreaker is INNER of retryOnRateLimit — retries hit the provider even when the circuit is open (breaker never gets to short-circuit).',
+      fixit:    'Move circuitBreaker OUTER of retryOnRateLimit so an open circuit avoids burning retry budget on a known-down provider.',
+      involved: ['circuitBreaker', 'retryOnRateLimit'],
+    });
+  }
+
   // Missing-primitive advisories (info-severity — not always applicable).
   if (retryIdx === -1) {
     warnings.push({
@@ -150,6 +165,15 @@ function validateMiddlewareOrder(chain) {
       message:  'No retryOnRateLimit in the chain — throttled requests (429/503) fail immediately with no automatic recovery.',
       fixit:    'Add `llm.use(retryOnRateLimit({ maxAttempts: 3 }))` for automated retry on rate-limit responses.',
       involved: ['retryOnRateLimit'],
+    });
+  }
+  if (breakerIdx === -1) {
+    warnings.push({
+      code:     'NO_CIRCUIT_BREAKER',
+      severity: 'info',
+      message:  'No circuitBreaker in the chain — sustained provider outage will burn through retry + budget on every request instead of short-circuiting.',
+      fixit:    'Add `llm.use(circuitBreaker({ threshold: 5, cooldownMs: 30_000 }))` for automatic short-circuit on repeated 5xx / network failures.',
+      involved: ['circuitBreaker'],
     });
   }
   if (idxOfAny('usageMetering', 'usageMeteringToCap') === -1) {
