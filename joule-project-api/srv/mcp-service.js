@@ -95,17 +95,9 @@ function buildResources({ getCache, getBudget, getGuardrails, getInjectionGuard,
   const meter = getMetering();
   if (meter?.asMcpResource) resources.push(fromMiddleware(meter.asMcpResource()));
 
-  // Guardrails doesn't ship asMcpResource — hand-roll one over its .stats.
+  // Guardrails ships its own asMcpResource since 1.35.1 — no more hand-rolled adapter.
   const gr = getGuardrails();
-  if (gr) {
-    resources.push({
-      uri:         'config://guardrails',
-      name:        'Guardrails input/output filter stats',
-      description: 'Blocks + redactions across input + output filters (PII, blocklist, prompt-injection).',
-      mimeType:    'application/json',
-      read:        async () => gr.stats ?? {},
-    });
-  }
+  if (gr?.asMcpResource) resources.push(fromMiddleware(gr.asMcpResource()));
 
   // Live LlmBudget config rows from the DB. Complements config://budget
   // which shows CURRENT-WINDOW spend + effective limits; this shows the
