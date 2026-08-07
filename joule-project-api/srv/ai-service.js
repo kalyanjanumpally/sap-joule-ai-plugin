@@ -28,6 +28,10 @@ const {
   llmErrorHandler,
   isLLMError,
   errorRegistry,
+  // Auto-retry + adaptive tuner + proactive health probe (1.60-1.62)
+  autoRetry,
+  adaptiveBulkhead,
+  providerHealthProbe,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -122,6 +126,12 @@ let _breaker;
 let _bulkhead;
 let _costGuard;
 let _jsonLog;
+let _tuner;
+let _probe;
+// Auto-retry-wrapped llm.chat. Instantiated after the LLM connects; used
+// by every action handler so transient failures (BulkheadFull, CircuitOpen)
+// recover automatically without hand-writing retry code per action.
+let _chatWithAutoRetry;
 // Resilience bundle handle — kept around so prometheusBundle() / healthBundle()
 // return the exact set of primitives we wired (bundle authoritative for what
 // each getter returns; see getDeadline / getBreaker / getBulkhead / getRetry).
@@ -325,6 +335,78 @@ function getLLM() {
         },
       });
       llm.use(_cache);
+
+      // Adaptive concurrency tuner (cds-plugin-llm 1.61.0) — AIMD on the
+      // bulkhead's maxConcurrent based on rolling p95 latency. Target: 2s
+      // p95 (chat completions are the p95 driver; embeddings are fast).
+      // Grows by 1 slot per tick when there's headroom; shrinks by 2 when
+      // latency spikes (classic AIMD).
+      _tuner = adaptiveBulkhead({
+        bulkhead:      _bulkhead,
+        p95TargetMs:   2_000,
+        minConcurrent: 2,
+        maxConcurrent: 30,
+        adjustEveryMs: 15_000,
+        stepUp:        1,
+        stepDown:      2,
+        sampleWindow:  100,
+        onAdjust: (info) => cds.log('llm:tuner').info(
+          `[tuner] ${info.action} p95=${info.p95Ms}ms target=${info.targetMs}ms ${info.prevMaxConcurrent}→${info.newMaxConcurrent}`,
+        ),
+      });
+      _tuner.start();
+
+      // Provider health probe (cds-plugin-llm 1.62.0) — periodic 1-token
+      // pings to the configured LLM alias. Every 5 minutes; each probe
+      // is capped at 15s. Observational-only for the demo (no breaker
+      // feed) — the probe calls go through the real chain and the
+      // breaker sees natural failures. onHealthChange gives ops
+      // visibility BEFORE a real user request would surface the outage.
+      // Uses cache:false + retries:{max:0} so the probe genuinely tests
+      // the provider on every tick instead of hitting a stale cache.
+      const providerName = cds.env.requires?.llm?.kind ?? 'llm';
+      _probe = providerHealthProbe({
+        providers: [{
+          name: providerName,
+          probe: async () => llm.chat({
+            messages: [{ role: 'user', content: 'ok' }],
+            maxTokens: 1,
+            cache: false,
+            retries: { max: 0 },
+          }),
+        }],
+        intervalMs: 5 * 60_000,
+        timeoutMs:  15_000,
+        onHealthChange: (info) => cds.log('llm:health-probe').warn(
+          `[probe] ${info.provider} ${info.from} → ${info.to}${info.err ? ' (' + info.err.message.slice(0, 100) + ')' : ''}`,
+        ),
+      });
+      // Only auto-start the probe in production. Development boots often
+      // don't have a working LLM alias configured and would spam warnings.
+      if (process.env.NODE_ENV === 'production' && !process.env.PROBE_DISABLE) {
+        _probe.start();
+      }
+
+      // AutoRetry-wrapped chat (cds-plugin-llm 1.60.0). Every action
+      // handler below uses this instead of raw llm.chat, so transient
+      // failures (BulkheadFull, BulkheadTimeout, CircuitOpen after
+      // cooldown) recover automatically. Non-retriable errors
+      // (DeadlineExceeded, CostGuard, BudgetExceeded, PromptInjection)
+      // throw immediately — the LLMError.retriable field drives the
+      // decision, no hand-written per-error switch.
+      _chatWithAutoRetry = autoRetry(llm.chat.bind(llm), {
+        maxAttempts:  3,
+        backoffMs:    500,
+        jitterMs:     200,
+        maxBackoffMs: 30_000,
+        onRetry: (info) => cds.log('llm:auto-retry').warn(
+          `[auto-retry] attempt ${info.ctx.attempt} in ${info.ctx.waitMs}ms (code=${info.ctx.code}): ${info.ctx.error.slice(0, 100)}`,
+        ),
+        onGiveUp: (info) => cds.log('llm:auto-retry').error(
+          `[auto-retry] gave up after ${info.attempts.length} retries: ${info.finalError.message.slice(0, 100)}`,
+        ),
+      });
+
       return llm;
     });
   }
@@ -355,6 +437,10 @@ function getBulkhead() { return _bulkhead; }
 function getCostGuard() { return _costGuard; }
 /** Exported for /log-state dashboard + MCP service. */
 function getJsonLog() { return _jsonLog; }
+/** Exported for /tuner-state dashboard + MCP service. */
+function getTuner() { return _tuner; }
+/** Exported for /probe-state dashboard + MCP service. */
+function getProbe() { return _probe; }
 /** Exported for the demo app so it can access the bundle's helpers. */
 function getResilience() { return _resilience; }
 
@@ -515,7 +601,17 @@ module.exports = class AIService extends cds.ApplicationService {
       await startObservabilityMcp({
         getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
         getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
+        getTuner, getProbe,
       });
+    });
+
+    // Graceful shutdown — clean up the tuner + probe interval timers so
+    // the process can exit cleanly on SIGTERM / SIGINT. Both use unref()
+    // so they wouldn't hold the loop open, but explicit stop() prevents
+    // "handle still active" warnings on hot-reload.
+    cds.on('shutdown', () => {
+      try { _tuner?.stop(); } catch { /* swallow */ }
+      try { _probe?.stop(); } catch { /* swallow */ }
     });
 
     // Wrap the vector-hana plugin's `cds.vectorHana.askAbout` with a
@@ -670,6 +766,31 @@ module.exports = class AIService extends cds.ApplicationService {
         const snap = l.asMcpResource().handler();
         res.json(snap);
       });
+      // Adaptive tuner dashboard — current p95 + latest AIMD action.
+      // Ops watch { currentMaxConcurrent, lastP95Ms, lastAction, grows,
+      // shrinks } to see the tuner reacting to load.
+      cds.app.get('/tuner-state', (_req, res) => {
+        const t = getTuner();
+        if (!t) return res.status(503).json({ error: 'tuner not initialized yet' });
+        const snap = t.asMcpResource().handler();
+        res.json(snap);
+      });
+      // Provider health probe dashboard — per-provider healthy state +
+      // recent probe outcomes. running:true means the probe interval is
+      // active (auto-started in production only). Manually trigger via
+      // POST /probe-now.
+      cds.app.get('/probe-state', (_req, res) => {
+        const p = getProbe();
+        if (!p) return res.status(503).json({ error: 'probe not initialized yet' });
+        const snap = p.asMcpResource().handler();
+        res.json(snap);
+      });
+      cds.app.post('/probe-now', async (_req, res) => {
+        const p = getProbe();
+        if (!p) return res.status(503).json({ error: 'probe not initialized yet' });
+        await p.probeNow();
+        res.json(p.asMcpResource().handler());
+      });
       // /error-recipe — documents the LLMError taxonomy so tools like the
       // ops-dashboard, alerting configs, and downstream API consumers can
       // discover the code → HTTP status → retriable mapping without
@@ -766,6 +887,8 @@ module.exports = class AIService extends cds.ApplicationService {
         if (!getRetry())          missing.push('retryOnRateLimit');
         if (!getMetering())       missing.push('usageMeteringToCap');
         if (!getCache())          missing.push('responseCache');
+        if (!getTuner())          missing.push('adaptiveBulkhead');
+        if (!getProbe())          missing.push('providerHealthProbe');
         if (missing.length > 0) {
           return res.status(503).json({ status: 'not-ready', missing });
         }
@@ -831,7 +954,7 @@ module.exports = class AIService extends cds.ApplicationService {
 
     this.on('summarizePurchaseOrder', async (req) => {
       const { purchaseOrderId, poJson } = req.data;
-      const { text, usage, model } = await llm.chat({
+      const { text, usage, model } = await _chatWithAutoRetry({
         system: PO_SYSTEM,
         messages: [{ role: 'user', content: poJson }],
         cache: true,
@@ -847,7 +970,7 @@ module.exports = class AIService extends cds.ApplicationService {
 
     this.on('explainInvoiceRisk', async (req) => {
       const { invoiceId, invoiceJson } = req.data;
-      const { data, usage, model, text } = await llm.chat({
+      const { data, usage, model, text } = await _chatWithAutoRetry({
         system: INVOICE_SYSTEM,
         messages: [{ role: 'user', content: `Invoice ${invoiceId}:\n${invoiceJson}` }],
         cache: true,
@@ -904,7 +1027,7 @@ module.exports = class AIService extends cds.ApplicationService {
         defaultModel = 'meta-llama/llama-4-scout-17b-16e-instruct';
       }
 
-      const { data, usage, model: usedModel, text } = await llm.chat({
+      const { data, usage, model: usedModel, text } = await _chatWithAutoRetry({
         model: model || defaultModel,
         system: INVOICE_EXTRACT_SYSTEM,
         messages: [{
@@ -986,7 +1109,7 @@ module.exports = class AIService extends cds.ApplicationService {
     // a hand-rolled equivalent.
     this.on('assessSupplierRisk', async (req) => {
       const { supplierId, scenario } = req.data;
-      const { data, usage, model, text } = await llm.chat({
+      const { data, usage, model, text } = await _chatWithAutoRetry({
         system: `You assess procurement supplier risk. Rate as low/medium/high based on the evidence. Cite the specific factors driving the rating; do not fabricate. If key data is missing, lower the confidence score.`,
         messages: [{
           role: 'user',
@@ -1040,7 +1163,7 @@ module.exports = class AIService extends cds.ApplicationService {
       const audio = audioFromBase64(audioBase64, mediaType);
 
       try {
-        const { data, usage, model: usedModel, text } = await llm.chat({
+        const { data, usage, model: usedModel, text } = await _chatWithAutoRetry({
           model: model || undefined,   // fall through to configured default
           system: 'You extract structured purchase orders from spoken voice memos. Field values must come from what was actually said; do not invent SKUs, prices, or delivery dates. Currency codes must be ISO 4217. Dates in ISO 8601 (YYYY-MM-DD). If a field is missing from the recording, omit it.',
           messages: [{
@@ -1104,5 +1227,7 @@ module.exports.getBreaker = getBreaker;
 module.exports.getBulkhead = getBulkhead;
 module.exports.getCostGuard = getCostGuard;
 module.exports.getJsonLog = getJsonLog;
+module.exports.getTuner = getTuner;
+module.exports.getProbe = getProbe;
 module.exports.getResilience = getResilience;
 module.exports.getLLM = getLLM;

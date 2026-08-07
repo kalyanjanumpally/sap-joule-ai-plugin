@@ -29,7 +29,7 @@ const { MCPServer } = require('@saptarishi/cds-plugin-llm/lib/mcp/server');
  */
 async function startObservabilityMcp({
   getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
-  getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
+  getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog, getTuner, getProbe,
 }) {
   if (process.env.MCP_OBS_DISABLE) {
     cds.log('mcp:obs').info('[mcp:obs] disabled via MCP_OBS_DISABLE — skipping startup');
@@ -45,10 +45,10 @@ async function startObservabilityMcp({
   try {
     const server = new MCPServer({
       name:              'joule-procurement-ops',
-      version:           '0.9.0',
+      version:           '0.10.0',
       resources:         buildResources({
         getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
-        getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
+        getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog, getTuner, getProbe,
       }),
       resourceTemplates: buildResourceTemplates(),
       tools:             buildTools({ getCache, getInjectionGuard }),
@@ -76,7 +76,7 @@ async function startObservabilityMcp({
 
 function buildResources({
   getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
-  getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
+  getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog, getTuner, getProbe,
 }) {
   // As of cds-plugin-llm 1.40.1, MCPServer.registerResource() accepts the
   // { handler } shape shipped by middleware.asMcpResource() directly — no
@@ -115,6 +115,12 @@ function buildResources({
   // config://json-log exposes requests / ok / failed + byErrorCode.
   const jl = getJsonLog?.();
   if (jl?.asMcpResource) resources.push(jl.asMcpResource());
+  // Adaptive bulkhead tuner (cds-plugin-llm 1.61.0). config://adaptive-bulkhead.
+  const tuner = getTuner?.();
+  if (tuner?.asMcpResource) resources.push(tuner.asMcpResource());
+  // Provider health probe (cds-plugin-llm 1.62.0). config://provider-health.
+  const probe = getProbe?.();
+  if (probe?.asMcpResource) resources.push(probe.asMcpResource());
 
   const gr = getGuardrails();
   if (gr?.asMcpResource) resources.push(gr.asMcpResource());
@@ -251,6 +257,12 @@ const COUNTER_KEYS = new Set([
   'checked', 'skipped', 'warned', 'blocked', 'estimatedUsdTotal', // costGuard
   // cds-plugin-llm 1.59.0 counters
   'byErrorCode', 'ok', 'failed',                                  // jsonLog
+  // cds-plugin-llm 1.61.0 counters
+  'ticks', 'adjustments', 'grows', 'shrinks',
+  'lastP95Ms', 'lastAction', 'lastMaxConcurrent',
+  'currentMaxConcurrent', 'sampleCount', 'running',                // adaptive
+  // cds-plugin-llm 1.62.0 counters
+  'probes', 'timeouts', 'healthChanges', 'providers',              // probe
 ]);
 function stripCounters(payload) {
   if (!payload || typeof payload !== 'object') return payload;

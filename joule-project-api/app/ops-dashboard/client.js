@@ -52,6 +52,10 @@
     costGuardSub:    $('#costguard-sub'),
     jsonLogFailed:   $('#jsonlog-failed'),
     jsonLogSub:      $('#jsonlog-sub'),
+    tunerMax:        $('#tuner-max'),
+    tunerSub:        $('#tuner-sub'),
+    probeStatus:     $('#probe-status'),
+    probeSub:        $('#probe-sub'),
 
     // Quote widget
     quoteInput:  $('#quote-input'),
@@ -277,6 +281,32 @@
     els.jsonLogFailed.className = 'kpi-primary ' + (failed > 0 ? 'err' : '');
     els.jsonLogSub.textContent = `${ok} ok · ${failed} failed${codes ? ' · ' + codes : ' · no error codes'}`;
   }
+  function renderTuner(data) {
+    if (!data) return;
+    els.tunerMax.textContent = String(data.currentMaxConcurrent ?? '–');
+    // Color the primary: green for grow, yellow for shrink, neutral for noop
+    const action = data.lastAction ?? 'none';
+    const cls = action === 'grow' ? 'ok' : action === 'shrink' ? 'warn' : '';
+    els.tunerMax.className = 'kpi-primary ' + cls;
+    const p95 = data.lastP95Ms != null ? `${data.lastP95Ms}ms` : '–';
+    els.tunerSub.textContent = `p95 ${p95} · target ${data.p95TargetMs}ms · ${data.grows ?? 0}↑ ${data.shrinks ?? 0}↓ · ${action}`;
+  }
+  function renderProbe(data) {
+    if (!data) return;
+    // Show the worst-case healthy state across providers
+    const providers = Object.entries(data.providers ?? {});
+    let overall = 'unknown';
+    if (providers.length > 0) {
+      const anyUnhealthy = providers.some(([, s]) => s.healthy === false);
+      const allHealthy   = providers.every(([, s]) => s.healthy === true);
+      overall = anyUnhealthy ? 'unhealthy' : allHealthy ? 'healthy' : 'probing';
+    }
+    els.probeStatus.textContent = overall.toUpperCase();
+    els.probeStatus.className = 'kpi-primary ' + (overall === 'unhealthy' ? 'err' : overall === 'healthy' ? 'ok' : '');
+    const failures = data.failures ?? 0;
+    const timeouts = data.timeouts ?? 0;
+    els.probeSub.textContent = `${data.probes ?? 0} probes · ${failures} failures · ${timeouts} timeouts · ${data.running ? 'running' : 'stopped'}`;
+  }
   function renderHealth(data) {
     if (!data) {
       els.healthDot.className = 'dot idle';
@@ -316,7 +346,7 @@
   // ---- Poll cycle ----------------------------------------------------
   async function poll() {
     setConn('live', 'polling…');
-    const [budget, cache, retry, guardrails, injection, deadline, breaker, bulkhead, costguard, jsonlog, health, chain] = await Promise.all([
+    const [budget, cache, retry, guardrails, injection, deadline, breaker, bulkhead, costguard, jsonlog, tuner, probe, health, chain] = await Promise.all([
       safeJson('/budget-status'),
       safeJson('/cache-stats'),
       safeJson('/retry-stats'),
@@ -327,6 +357,8 @@
       safeJson('/bulkhead-state'),
       safeJson('/cost-guard-state'),
       safeJson('/log-state'),
+      safeJson('/tuner-state'),
+      safeJson('/probe-state'),
       safeJson('/resilience'),
       readChain(),
     ]);
@@ -340,6 +372,8 @@
     renderBulkhead(bulkhead);
     renderCostGuard(costguard);
     renderJsonLog(jsonlog);
+    renderTuner(tuner);
+    renderProbe(probe);
     renderHealth(health);   // health = /resilience payload
     renderChain(chain);
     const now = new Date().toLocaleTimeString();
