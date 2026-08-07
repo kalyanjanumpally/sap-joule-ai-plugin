@@ -1954,6 +1954,50 @@ export function wrapStreamCompletion<T>(iter: AsyncIterable<T>): StreamCompletio
 /** Type guard for a wrapped stream envelope. @since 1.72.0 */
 export function hasStreamCompletion(x: unknown): x is StreamCompletionEnvelope<unknown>;
 
+// ---- Chain snapshot diff (new in 1.73.0) -----------------------------
+
+export interface ChainSnapshot {
+  order: Array<{ position: number; kind: string; config?: Record<string, unknown> }>;
+  summary?: Record<string, unknown>;
+}
+
+export interface ChainDiffConfigChange {
+  field: string;
+  from:  unknown;
+  to:    unknown;
+}
+
+export interface ChainDiffResult {
+  ok: boolean;
+  added:         Array<{ kind: string; position: number }>;
+  removed:       Array<{ kind: string; position: number }>;
+  reordered:     Array<{ kind: string; fromPosition: number; toPosition: number }>;
+  configChanged: Array<{ kind: string; changes: ChainDiffConfigChange[] }>;
+  unchanged:     Array<{ kind: string; position: number }>;
+  summary: {
+    added:         number;
+    removed:       number;
+    reordered:     number;
+    configChanged: number;
+    unchanged:     number;
+  };
+}
+
+/**
+ * Compare two middleware chain snapshots (the `config://chain` payloads
+ * from 1.48 validateMiddlewareOrder / buildChainSnapshot) and report
+ * the delta. CI-friendly for detecting chain drift; pre-deploy diffs.
+ * @since 1.73.0
+ */
+export function chainDiff(a: ChainSnapshot, b: ChainSnapshot): ChainDiffResult;
+
+/**
+ * Format a chainDiff result as a human-readable multi-line string with
+ * +/-/~ markers. `colors: true` adds ANSI escape codes for terminals.
+ * @since 1.73.0
+ */
+export function formatChainDiff(diff: ChainDiffResult, options?: { colors?: boolean }): string;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

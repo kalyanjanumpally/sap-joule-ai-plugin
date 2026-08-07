@@ -124,6 +124,9 @@ module.exports = {
   // Stream completion tracker — middleware can hook into stream 'fully consumed' (new in 1.72.0)
   wrapStreamCompletion: require('./streamCompletion').wrapStreamCompletion,
   hasStreamCompletion: require('./streamCompletion').hasStreamCompletion,
+  // Chain snapshot diff — CI-friendly comparison of middleware chain snapshots (new in 1.73.0)
+  chainDiff: require('./chainDiff').chainDiff,
+  formatChainDiff: require('./chainDiff').formatChainDiff,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

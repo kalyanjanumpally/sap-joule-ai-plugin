@@ -4,6 +4,63 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.73.0] — 2026-08-07
+
+### Added
+
+- **`chainDiff(a, b)` — chain snapshot diff tool.** Compare two middleware chain snapshots (the `config://chain` payloads from 1.48 `validateMiddlewareOrder` / `buildChainSnapshot`) and report the delta: added / removed / reordered primitives + per-primitive config field changes.
+
+  ```js
+  const { chainDiff, formatChainDiff } = require('@saptarishi/cds-plugin-llm');
+
+  const baseline = JSON.parse(fs.readFileSync('chain-baseline.json'));
+  const live     = await mcpClient.readResource('config://chain');
+
+  const diff = chainDiff(baseline, live);
+  if (!diff.ok) {
+    console.error(formatChainDiff(diff, { colors: true }));
+    process.exit(1);   // CI fails if chain drifted
+  }
+  ```
+
+- **Structured result** — `{ ok, added, removed, reordered, configChanged, unchanged, summary }`. Every drift lands in exactly one bucket:
+  - `added` — new primitive not in baseline
+  - `removed` — baseline primitive missing from live
+  - `reordered` — same primitive, different position
+  - `configChanged` — same primitive, config fields differ (recursively)
+  - `unchanged` — same primitive, same position, same config
+
+- **Config drift detection.** Field-by-field comparison of the `config` object on each snapshot entry. Handles scalar changes (`10 → 20`), added fields (`undefined → value`), removed fields (`value → undefined`), and nested object / array changes (via `JSON.stringify` structural comparison).
+
+- **`formatChainDiff(diff, { colors? })`** — human-readable multi-line output with `+/-/~` markers. Optional ANSI colors for terminals (green `+`, red `-`, yellow `~`).
+
+  ```
+  + traceCorrelation  (position 2, added)
+  - oldMw  (was at position 5)
+  ~ bulkhead  reordered: 3 → 4
+  ~ costBudget  config changed:
+      maxConcurrent: 10 → 20
+      queueTimeoutMs: 5000 → 10000
+
+  summary: +1 added, -1 removed, ~1 reordered, ~1 config, =6 unchanged
+  ```
+
+- **Long-value truncation** — config values over 60 chars are truncated in the formatter output with `...` to keep the terminal diff scannable.
+
+- **CI use case:** commit a baseline snapshot with your app; on each deployment, fetch the live `config://chain` from the MCP server and run `chainDiff(baseline, live)` — fail the pipeline if `!diff.ok`. Catches accidental middleware ordering changes, config tuning drift, or unauthorized primitive additions before they land in prod.
+
+- **Pre-deploy diff** — teams tuning resilience config across environments can diff `dev.json` vs `prod.json` before rolling out changes.
+
+### Type definitions
+
+- `ChainSnapshot`, `ChainDiffResult`, `ChainDiffConfigChange`
+- `chainDiff(a, b): ChainDiffResult` — pure function, no side effects
+- `formatChainDiff(diff, options?): string`
+
+### Backwards compatibility
+
+Additive — no breaking changes.
+
 ## [1.72.0] — 2026-08-07
 
 ### Added
