@@ -4,6 +4,53 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.76.0] — 2026-08-07
+
+### Added
+
+- **`structuredOutputValidator({ schemaFrom?, onInvalid?, maxRetries?, ... })` — post-response JSON Schema validator.** Rejects (or auto-retries) LLM responses that don't match a declared schema. Complements 1.34 `schemas` (which ships pre-built JSON Schemas for common business objects) by enforcing them at the chain level rather than trusting the model to obey `format:` at the provider layer.
+
+  ```js
+  const { structuredOutputValidator, schemas } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(structuredOutputValidator({
+    onInvalid:  'retry',
+    maxRetries: 1,
+  }));
+
+  const res = await llm.chat({
+    messages: [{ role: 'user', content: 'Extract this invoice: ...' }],
+    format:   schemas.Invoice,
+  });
+  //  → res.parsed = { vendor, currency, total, lineItems, ... }
+  //  → throws StructuredOutputInvalidError if the model returned malformed JSON or missed a required field
+  ```
+
+- **Two failure modes.** `onInvalid: 'throw'` (default) surfaces `StructuredOutputInvalidError` immediately with the list of validation errors + the raw text — hand-off to your caller / retry policy. `onInvalid: 'retry'` appends a corrective user message ("your previous response failed schema validation: …") and re-invokes the chain up to `maxRetries` times. Retry mutates only `ctx.request` for the inner call and restores the original before returning, so outer middleware sees no side effects.
+
+- **Built-in minimal validator (dep-free).** Handles the subset used by the shipped `schemas` module: `type`, `required`, `properties`, `items`, `enum`, `additionalProperties: false`. Recursive on nested objects + arrays. Sufficient to enforce every `schemas.*` shape without pulling in Ajv/Zod. Users who need full JSON Schema draft-7 can pass a `validate:` adapter — accepts either `string[]` errors or `{ ok, errors }` shape for Zod/Ajv integration.
+
+- **Smart JSON extraction.** Default `extractJson` tries in order:
+  1. `result.data` — provider already parsed via `format:` (LLMService fast path)
+  2. `JSON.parse(result.text)` — clean text response
+  3. Fenced code block `` ```json … ``` `` (or bare `` ``` `` fence) — very common Anthropic / OpenAI pattern
+  4. First `{` → last `}` — model wrapped JSON in prose ("Here's your invoice: {…} Hope this helps!")
+  5. First `[` → last `]` — top-level arrays
+
+  Override via `extractJson:` for custom envelopes (function-call args, tool responses, etc.).
+
+- **Correction prompt is customizable.** Default `buildCorrection({ errors, schema, rawText })` produces a compact "your previous response could not be parsed as valid JSON matching the required schema. Errors: … Return ONLY a JSON object matching this schema: …" message. `applyCorrection(request, text)` defaults to appending a user message but can be swapped to inject via `system` or a tool-response format.
+
+- **Streaming support (1.72+).** `captureStreams: true` (default) defers validation to `onComplete` — validates the final done chunk's text after the stream is fully consumed. No retry is possible for streams (the caller has already consumed the output), but `stats.invalidStreams` increments so you can dashboard the failure rate. `captureStreams: false` skips streams entirely.
+
+- **Non-destructive `result.parsed`.** On success, the validated object is attached to `result.parsed` (configurable via `attachParsedAs`). If the field already exists, it's left untouched — never clobbers a downstream middleware's earlier parse. Original `result.text` and `result.data` are always preserved.
+
+- **New error code `STRUCTURED_OUTPUT_INVALID`** in the 1.57 taxonomy: `httpStatus: 502` (Bad Gateway — upstream returned malformed data), `retriable: false` (internal retry already exhausted or disabled), `severity: error`. `StructuredOutputInvalidError` extends `LLMError` and carries `errors[]`, `rawText`, `schema`, and `attempts`.
+
+- **Introspection.** `stats: { totalValidated, valid, invalid, retries, retriesGivenUp, invalidStreams, skipped }` + `reset()` + `asMcpResource()` → `config://structured-output-validator`.
+
+- **TypeScript.** `StructuredOutputValidatorOptions`, `StructuredOutputValidatorStats`, `StructuredOutputValidatorMiddleware`, `StructuredOutputInvalidError`.
+
 ## [1.75.0] — 2026-08-07
 
 ### Added

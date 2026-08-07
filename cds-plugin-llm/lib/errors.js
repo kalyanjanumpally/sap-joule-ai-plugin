@@ -107,6 +107,13 @@ const errorRegistry = {
     httpStatus: 400,
     severity:   'error',
   },
+  // Contract-validation family
+  STRUCTURED_OUTPUT_INVALID: {
+    primitive:  'structuredOutputValidator',
+    retriable:  false,   // internal retry already exhausted (or disabled)
+    httpStatus: 502,     // Bad Gateway — upstream (LLM) returned malformed data
+    severity:   'error',
+  },
 };
 
 // ---- Base class -------------------------------------------------------

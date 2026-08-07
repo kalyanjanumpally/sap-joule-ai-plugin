@@ -2069,6 +2069,75 @@ export interface ReplayBufferMiddleware extends Middleware {
  */
 export function replayBuffer(options?: ReplayBufferOptions): ReplayBufferMiddleware;
 
+// ---- Structured output validator (new in 1.76.0) --------------------
+
+export interface StructuredOutputValidatorStats {
+  totalValidated:  number;
+  valid:           number;
+  invalid:         number;
+  retries:         number;
+  retriesGivenUp:  number;
+  invalidStreams:  number;
+  skipped:         number;
+}
+
+export interface StructuredOutputValidatorOptions {
+  /** Static default schema. Used only when no per-request schema is found. */
+  schema?:          Record<string, unknown> | null;
+  /** Dynamic per-request schema resolver. Return null to fall back to `schema`. */
+  schemaFrom?:      ((ctx: MiddlewareContext) => Record<string, unknown> | null | undefined) | null;
+  /** Extract the parseable object from the response. Default: result.data → JSON.parse(result.text) → code fence → first-brace-match. */
+  extractJson?:     (result: any) => unknown;
+  /** Validator function. Default: built-in minimal validator. Return string[] errors OR { ok, errors } shape. */
+  validate?:        (obj: unknown, schema: Record<string, unknown>) => string[] | { ok: boolean; errors?: string[] };
+  /** What to do on invalid response. Default 'throw'. */
+  onInvalid?:       'throw' | 'retry';
+  /** Retry attempts when onInvalid='retry'. Default 1. */
+  maxRetries?:      number;
+  /** Build corrective prompt when retrying. */
+  buildCorrection?: (info: { errors: string[]; schema: Record<string, unknown>; rawText: string | null }) => string;
+  /** Inject correction into the retry request. Default appends a user message. */
+  applyCorrection?: (request: any, correctionText: string) => any;
+  /** Validate stream responses via onComplete. Default true. No retry for streams. */
+  captureStreams?:  boolean;
+  /** Field name to attach the parsed object to on the result. Default 'parsed'. */
+  attachParsedAs?:  string;
+}
+
+export interface StructuredOutputValidatorMiddleware extends Middleware {
+  readonly stats: StructuredOutputValidatorStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://structured-output-validator';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => StructuredOutputValidatorStats & {
+      onInvalid:        'throw' | 'retry';
+      maxRetries:       number;
+      captureStreams:   boolean;
+      hasStaticSchema:  boolean;
+      hasSchemaFrom:    boolean;
+    };
+  };
+}
+
+export class StructuredOutputInvalidError extends LLMError {
+  readonly errors:   string[];
+  readonly rawText:  string | null;
+  readonly schema:   Record<string, unknown>;
+  readonly attempts: number;
+}
+
+/**
+ * Post-response JSON Schema validator. Rejects (or auto-retries) LLM
+ * responses that don't match the declared schema. Complements 1.34
+ * `schemas` (pre-built shapes) by enforcing them at the chain level
+ * instead of trusting the model to obey `format:`.
+ * @since 1.76.0
+ */
+export function structuredOutputValidator(options?: StructuredOutputValidatorOptions): StructuredOutputValidatorMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
