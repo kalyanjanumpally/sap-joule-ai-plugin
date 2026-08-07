@@ -84,6 +84,8 @@ module.exports = {
   healthCheck: require('./healthHandler').healthCheck,
   // Pre-flight cost estimator — token-counts + prices without an API round-trip (new in 1.54.0)
   estimateCost: require('./estimateCost').estimateCost,
+  // Resilience bundle — one-liner wiring for the full resilience stack (new in 1.55.0)
+  resilience: require('./resilience'),
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

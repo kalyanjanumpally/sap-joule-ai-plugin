@@ -1772,6 +1772,76 @@ export interface EstimateCostResult {
  */
 export function estimateCost(input: EstimateCostInput): EstimateCostResult;
 
+// ---- Resilience bundle (new in 1.55.0) --------------------------------
+
+export type ResiliencePrimitiveKind =
+  | 'deadline' | 'costBudget' | 'circuitBreaker' | 'bulkhead' | 'retryOnRateLimit';
+
+export interface ResilienceBundleOptions {
+  // Deadline
+  deadlineMs?:         number;
+  perMethodDeadline?:  Record<string, number> | null;
+  // Cost budget (only wired when budgetLimits is non-null)
+  budgetLimits?:       BudgetLimits | null;
+  budgetWindow?:       BudgetWindow;
+  budgetCurrency?:     string;
+  budgetAction?:       'throw' | 'warn';
+  // Circuit breaker
+  breakerThreshold?:        number;
+  breakerCooldownMs?:       number;
+  breakerHalfOpenAttempts?: number;
+  breakerPerProvider?:      boolean;
+  // Bulkhead
+  bulkheadMax?:         number;
+  bulkheadQueue?:       number;
+  bulkheadTimeoutMs?:   number;
+  bulkheadPerProvider?: boolean;
+  // Retry
+  retryAttempts?:     number;
+  retryFallbackMs?:   number;
+  retryJitterMs?:     number;
+  // Composition control
+  include?:  ResiliencePrimitiveKind[] | null;
+  exclude?:  ResiliencePrimitiveKind[] | null;
+  // Callback hooks forwarded to the underlying primitives
+  onDeadlineExpired?: DeadlineOptions['onExpired'];
+  onRetry?:           RetryOnRateLimitOptions['onRetry'];
+  onRetryGiveUp?:     RetryOnRateLimitOptions['onGiveUp'];
+  onBreakerOpen?:     CircuitBreakerOptions['onOpen'];
+  onBreakerClose?:    CircuitBreakerOptions['onClose'];
+  onBudgetExceeded?:  CostBudgetOptions['onExceeded'];
+  onBulkheadReject?:  BulkheadOptions['onReject'];
+}
+
+export interface ResilienceBundleStack {
+  deadline?:  DeadlineMiddleware;
+  budget?:    CostBudgetMiddleware;
+  breaker?:   CircuitBreakerMiddleware;
+  bh?:        BulkheadMiddleware;
+  bulkhead?:  BulkheadMiddleware;
+  retry?:     RetryOnRateLimitMiddleware;
+  /** Description of the wired chain — feeds validateMiddlewareOrder. */
+  chain:      Array<{ kind: ResiliencePrimitiveKind }>;
+  /** Attach every included primitive to `llm` in canonical order. */
+  apply(llm: LLMService | { use: (mw: Middleware) => any }): any;
+  /** Shape ready to pass to `prometheusHandler({ ... })`. */
+  prometheusBundle(): { deadline?: DeadlineMiddleware; budget?: CostBudgetMiddleware; breaker?: CircuitBreakerMiddleware; bh?: BulkheadMiddleware; retry?: RetryOnRateLimitMiddleware };
+  /** Shape ready to pass to `healthHandler({ ... })`. */
+  healthBundle():     { deadline?: DeadlineMiddleware; budget?: CostBudgetMiddleware; breaker?: CircuitBreakerMiddleware; bh?: BulkheadMiddleware; retry?: RetryOnRateLimitMiddleware };
+}
+
+export namespace resilience {
+  /**
+   * One-liner that wires the full resilience stack in canonical order:
+   *   deadline → costBudget → circuitBreaker → bulkhead → retryOnRateLimit
+   * Returns each primitive as a named field plus apply(llm),
+   * prometheusBundle(), and healthBundle() helpers.
+   * @since 1.55.0
+   */
+  function bundle(options?: ResilienceBundleOptions): ResilienceBundleStack;
+  const CANONICAL_ORDER: readonly ResiliencePrimitiveKind[];
+}
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {

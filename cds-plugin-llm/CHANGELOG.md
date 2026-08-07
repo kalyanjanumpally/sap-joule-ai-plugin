@@ -4,6 +4,65 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.55.0] — 2026-08-07
+
+### Added
+
+- **`resilience.bundle({...})` — one-liner for the full resilience stack.** Wires `deadline → costBudget → circuitBreaker → bulkhead → retryOnRateLimit` in canonical order with sensible defaults. Completes the 1.47-1.54 arc: production-grade resilience in one line instead of five separate `llm.use()` calls with per-primitive option objects.
+
+  ```js
+  const { resilience } = require('@saptarishi/cds-plugin-llm');
+
+  const stack = resilience.bundle({
+    deadlineMs:        30_000,
+    retryAttempts:     3,
+    breakerThreshold:  5,
+    breakerCooldownMs: 30_000,
+    bulkheadMax:       10,
+    bulkheadQueue:     50,
+    budgetLimits:      { total: 500, perTenant: { free: 10 } },
+  });
+
+  stack.apply(llm);   // → registers all 5 middleware in canonical order
+  ```
+
+- **Named primitive access.** Each field on the returned stack is the middleware instance itself — inspect stats, force-open a circuit, snapshot a bucket, etc.
+
+  ```js
+  stack.deadline.stats;                     // { requests, expired, activeCount }
+  stack.breaker.state('openai');            // { state, consecutiveFailures, cooldownRemainingMs }
+  stack.bh.reset('openai');                 // drain the bulkhead
+  stack.retry.stats.givenUp;                // permanent failures after retries
+  stack.budget.snapshot();                  // per-tenant / per-model spend
+  ```
+
+- **One-line Prometheus + health wiring.** `prometheusBundle()` and `healthBundle()` return the exact shapes `prometheusHandler` and `healthHandler` expect. Two more one-liners:
+
+  ```js
+  const stack = resilience.bundle({ budgetLimits: { total: 500 } });
+  stack.apply(llm);
+  app.get('/metrics', prometheusHandler(stack.prometheusBundle()));
+  app.get('/health',  healthHandler(stack.healthBundle()));
+  ```
+
+- **`stack.chain` — validateMiddlewareOrder-compatible description.** The chain array matches `[{ kind: 'deadline' }, { kind: 'costBudget' }, ...]` so consumers can pass it straight to `validateMiddlewareOrder(stack.chain)` and confirm the wiring is clean before deployment.
+
+- **`include` / `exclude` options** for partial bundles. Test rigs can skip specific primitives; a "chat-only" service can drop `budget` if it's metered elsewhere; a "batch" service can drop `retry` if the batch API handles it natively.
+
+- **`CANONICAL_ORDER`** constant exported (`['deadline', 'costBudget', 'circuitBreaker', 'bulkhead', 'retryOnRateLimit']`) for consumers who want to build their own ordering-aware tools on top of the bundle.
+
+- **Callback hooks forwarded per-primitive:** `onDeadlineExpired`, `onRetry`, `onRetryGiveUp`, `onBreakerOpen`, `onBreakerClose`, `onBudgetExceeded`, `onBulkheadReject` — set them once at bundle time instead of threading them through five separate option objects.
+
+### Type definitions
+
+- `ResiliencePrimitiveKind` — string-literal union of the 5 canonical kinds
+- `ResilienceBundleOptions`, `ResilienceBundleStack`
+- `namespace resilience { function bundle(); const CANONICAL_ORDER; }`
+
+### Backwards compatibility
+
+Additive — no breaking changes. `resilience.bundle` is a new top-level export; consumers can continue using the individual middleware factories.
+
 ## [1.54.0] — 2026-08-07
 
 ### Added
