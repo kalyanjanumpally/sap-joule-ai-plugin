@@ -127,6 +127,8 @@ module.exports = {
   // Chain snapshot diff — CI-friendly comparison of middleware chain snapshots (new in 1.73.0)
   chainDiff: require('./chainDiff').chainDiff,
   formatChainDiff: require('./chainDiff').formatChainDiff,
+  // In-memory replay buffer — captures last N request/response pairs for live inspection (new in 1.75.0)
+  replayBuffer: require('./middleware/replayBuffer').replayBuffer,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

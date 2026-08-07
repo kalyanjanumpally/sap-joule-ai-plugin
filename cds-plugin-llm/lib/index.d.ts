@@ -1998,6 +1998,77 @@ export function chainDiff(a: ChainSnapshot, b: ChainSnapshot): ChainDiffResult;
  */
 export function formatChainDiff(diff: ChainDiffResult, options?: { colors?: boolean }): string;
 
+// ---- Replay buffer (new in 1.75.0) -----------------------------------
+
+export interface ReplayBufferEntry {
+  timestamp:     number;
+  method:        string;
+  model:         string | null;
+  request:       Record<string, unknown>;
+  response:      { textPreview?: string; textLength?: number; model?: string; usage?: any; cached?: boolean; stopReason?: string } | null;
+  error:         { name: string; code: string | null; message: string; primitive: string | null; retriable: boolean } | null;
+  durationMs:    number;
+  correlationId: string | null;
+  ok:            boolean;
+}
+
+export interface ReplayBufferOptions {
+  /** Rolling buffer size. Default 100. */
+  size?:                    number;
+  /** Fields to strip from `request` before storing. Default ['messages', 'system', 'input']. */
+  redactFields?:            string[];
+  /** Capture stream calls too (defers to onComplete). Default true. */
+  captureStreams?:          boolean;
+  /** Include a truncated preview of the last user message even when 'messages' is redacted. */
+  includeRedactedPreview?:  boolean;
+  /** Truncation length for the redacted preview. Default 200. */
+  previewChars?:            number;
+}
+
+export interface ReplayBufferStats {
+  totalCaptured: number;
+  successes:     number;
+  failures:      number;
+}
+
+export interface ReplayBufferMiddleware extends Middleware {
+  readonly stats: ReplayBufferStats;
+  /** Everything currently in the buffer, oldest → newest. */
+  dump():             ReplayBufferEntry[];
+  /** Last N entries, oldest → newest. */
+  dumpLastN(n: number): ReplayBufferEntry[];
+  /** Entries matching a predicate. */
+  dumpMatching(pred: (entry: ReplayBufferEntry) => boolean): ReplayBufferEntry[];
+  /** Number of entries currently held (capped at capacity). */
+  size():     number;
+  /** Configured buffer size (max entries). */
+  capacity(): number;
+  /** Clear buffer + stats. */
+  clear():    void;
+  asMcpResource(): {
+    uri: 'config://replay-buffer';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ReplayBufferStats & {
+      capacity: number;
+      current: number;
+      redactFields: string[];
+      entries: ReplayBufferEntry[];
+    };
+  };
+}
+
+/**
+ * Captures the last N request/response pairs in a rolling in-memory
+ * buffer for live inspection. Zero persistence — different from the
+ * 1.69 testing.recording (fixture files). Redacts sensitive fields
+ * (messages, system, input) by default; can include a truncated
+ * preview of the last user message via `includeRedactedPreview: true`.
+ * @since 1.75.0
+ */
+export function replayBuffer(options?: ReplayBufferOptions): ReplayBufferMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

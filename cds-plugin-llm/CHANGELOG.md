@@ -4,6 +4,75 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.75.0] — 2026-08-07
+
+### Added
+
+- **`replayBuffer({ size, redactFields?, ... })` — in-memory replay buffer.** Captures the last N request/response pairs in a rolling buffer for live inspection. Zero persistence — different use case from the 1.69 `testing.recording` (fixture files for tests).
+
+  ```js
+  const { replayBuffer } = require('@saptarishi/cds-plugin-llm');
+
+  const rb = replayBuffer({
+    size:                   100,
+    redactFields:           ['messages', 'system'],
+    includeRedactedPreview: true,
+  });
+  llm.use(rb);
+
+  // Later — from a /debug endpoint, on-call incident, etc.:
+  app.get('/debug/recent-llm', (req, res) => {
+    res.json(rb.dumpLastN(20));
+  });
+  ```
+
+- **Debugging use case:** "the LLM said something weird — pull the last 10 exchanges from memory and see what actually flowed." Complements `jsonLog` (1.59) which is fire-and-forget with `replayBuffer`'s lookback capability.
+
+- **Every entry** carries the essentials without leaking sensitive data:
+
+  ```json
+  {
+    "timestamp":     1691234567890,
+    "method":        "chat",
+    "model":         "gpt-4o-mini",
+    "request":       { "model": "gpt-4o-mini", "maxTokens": 100, "messages_redacted": true },
+    "response":      { "textPreview": "The answer is …", "textLength": 234, "model": "gpt-4o-mini", "usage": {...} },
+    "error":         null,
+    "durationMs":    1234,
+    "correlationId": "req-abc-123",
+    "ok":            true
+  }
+  ```
+
+- **Smart redaction defaults** — `messages`, `system`, `input` stripped from the stored request (adds `_redacted: true` marker). Non-sensitive fields (model, maxTokens, temperature, etc.) preserved. Override via `redactFields: [...]` for tighter or looser policies.
+
+- **`includeRedactedPreview: true`** — includes a truncated preview of the last user message even when `messages` is redacted. Set `previewChars` for the truncation length (default 200). Useful for debugging "which prompt triggered this weird response" without dumping the full conversation.
+
+- **Response summarization** — text bodies over 200 chars truncated to `textPreview` with `textLength` for the original length. Full response objects (embeddings, tool results, etc.) never stored — just the summary essentials.
+
+- **Structured error capture** — failed calls store `{ name, code, message, primitive, retriable }` matching the 1.57 LLMError taxonomy. Same shape whether the error came from an LLMError or a plain Error.
+
+- **Stream capture (1.72+)** — `captureStreams: true` (default) defers capture until the stream is fully consumed, then records with the real duration + `done` chunk summary. `captureStreams: false` captures the envelope immediately (less useful — for consumers who want the raw envelope reference).
+
+- **Correlation ID** — pulled from `ctx.meta.correlationId` (set by 1.64 `traceCorrelation`) so debug output can be cross-referenced with jsonLog / distributed trace / persisted rows.
+
+- **Circular buffer semantics** — fixed-size Array with a write pointer. When capacity is reached, oldest entries are overwritten. `dump()` returns entries oldest → newest; `dumpLastN(n)` for a tail window; `dumpMatching(pred)` for filtered views.
+
+- **Introspection + MCP:**
+  - `rb.stats` → `{ totalCaptured, successes, failures }`
+  - `rb.size()` / `rb.capacity()` — current entries / max
+  - `rb.clear()` — wipe buffer + stats
+  - `rb.asMcpResource()` → `config://replay-buffer` (full snapshot payload for MCP subscribers)
+
+### Type definitions
+
+- `ReplayBufferEntry`, `ReplayBufferOptions`, `ReplayBufferStats`, `ReplayBufferMiddleware`
+- `replayBuffer(options?): ReplayBufferMiddleware`
+
+### Backwards compatibility
+
+Additive — no breaking changes.
+
 ## [1.74.0] — 2026-08-07
 
 ### Added
