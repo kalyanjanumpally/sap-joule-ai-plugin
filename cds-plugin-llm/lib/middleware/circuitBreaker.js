@@ -104,6 +104,42 @@ function circuitBreaker(options = {}) {
     successes:      0,
   };
 
+  // ---- Internal state transitions --------------------------------------
+  // Extracted so external probes (providerHealthProbe, 1.62.0) can feed
+  // synthetic samples via mw.recordSuccess / mw.recordFailure without
+  // duplicating this logic.
+
+  function _handleSuccess(bucket, key, method) {
+    if (bucket.state === 'halfOpen') {
+      bucket.state = 'closed';
+      stats.closes++;
+      if (onClose) {
+        try { onClose({ provider: key, method }); } catch { /* swallow */ }
+      }
+    }
+    bucket.consecutiveFailures = 0;
+    bucket.lastError = null;
+    stats.successes++;
+  }
+
+  function _handleFailure(bucket, key, err, method) {
+    bucket.consecutiveFailures++;
+    bucket.lastError = err;
+    stats.failures++;
+    const wasOpen = bucket.state === 'open';
+    if (bucket.state === 'halfOpen' || bucket.consecutiveFailures >= threshold) {
+      bucket.state = 'open';
+      bucket.openedAt = Date.now();
+      if (!wasOpen) {
+        stats.opens++;
+        if (onOpen) {
+          try { onOpen({ provider: key, consecutiveFailures: bucket.consecutiveFailures, lastError: err, method }); }
+          catch { /* swallow */ }
+        }
+      }
+    }
+  }
+
   const mw = async (ctx, next) => {
     stats.requests++;
     const { key, bucket } = bucketFor(ctx);
@@ -137,50 +173,16 @@ function circuitBreaker(options = {}) {
     // CLOSED or HALF-OPEN with probe budget — try the call.
     try {
       const result = await next();
-      // Success — close the circuit if half-open, reset failures.
-      if (bucket.state === 'halfOpen') {
-        bucket.state = 'closed';
-        stats.closes++;
-        if (onClose) {
-          try { onClose({ provider: key, method: ctx?.method }); } catch { /* swallow */ }
-        }
-      }
-      bucket.consecutiveFailures = 0;
-      bucket.lastError = null;
-      stats.successes++;
+      _handleSuccess(bucket, key, ctx?.method);
       return result;
     } catch (err) {
-      // Failure — decide whether it counts against the breaker.
+      // Non-counting failure (e.g. 4xx client error): reset consecutive counter,
+      // don't advance the breaker. Rethrow as-is.
       if (!isFailure(err)) {
-        // Non-counting failure (e.g. 4xx client error): reset consecutive counter,
-        // don't advance the breaker. Rethrow as-is.
         bucket.consecutiveFailures = 0;
         throw err;
       }
-
-      bucket.consecutiveFailures++;
-      bucket.lastError = err;
-      stats.failures++;
-
-      if (bucket.state === 'halfOpen') {
-        // Half-open probe failed → snap back to open.
-        bucket.state = 'open';
-        bucket.openedAt = Date.now();
-        stats.opens++;
-        if (onOpen) {
-          try { onOpen({ provider: key, consecutiveFailures: bucket.consecutiveFailures, lastError: err, method: ctx?.method }); }
-          catch { /* swallow */ }
-        }
-      } else if (bucket.consecutiveFailures >= threshold) {
-        // Threshold reached → open the circuit.
-        bucket.state = 'open';
-        bucket.openedAt = Date.now();
-        stats.opens++;
-        if (onOpen) {
-          try { onOpen({ provider: key, consecutiveFailures: bucket.consecutiveFailures, lastError: err, method: ctx?.method }); }
-          catch { /* swallow */ }
-        }
-      }
+      _handleFailure(bucket, key, err, ctx?.method);
       throw err;
     }
   };
@@ -226,6 +228,25 @@ function circuitBreaker(options = {}) {
       b.halfOpenAttemptsUsed = 0;
       stats.closes++;
     }
+  };
+  /**
+   * External success signal — feeds a synthetic success sample for
+   * `provider`. Used by providerHealthProbe (1.62+) so a passing probe
+   * advances a half-open circuit to closed WITHOUT waiting for a real
+   * user request. Behavior matches the internal middleware success path.
+   */
+  mw.recordSuccess = (provider) => {
+    const { key, bucket } = bucketFor({ service: { name: provider ?? 'default' } });
+    _handleSuccess(bucket, key, 'external');
+  };
+  /**
+   * External failure signal — feeds a synthetic failure sample for
+   * `provider`. Used by providerHealthProbe so failing probes trip the
+   * threshold and open the circuit BEFORE a real user request fails.
+   */
+  mw.recordFailure = (provider, err) => {
+    const { key, bucket } = bucketFor({ service: { name: provider ?? 'default' } });
+    _handleFailure(bucket, key, err ?? new Error('recordFailure: no error object'), 'external');
   };
   mw.asMcpResource = () => ({
     uri: 'config://circuit-breaker',

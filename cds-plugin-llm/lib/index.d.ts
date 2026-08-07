@@ -1531,6 +1531,10 @@ export interface CircuitBreakerMiddleware extends Middleware {
   state(provider?: string): CircuitBreakerBucketState;
   reset(provider?: string): void;
   forceOpen(provider?: string): void;
+  /** External success signal — used by providerHealthProbe (1.62+). @since 1.62.0 */
+  recordSuccess(provider?: string): void;
+  /** External failure signal — used by providerHealthProbe (1.62+). @since 1.62.0 */
+  recordFailure(provider?: string, err?: Error): void;
   forceClose(provider?: string): void;
   asMcpResource(): {
     uri: 'config://circuit-breaker';
@@ -2190,6 +2194,69 @@ export interface AdaptiveBulkheadHandle {
  * @since 1.61.0
  */
 export function adaptiveBulkhead(options: AdaptiveBulkheadOptions): AdaptiveBulkheadHandle;
+
+// ---- Provider health probe (new in 1.62.0) ----------------------------
+
+export interface HealthProbeEntry {
+  name: string;
+  probe: (info: { provider: string }) => Promise<unknown>;
+}
+
+export interface HealthProbeState {
+  healthy:     boolean | null;   // null = never probed
+  lastProbeAt: number | null;
+  lastError:   Error | null;
+}
+
+export interface ProviderHealthProbeOptions {
+  providers:  HealthProbeEntry[];
+  /** Ping every provider every N ms. Default 60_000. Min 100. */
+  intervalMs?: number;
+  /** Individual probe timeout. Default 10_000. Min 100. */
+  timeoutMs?:  number;
+  /** Optional circuit breaker to feed success/failure signals into. Must be v1.62+. */
+  breaker?:    CircuitBreakerMiddleware;
+  onHealthChange?: (info: { provider: string; from: 'healthy' | 'unhealthy'; to: 'healthy' | 'unhealthy'; err: Error | null }) => void | Promise<void>;
+  onProbe?:        (info: { provider: string; ok: boolean; durationMs: number; error: string | null }) => void;
+}
+
+export interface ProviderHealthProbeStats {
+  probes:         number;
+  successes:      number;
+  failures:       number;
+  timeouts:       number;
+  healthChanges:  number;
+}
+
+export interface ProviderHealthProbeHandle {
+  start(): void;
+  stop(): void;
+  /** Fire all probes right now, or a single provider by name. */
+  probeNow(providerName?: string): Promise<void>;
+  state(providerName?: string): HealthProbeState | Record<string, HealthProbeState> | null;
+  readonly stats: ProviderHealthProbeStats;
+  asMcpResource(): {
+    uri: 'config://provider-health';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ProviderHealthProbeStats & {
+      intervalMs: number;
+      timeoutMs: number;
+      running: boolean;
+      providers: Record<string, { healthy: boolean | null; lastProbeAt: number | null; lastError: string | null }>;
+    };
+  };
+}
+
+/**
+ * Provider health probe — periodic background pings to each provider.
+ * On failure, records into the 1.49 circuitBreaker so the circuit opens
+ * BEFORE the first real request fails. Proactive circuit isolation (vs
+ * the reactive 1.49 breaker that waits for a real user request).
+ * @since 1.62.0
+ */
+export function providerHealthProbe(options: ProviderHealthProbeOptions): ProviderHealthProbeHandle;
 
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 

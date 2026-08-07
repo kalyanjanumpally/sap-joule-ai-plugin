@@ -102,6 +102,8 @@ module.exports = {
   defaultRetryOn: require('./autoRetry').defaultRetryOn,
   // Adaptive concurrency tuner — AIMD on bulkhead.maxConcurrent by p95 latency (new in 1.61.0)
   adaptiveBulkhead: require('./middleware/adaptiveBulkhead').adaptiveBulkhead,
+  // Provider health probe — proactive circuit isolation (new in 1.62.0)
+  providerHealthProbe: require('./middleware/providerHealthProbe').providerHealthProbe,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

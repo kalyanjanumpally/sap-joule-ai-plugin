@@ -4,6 +4,63 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.62.0] — 2026-08-07
+
+### Added
+
+- **`providerHealthProbe({ providers, breaker, ... })` — proactive circuit isolation.** Periodic background pings to each provider via a user-supplied probe fn. On failure, records into the 1.49 `circuitBreaker` so the circuit opens BEFORE the first real user request fails. Complements the reactive breaker (which waits for a real user request to fail).
+
+  ```js
+  const { providerHealthProbe, circuitBreaker } = require('@saptarishi/cds-plugin-llm');
+
+  const breaker = circuitBreaker({ threshold: 3, cooldownMs: 30_000 });
+
+  const health = providerHealthProbe({
+    providers: [
+      { name: 'openai',    probe: async () => openaiSvc.chat({ messages: [{ role: 'user', content: 'ping' }], maxTokens: 1 }) },
+      { name: 'anthropic', probe: async () => anthropicSvc.chat({ messages: [{ role: 'user', content: 'ping' }], maxTokens: 1 }) },
+    ],
+    intervalMs: 60_000,
+    timeoutMs:  10_000,
+    breaker,
+    onHealthChange: (info) => cds.log('llm:health-probe').warn(info),
+  });
+
+  llm.use(breaker);
+  health.start();
+  ```
+
+- **Extends `circuitBreaker` with 2 new methods (1.62 requires 1.49-compatible breaker):**
+  - `breaker.recordSuccess(provider)` — external success signal; resets consecutive failures. If halfOpen, closes the circuit.
+  - `breaker.recordFailure(provider, err)` — external failure signal; increments consecutive failures. On threshold, opens the circuit — exactly like a real request failure would.
+
+- **Health-change detection.** `onHealthChange({ provider, from, to, err })` fires when a provider transitions healthy ↔ unhealthy. Does NOT fire on same-state consecutive probes (no noise on healthy runs). First probe never fires the callback — that's the initial state, not a transition.
+
+- **Timeout as failure.** Individual probes are wrapped in a `timeoutMs` race. Timeout counts as a failure (via `recordFailure`) with `err.code === 'PROBE_TIMEOUT'` and increments `stats.timeouts`.
+
+- **Staggered probes.** When `start()` schedules the periodic intervals, probes are offset by `intervalMs / providers.length` so all providers aren't pinged in the same instant. Prevents a synchronized burst that hits every provider simultaneously.
+
+- **`unref()`'d timers** — the periodic intervals don't hold the event loop open. Safe to leave running until process exit; graceful shutdown via `stop()`.
+
+- **`probeNow(providerName?)`** — fire all probes immediately, or a single provider by name. Useful for tests + on-demand refresh after a deployment.
+
+- **Per-provider `state()`** — `{ healthy: boolean | null, lastProbeAt, lastError }`. `healthy: null` means never probed.
+
+- **`asMcpResource()` → `config://provider-health`** exposing per-provider snapshot for MCP subscribers.
+
+- **Callback error handling.** `onHealthChange` / `onProbe` exceptions are swallowed — never affect probe scheduling or breaker feedback.
+
+### Type definitions
+
+- `HealthProbeEntry`, `HealthProbeState`, `ProviderHealthProbeOptions`, `ProviderHealthProbeStats`, `ProviderHealthProbeHandle`
+- `CircuitBreakerMiddleware` extended with `recordSuccess(provider?)` and `recordFailure(provider?, err?)`
+
+### Backwards compatibility
+
+Fully additive:
+- `providerHealthProbe` is a new top-level export
+- Breaker's new `recordSuccess / recordFailure` methods don't change any existing behavior; the internal state transitions use the same logic (refactored to shared helpers).
+
 ## [1.61.0] — 2026-08-07
 
 ### Added
