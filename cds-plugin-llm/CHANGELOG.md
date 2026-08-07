@@ -4,6 +4,56 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.70.0] — 2026-08-07
+
+### Added
+
+- **`resilience.presets` — 4 named config profiles for `resilience.bundle`.** Long-overdue companion to the 1.55 bundle. Spread-friendly: use directly or override selectively.
+
+  ```js
+  const { resilience } = require('@saptarishi/cds-plugin-llm');
+
+  // Use a preset directly:
+  const stack = resilience.bundle(resilience.presets.balanced);
+
+  // Or override selectively:
+  const stack = resilience.bundle({
+    ...resilience.presets.aggressive,
+    budgetLimits: { total: 100 },      // presets don't include budget
+    breakerThreshold: 5,                // override just this one field
+  });
+  ```
+
+- **4 preset profiles shipped:**
+
+  | Preset | Deadline (chat) | Retry attempts | Breaker threshold | Bulkhead max | Use case |
+  |---|---|---|---|---|---|
+  | **aggressive** | 15s | 2 | 3 | 5 | Latency-sensitive; fail fast, tight bounds |
+  | **balanced** | 30s | 3 | 5 | 10 | Production defaults (matches bare `bundle()` output) |
+  | **lenient** | 120s | 5 | 10 | 20 | Dev / testing; generous timeouts, higher retry patience |
+  | **burst** | 60s | 3 | 10 | 50 | Bulk pipelines; high concurrency, forgiving of transient spikes |
+
+- **AIMD design across presets** — `aggressive` shrinks faster (lower thresholds), `lenient` grows slower (higher thresholds). Every preset validates cleanly through 1.48 `validateMiddlewareOrder` — no non-info warnings.
+
+- **`perMethodDeadline` per preset** — chat / embed / stream / batch each get profile-appropriate timeouts. e.g. `aggressive` caps embed at 3s (fast operations shouldn't hang); `burst` caps batch at 10 minutes (long bulk pipelines).
+
+- **`budgetLimits` deliberately excluded** from all presets — it's a deployment-specific concern (per-tenant / per-window limits) and must be provided explicitly. Callers just spread it in:
+
+  ```js
+  resilience.bundle({ ...resilience.presets.balanced, budgetLimits: { total: 500 } });
+  ```
+
+- **`Object.freeze`d** so accidental mutation throws in strict mode. `perMethodDeadline` sub-object is intentionally shallow-frozen so callers can spread it into their own configs.
+
+### Type definitions
+
+- `ResilienceBundlePreset` — the shape of a preset object (all required fields)
+- `resilience.presets` — typed as `{ readonly aggressive: Readonly<ResilienceBundlePreset>; ... }`
+
+### Backwards compatibility
+
+Additive — no breaking changes. `resilience.presets` is a new export under the existing `resilience` namespace.
+
 ## [1.69.0] — 2026-08-07
 
 ### Added

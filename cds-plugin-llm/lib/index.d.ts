@@ -1901,6 +1901,20 @@ export interface ResilienceBundleStack {
   healthBundle():     { deadline?: DeadlineMiddleware; budget?: CostBudgetMiddleware; breaker?: CircuitBreakerMiddleware; bh?: BulkheadMiddleware; retry?: RetryOnRateLimitMiddleware };
 }
 
+export interface ResilienceBundlePreset {
+  deadlineMs:              number;
+  perMethodDeadline:       Record<string, number>;
+  retryAttempts:           number;
+  retryFallbackMs:         number;
+  retryJitterMs:           number;
+  breakerThreshold:        number;
+  breakerCooldownMs:       number;
+  breakerHalfOpenAttempts: number;
+  bulkheadMax:             number;
+  bulkheadQueue:           number;
+  bulkheadTimeoutMs:       number;
+}
+
 export namespace resilience {
   /**
    * One-liner that wires the full resilience stack in canonical order:
@@ -1911,6 +1925,25 @@ export namespace resilience {
    */
   function bundle(options?: ResilienceBundleOptions): ResilienceBundleStack;
   const CANONICAL_ORDER: readonly ResiliencePrimitiveKind[];
+
+  /**
+   * Named preset objects for common config profiles. Spread-friendly:
+   *   resilience.bundle({ ...resilience.presets.balanced, budgetLimits: {...} })
+   *
+   * - aggressive: latency-sensitive; fail fast, tight bounds
+   * - balanced:   production defaults (matches bare bundle() output)
+   * - lenient:    dev / testing; generous timeouts, higher retry patience
+   * - burst:      bulk pipelines; high concurrency, forgiving of spikes
+   *
+   * None include budgetLimits — that's a deployment-specific concern.
+   * @since 1.70.0
+   */
+  const presets: {
+    readonly aggressive: Readonly<ResilienceBundlePreset>;
+    readonly balanced:   Readonly<ResilienceBundlePreset>;
+    readonly lenient:    Readonly<ResilienceBundlePreset>;
+    readonly burst:      Readonly<ResilienceBundlePreset>;
+  };
 }
 
 // ---- Structured error taxonomy (new in 1.57.0) -----------------------

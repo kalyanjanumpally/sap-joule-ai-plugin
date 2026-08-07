@@ -25,6 +25,83 @@ const { retryOnRateLimit }  = require('./middleware/retryOnRateLimit');
 
 const CANONICAL_ORDER = ['deadline', 'costBudget', 'circuitBreaker', 'bulkhead', 'retryOnRateLimit'];
 
+// ---- Named presets (new in 1.70.0) -----------------------------------
+//
+// Plain objects — spread-friendly. Callers can use directly:
+//
+//   resilience.bundle(resilience.presets.balanced)
+//
+// or override selectively:
+//
+//   resilience.bundle({
+//     ...resilience.presets.aggressive,
+//     budgetLimits: { total: 100 },     // aggressive doesn't include budget
+//   })
+//
+// None of the presets include `budgetLimits` — that's a deployment-specific
+// concern; callers add it themselves.
+//
+// Philosophy per preset:
+//   - aggressive:  latency-sensitive; fail fast, tight bounds
+//   - balanced:    production defaults (matches bare `bundle()` output)
+//   - lenient:     dev / testing; generous timeouts, higher retry patience
+//   - burst:       bulk pipelines; high concurrency, forgiving of transient spikes
+
+const presets = Object.freeze({
+  aggressive: Object.freeze({
+    deadlineMs:        15_000,
+    perMethodDeadline: { chat: 15_000, embed: 3_000, stream: 30_000, batch: 300_000 },
+    retryAttempts:     2,
+    retryFallbackMs:   1_000,
+    retryJitterMs:     250,
+    breakerThreshold:  3,
+    breakerCooldownMs: 60_000,
+    breakerHalfOpenAttempts: 1,
+    bulkheadMax:       5,
+    bulkheadQueue:     20,
+    bulkheadTimeoutMs: 3_000,
+  }),
+  balanced: Object.freeze({
+    deadlineMs:        30_000,
+    perMethodDeadline: { chat: 30_000, embed: 5_000, stream: 60_000, batch: 300_000 },
+    retryAttempts:     3,
+    retryFallbackMs:   2_000,
+    retryJitterMs:     500,
+    breakerThreshold:  5,
+    breakerCooldownMs: 30_000,
+    breakerHalfOpenAttempts: 1,
+    bulkheadMax:       10,
+    bulkheadQueue:     50,
+    bulkheadTimeoutMs: 5_000,
+  }),
+  lenient: Object.freeze({
+    deadlineMs:        120_000,
+    perMethodDeadline: { chat: 120_000, embed: 30_000, stream: 300_000, batch: 600_000 },
+    retryAttempts:     5,
+    retryFallbackMs:   3_000,
+    retryJitterMs:     1_000,
+    breakerThreshold:  10,
+    breakerCooldownMs: 15_000,
+    breakerHalfOpenAttempts: 2,
+    bulkheadMax:       20,
+    bulkheadQueue:     100,
+    bulkheadTimeoutMs: 30_000,
+  }),
+  burst: Object.freeze({
+    deadlineMs:        60_000,
+    perMethodDeadline: { chat: 60_000, embed: 10_000, stream: 120_000, batch: 600_000 },
+    retryAttempts:     3,
+    retryFallbackMs:   2_000,
+    retryJitterMs:     500,
+    breakerThreshold:  10,
+    breakerCooldownMs: 20_000,
+    breakerHalfOpenAttempts: 2,
+    bulkheadMax:       50,
+    bulkheadQueue:     200,
+    bulkheadTimeoutMs: 10_000,
+  }),
+});
+
 function bundle(options = {}) {
   const {
     // Deadline
@@ -179,4 +256,4 @@ function bundle(options = {}) {
   return stack;
 }
 
-module.exports = { bundle, CANONICAL_ORDER };
+module.exports = { bundle, CANONICAL_ORDER, presets };
