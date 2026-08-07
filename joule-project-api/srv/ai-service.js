@@ -23,6 +23,11 @@ const {
   estimateCost,
   // Aggregate health handler — replaces the inline /resilience aggregate
   healthHandler,
+  // Structured logging + HTTP error surface (1.57-1.59)
+  jsonLog,
+  llmErrorHandler,
+  isLLMError,
+  errorRegistry,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -116,6 +121,7 @@ let _deadline;
 let _breaker;
 let _bulkhead;
 let _costGuard;
+let _jsonLog;
 // Resilience bundle handle — kept around so prometheusBundle() / healthBundle()
 // return the exact set of primitives we wired (bundle authoritative for what
 // each getter returns; see getDeadline / getBreaker / getBulkhead / getRetry).
@@ -178,6 +184,22 @@ function getLLM() {
       // (retries + bulkhead queue + circuit-breaker decisions + provider
       // call) shares ONE time budget.
       llm.use(_deadline);
+      // JSON structured logging — near-outer so the log line captures the
+      // full request duration (deadline overhead + queue wait + retries +
+      // provider call). Emits one canonical JSON line per call to
+      // cds.log('llm:call'). Reads costGuard's estimate + LLMError
+      // taxonomy under the hood so a failed call surfaces
+      // { error: { code, primitive, retriable, ... } } — pipe directly to
+      // ELK / Datadog / CloudWatch.
+      _jsonLog = jsonLog({
+        logger: cds.log('llm:call'),
+        level:      'info',
+        errorLevel: 'warn',
+        correlationId: (ctx) => ctx?.raw?.correlationId
+          ?? cds.context?.id
+          ?? null,
+      });
+      llm.use(_jsonLog);
       // Prompt injection guard — sits OUTER of everything else so the
       // sanitized (or refused) payload is what guardrails + cache + meter +
       // provider all see. Runs BEFORE guardrails so it can spot zero-width
@@ -331,6 +353,8 @@ function getBreaker() { return _breaker; }
 function getBulkhead() { return _bulkhead; }
 /** Exported for /cost-guard-state dashboard + MCP service. */
 function getCostGuard() { return _costGuard; }
+/** Exported for /log-state dashboard + MCP service. */
+function getJsonLog() { return _jsonLog; }
 /** Exported for the demo app so it can access the bundle's helpers. */
 function getResilience() { return _resilience; }
 
@@ -490,7 +514,7 @@ module.exports = class AIService extends cds.ApplicationService {
       const { startObservabilityMcp } = require('./mcp-service');
       await startObservabilityMcp({
         getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
-        getDeadline, getBreaker, getBulkhead, getCostGuard,
+        getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
       });
     });
 
@@ -637,6 +661,25 @@ module.exports = class AIService extends cds.ApplicationService {
         const snap = cg.asMcpResource().handler();
         res.json(snap);
       });
+      // JSON-log dashboard — per-call log-emission counters. requests /
+      // ok / failed + byErrorCode breakdown. Complements /finance/LlmSpend
+      // (cost) with a call-outcome view.
+      cds.app.get('/log-state', (_req, res) => {
+        const l = getJsonLog();
+        if (!l) return res.status(503).json({ error: 'json-log not initialized yet' });
+        const snap = l.asMcpResource().handler();
+        res.json(snap);
+      });
+      // /error-recipe — documents the LLMError taxonomy so tools like the
+      // ops-dashboard, alerting configs, and downstream API consumers can
+      // discover the code → HTTP status → retriable mapping without
+      // guessing. Pairs with the 1.58 llmErrorHandler installed below.
+      cds.app.get('/error-recipe', (_req, res) => {
+        res.json({
+          registry: errorRegistry,
+          note:     'Every LLMError thrown by the plugin has one of these codes. HTTP status + retriability come from this table.',
+        });
+      });
       // Pre-flight cost estimate — quote a request without hitting the
       // provider. Body: { model?, messages, system?, maxTokens? }. Uses
       // the same estimator (1.54.0) as the costGuard middleware, so
@@ -713,6 +756,7 @@ module.exports = class AIService extends cds.ApplicationService {
       cds.app.get('/ready', (_req, res) => {
         const missing = [];
         if (!getDeadline())       missing.push('deadline');
+        if (!getJsonLog())        missing.push('jsonLog');
         if (!getInjectionGuard()) missing.push('promptInjectionGuard');
         if (!getGuardrails())     missing.push('guardrails');
         if (!getCostGuard())      missing.push('costGuard');
@@ -772,6 +816,17 @@ module.exports = class AIService extends cds.ApplicationService {
           })),
         });
       });
+      // Global LLMError HTTP surface — Express-shaped 4-arg middleware
+      // registered LAST so it catches unhandled errors from every raw
+      // Express route above (/estimate, /stream/*). Non-LLMError errors
+      // pass through to CAP's default handler unchanged. CAP OData
+      // actions have their own error surface — those propagate via
+      // req.error() and don't hit this handler.
+      cds.app.use(llmErrorHandler({
+        log: (err, meta) => cds.log('llm:http').warn(
+          `[${meta.method} ${meta.url}] ${err.code} → HTTP ${meta.status} (${err.primitive}, retriable=${err.retriable})`,
+        ),
+      }));
     }
 
     this.on('summarizePurchaseOrder', async (req) => {
@@ -1048,5 +1103,6 @@ module.exports.getDeadline = getDeadline;
 module.exports.getBreaker = getBreaker;
 module.exports.getBulkhead = getBulkhead;
 module.exports.getCostGuard = getCostGuard;
+module.exports.getJsonLog = getJsonLog;
 module.exports.getResilience = getResilience;
 module.exports.getLLM = getLLM;

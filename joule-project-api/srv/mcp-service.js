@@ -29,7 +29,7 @@ const { MCPServer } = require('@saptarishi/cds-plugin-llm/lib/mcp/server');
  */
 async function startObservabilityMcp({
   getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
-  getDeadline, getBreaker, getBulkhead, getCostGuard,
+  getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
 }) {
   if (process.env.MCP_OBS_DISABLE) {
     cds.log('mcp:obs').info('[mcp:obs] disabled via MCP_OBS_DISABLE — skipping startup');
@@ -45,10 +45,10 @@ async function startObservabilityMcp({
   try {
     const server = new MCPServer({
       name:              'joule-procurement-ops',
-      version:           '0.8.0',
+      version:           '0.9.0',
       resources:         buildResources({
         getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
-        getDeadline, getBreaker, getBulkhead, getCostGuard,
+        getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
       }),
       resourceTemplates: buildResourceTemplates(),
       tools:             buildTools({ getCache, getInjectionGuard }),
@@ -76,7 +76,7 @@ async function startObservabilityMcp({
 
 function buildResources({
   getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
-  getDeadline, getBreaker, getBulkhead, getCostGuard,
+  getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
 }) {
   // As of cds-plugin-llm 1.40.1, MCPServer.registerResource() accepts the
   // { handler } shape shipped by middleware.asMcpResource() directly — no
@@ -111,6 +111,10 @@ function buildResources({
   // config://cost-guard exposes ceiling + per-call counters.
   const cg = getCostGuard?.();
   if (cg?.asMcpResource) resources.push(cg.asMcpResource());
+  // JSON logger (cds-plugin-llm 1.59.0) — per-call log emission stats.
+  // config://json-log exposes requests / ok / failed + byErrorCode.
+  const jl = getJsonLog?.();
+  if (jl?.asMcpResource) resources.push(jl.asMcpResource());
 
   const gr = getGuardrails();
   if (gr?.asMcpResource) resources.push(gr.asMcpResource());
@@ -150,7 +154,7 @@ function buildResources({
     mimeType:    'application/json',
     read:        async () => buildChainSnapshot({
       getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
-      getDeadline, getBreaker, getBulkhead, getCostGuard,
+      getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
     }),
   });
 
@@ -167,7 +171,7 @@ function buildResources({
  */
 async function buildChainSnapshot({
   getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
-  getDeadline, getBreaker, getBulkhead, getCostGuard,
+  getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
 }) {
   const order = [];
   let position = 0;
@@ -193,10 +197,11 @@ async function buildChainSnapshot({
   };
 
   // Order matches ai-service.js's getLLM() llm.use() sequence:
-  //   deadline → promptInjectionGuard → guardrails → costGuard →
+  //   deadline → jsonLog → promptInjectionGuard → guardrails → costGuard →
   //   costBudget → circuitBreaker → bulkhead → retryOnRateLimit →
   //   usageMeteringToCap → responseCache
   await push('deadline',             getDeadline?.());
+  await push('jsonLog',              getJsonLog?.());
   await push('promptInjectionGuard', getInjectionGuard?.());
   await push('guardrails',           getGuardrails?.());
   await push('costGuard',            getCostGuard?.());
@@ -212,6 +217,7 @@ async function buildChainSnapshot({
     summary: {
       count:           order.length,
       hasDeadline:     order.some((m) => m.kind === 'deadline'),
+      hasJsonLog:      order.some((m) => m.kind === 'jsonLog'),
       hasInjection:    order.some((m) => m.kind === 'promptInjectionGuard'),
       hasGuardrails:   order.some((m) => m.kind === 'guardrails'),
       hasCostGuard:    order.some((m) => m.kind === 'costGuard'),
@@ -243,6 +249,8 @@ const COUNTER_KEYS = new Set([
   'admitted', 'queued', 'rejected', 'timedOut',                // bulkhead
   // cds-plugin-llm 1.56.0 counters
   'checked', 'skipped', 'warned', 'blocked', 'estimatedUsdTotal', // costGuard
+  // cds-plugin-llm 1.59.0 counters
+  'byErrorCode', 'ok', 'failed',                                  // jsonLog
 ]);
 function stripCounters(payload) {
   if (!payload || typeof payload !== 'object') return payload;

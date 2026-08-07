@@ -50,6 +50,8 @@
     bulkheadSub:     $('#bulkhead-sub'),
     costGuardBlocked:$('#costguard-blocked'),
     costGuardSub:    $('#costguard-sub'),
+    jsonLogFailed:   $('#jsonlog-failed'),
+    jsonLogSub:      $('#jsonlog-sub'),
 
     // Quote widget
     quoteInput:  $('#quote-input'),
@@ -262,6 +264,19 @@
     els.costGuardBlocked.className = 'kpi-primary ' + (blocked > 0 ? 'err' : warned > 0 ? 'warn' : '');
     els.costGuardSub.textContent = `${checked} checked · ${warned} warned · ${money(est)} forecast`;
   }
+  function renderJsonLog(data) {
+    if (!data) return;
+    const failed = data.failed ?? 0;
+    const ok     = data.ok     ?? 0;
+    const codes  = Object.entries(data.byErrorCode ?? {})
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([code, n]) => `${code}:${n}`)
+      .join(' · ');
+    els.jsonLogFailed.textContent = String(failed);
+    els.jsonLogFailed.className = 'kpi-primary ' + (failed > 0 ? 'err' : '');
+    els.jsonLogSub.textContent = `${ok} ok · ${failed} failed${codes ? ' · ' + codes : ' · no error codes'}`;
+  }
   function renderHealth(data) {
     if (!data) {
       els.healthDot.className = 'dot idle';
@@ -301,7 +316,7 @@
   // ---- Poll cycle ----------------------------------------------------
   async function poll() {
     setConn('live', 'polling…');
-    const [budget, cache, retry, guardrails, injection, deadline, breaker, bulkhead, costguard, health, chain] = await Promise.all([
+    const [budget, cache, retry, guardrails, injection, deadline, breaker, bulkhead, costguard, jsonlog, health, chain] = await Promise.all([
       safeJson('/budget-status'),
       safeJson('/cache-stats'),
       safeJson('/retry-stats'),
@@ -311,6 +326,7 @@
       safeJson('/breaker-state'),
       safeJson('/bulkhead-state'),
       safeJson('/cost-guard-state'),
+      safeJson('/log-state'),
       safeJson('/resilience'),
       readChain(),
     ]);
@@ -323,6 +339,7 @@
     renderBreaker(breaker);
     renderBulkhead(bulkhead);
     renderCostGuard(costguard);
+    renderJsonLog(jsonlog);
     renderHealth(health);   // health = /resilience payload
     renderChain(chain);
     const now = new Date().toLocaleTimeString();
