@@ -111,6 +111,9 @@ module.exports = {
   traceCorrelation: require('./middleware/traceCorrelation').traceCorrelation,
   uuidv7: require('./middleware/traceCorrelation').uuidv7,
   parseTraceparent: require('./middleware/traceCorrelation').parseTraceparent,
+  // CAP error bridge — LLMError → req.reject() for OData handlers (new in 1.65.0)
+  toCapError: require('./capErrorBridge').toCapError,
+  withCapHandler: require('./capErrorBridge').withCapHandler,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

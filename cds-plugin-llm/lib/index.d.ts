@@ -2388,6 +2388,34 @@ export function uuidv7(): string;
 /** Parse a W3C traceparent header, returning the trace-id or null. @since 1.64.0 */
 export function parseTraceparent(headerValue: string): string | null;
 
+// ---- CAP error bridge (new in 1.65.0) ---------------------------------
+
+export interface ToCapErrorOptions {
+  /** Field names to strip from the details payload. */
+  mask?: string[];
+  /** OData Common.numericSeverity (2=warn, 3=err, 4=fatal). Default 4. */
+  severity?: number;
+}
+
+/**
+ * Convert an LLMError into a CAP `req.reject(status, message, details)` call.
+ * Non-LLMError exceptions are RE-THROWN so CAP's default handler processes
+ * them unchanged. Prefer `withCapHandler(fn)` for a decorator form.
+ * @since 1.65.0
+ */
+export function toCapError(err: unknown, req?: any, options?: ToCapErrorOptions): any;
+
+/**
+ * Wrapper decorator — catches any LLMError thrown by `handler` and
+ * converts it via toCapError. Non-LLMError exceptions propagate.
+ * Preserves the handler's `this` binding + additional args.
+ * @since 1.65.0
+ */
+export function withCapHandler<F extends (req: any, ...args: any[]) => Promise<any>>(
+  handler: F,
+  options?: ToCapErrorOptions,
+): F;
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {

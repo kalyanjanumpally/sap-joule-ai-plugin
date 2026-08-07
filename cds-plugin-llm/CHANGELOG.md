@@ -4,6 +4,71 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.65.0] — 2026-08-07
+
+### Added
+
+- **`toCapError(err, req, options?)` — LLMError → CAP req.reject() bridge.** Converts any 1.57 `LLMError` into a CAP `req.reject(status, message, details)` call so OData action handlers surface structured errors to clients. Complements the 1.58 `llmErrorHandler` (Express-shaped, for raw routes) with a CAP-shaped alternative for inside OData handlers.
+
+  ```js
+  const { toCapError, withCapHandler } = require('@saptarishi/cds-plugin-llm');
+
+  // Direct in a handler:
+  this.on('summarizePurchaseOrder', async (req) => {
+    try {
+      const { text } = await llm.chat({ messages: [...] });
+      return { summary: text };
+    } catch (e) {
+      return toCapError(e, req);
+    }
+  });
+
+  // Or wrap a handler once:
+  this.on('summarizePurchaseOrder', withCapHandler(async (req) => {
+    const { text } = await llm.chat({ messages: [...] });
+    return { summary: text };
+  }));
+  ```
+
+- **Resulting OData error payload** carries the full LLMError taxonomy:
+
+  ```json
+  {
+    "error": {
+      "code":       "CIRCUIT_OPEN",
+      "message":    "circuitBreaker: circuit is OPEN for provider='openai' — 25000ms cooldown remaining. …",
+      "@Common.numericSeverity": 4,
+      "primitive":  "circuitBreaker",
+      "retriable":  true,
+      "severity":   "error",
+      "provider":   "openai",
+      "cooldownRemainingMs": 25000
+    }
+  }
+  ```
+
+- **`withCapHandler(handler, options?)`** — wrapper decorator that catches any LLMError thrown by `handler` and converts it via `toCapError`. Non-LLMError exceptions propagate (CAP's default handler processes them). Preserves the handler's `this` binding + additional args.
+
+- **Non-LLMError safety.** Both `toCapError` and `withCapHandler` RE-THROW non-`LLMError` exceptions — they don't silently swallow unrelated bugs. This is intentional: only known plugin errors get converted; anything else lands in CAP's default error path.
+
+- **Fallback surfacing.** If `req.reject()` is missing (older CAP versions or edge cases), falls back to `req.error()`. If neither exists, throws an Error with `status`, `code`, and `llmError` fields so callers can still map to HTTP.
+
+- **`mask` + `severity` options:**
+  - `mask: ['cooldownRemainingMs']` strips specific fields from the details payload (e.g. hide backoff hints from external clients)
+  - `severity: 2` sets `@Common.numericSeverity` to warning instead of the default 4 (fatal)
+
+- **`Error`-shaped nested values are flattened** to `{ message, name, code }` to keep the OData payload bounded.
+
+### Type definitions
+
+- `ToCapErrorOptions`
+- `toCapError(err, req?, options?): any`
+- `withCapHandler<F>(handler, options?): F`
+
+### Backwards compatibility
+
+Additive — no breaking changes. Complements 1.58 `llmErrorHandler` without replacing it.
+
 ## [1.64.0] — 2026-08-07
 
 ### Added
