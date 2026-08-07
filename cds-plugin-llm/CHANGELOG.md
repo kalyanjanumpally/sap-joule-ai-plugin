@@ -4,6 +4,45 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.67.0] — 2026-08-07
+
+### Added
+
+- **Prometheus emitters for 5 previously invisible primitives.** Every recent primitive from 1.59 through 1.64 now exposes counters + gauges through `promMetrics()`. Pass the new middleware handles alongside the existing ones — Grafana dashboards can now cover the full resilience + observability stack.
+
+  ```js
+  const text = await promMetrics({
+    // Existing:
+    cache, budget, guardrails, injectionGuard, metering, breaker, bh, deadline, costGuard, retry,
+    // New in 1.67.0:
+    tuner,                 // adaptiveBulkhead (1.61)
+    probe,                 // providerHealthProbe (1.62)
+    adaptiveMaxTokens,     // adaptiveMaxTokens (1.63)
+    trace,                 // traceCorrelation (1.64)
+    jsonLog,               // jsonLog (1.59) — now with per-error-code labels
+  });
+  ```
+
+- **New metrics shipped:**
+
+  | Family | Counters | Gauges |
+  |---|---|---|
+  | **adaptiveBulkhead** | `_ticks_total`, `_adjustments_total`, `_grows_total`, `_shrinks_total` | `_p95_ms`, `_current_max_concurrent` |
+  | **providerHealthProbe** | `llm_probe_probes_total`, `_successes_total`, `_failures_total`, `_timeouts_total`, `_health_changes_total` | `llm_probe_provider_healthy{provider}` (1 healthy, 0 unhealthy, -1 never probed) |
+  | **adaptiveMaxTokens** | `_requests_total`, `_skipped_total`, `_adjusted_total`, `_rejected_total`, `_unchanged_total`, `_saved_tokens_total` | — |
+  | **traceCorrelation** | `llm_trace_requests_total`, `_extracted_total`, `_generated_total` | — |
+  | **jsonLog** | `llm_json_log_requests_total`, `_ok_total`, `_failed_total`, `_by_error_code_total{code}` (labeled per LLMError code) | — |
+
+- **`llm_probe_provider_healthy` gauge** is particularly useful for alerting: a per-provider indicator that flips from 1 → 0 the moment the probe first fails, without waiting for a real user request to trigger the breaker.
+
+- **`llm_json_log_by_error_code_total{code}`** — labeled counter that surfaces the per-error-code breakdown from `jsonLog`'s stats. Alertable per code: `rate(llm_json_log_by_error_code_total{code="CIRCUIT_OPEN"}[5m])` fires when the breaker starts short-circuiting user requests.
+
+- **`llm_adaptive_max_tokens_saved_tokens_total`** — cumulative output tokens saved by shrinking oversized requests. Multiply by output token price to estimate the money saved.
+
+### Backwards compatibility
+
+Additive — no breaking changes. All existing metric names + shapes unchanged; new emitters are gated on the corresponding middleware handle being passed to `promMetrics()`. Passing no new handles = old output byte-for-byte.
+
 ## [1.66.0] — 2026-08-07
 
 ### Added

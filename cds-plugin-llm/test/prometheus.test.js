@@ -444,3 +444,109 @@ test('promMetrics: emits llm_cost_guard_* counters when costGuard mw bound', asy
   assert.match(text, /llm_cost_guard_blocked_total 2/);
   assert.match(text, /llm_cost_guard_estimated_dollars_total 12\.34/);
 });
+
+// ---- Extended primitives (new in 1.67.0) --------------------------
+
+test('promMetrics: emits llm_adaptive_bulkhead_* when tuner bound', async () => {
+  const { bulkhead } = require('../lib/middleware/bulkhead');
+  const { adaptiveBulkhead } = require('../lib/middleware/adaptiveBulkhead');
+  const bh = bulkhead({ maxConcurrent: 10 });
+  const tuner = adaptiveBulkhead({ bulkhead: bh, p95TargetMs: 1000, adjustEveryMs: 60_000 });
+  tuner.stats.ticks             = 42;
+  tuner.stats.adjustments       = 30;
+  tuner.stats.grows             = 20;
+  tuner.stats.shrinks           = 10;
+  tuner.stats.lastP95Ms         = 850;
+  tuner.stats.lastMaxConcurrent = 15;
+
+  const text = await promMetrics({ tuner });
+  assert.match(text, /^# TYPE llm_adaptive_bulkhead_ticks_total counter/m);
+  assert.match(text, /llm_adaptive_bulkhead_ticks_total 42/);
+  assert.match(text, /llm_adaptive_bulkhead_grows_total 20/);
+  assert.match(text, /llm_adaptive_bulkhead_shrinks_total 10/);
+  assert.match(text, /llm_adaptive_bulkhead_p95_ms 850/);
+  assert.match(text, /llm_adaptive_bulkhead_current_max_concurrent 15/);
+});
+
+test('promMetrics: emits llm_probe_* + per-provider gauge when providerHealthProbe bound', async () => {
+  const { providerHealthProbe } = require('../lib/middleware/providerHealthProbe');
+  const probe = providerHealthProbe({
+    providers: [
+      { name: 'openai',    probe: async () => ({}) },
+      { name: 'anthropic', probe: async () => { throw new Error('down'); } },
+    ],
+    intervalMs: 60_000,
+  });
+  await probe.probeNow();
+  const text = await promMetrics({ probe });
+  assert.match(text, /^# TYPE llm_probe_probes_total counter/m);
+  assert.match(text, /llm_probe_probes_total 2/);
+  assert.match(text, /llm_probe_successes_total 1/);
+  assert.match(text, /llm_probe_failures_total 1/);
+  assert.match(text, /^# TYPE llm_probe_provider_healthy gauge/m);
+  assert.match(text, /llm_probe_provider_healthy\{provider="openai"\} 1/);
+  assert.match(text, /llm_probe_provider_healthy\{provider="anthropic"\} 0/);
+});
+
+test('promMetrics: emits llm_adaptive_max_tokens_* when adaptiveMaxTokens bound', async () => {
+  const { adaptiveMaxTokens } = require('../lib/middleware/adaptiveMaxTokens');
+  const fakeBudget = {
+    limitFor: () => 500,
+    snapshot: async () => ({ total: 0, perTenant: {}, perModel: {} }),
+  };
+  const amt = adaptiveMaxTokens({ budget: fakeBudget });
+  amt.stats.requests         = 100;
+  amt.stats.adjusted         = 10;
+  amt.stats.rejected         = 2;
+  amt.stats.unchanged        = 85;
+  amt.stats.skipped          = 3;
+  amt.stats.totalSavedTokens = 12345;
+
+  const text = await promMetrics({ adaptiveMaxTokens: amt });
+  assert.match(text, /^# TYPE llm_adaptive_max_tokens_requests_total counter/m);
+  assert.match(text, /llm_adaptive_max_tokens_requests_total 100/);
+  assert.match(text, /llm_adaptive_max_tokens_adjusted_total 10/);
+  assert.match(text, /llm_adaptive_max_tokens_rejected_total 2/);
+  assert.match(text, /llm_adaptive_max_tokens_saved_tokens_total 12345/);
+});
+
+test('promMetrics: emits llm_trace_* when traceCorrelation bound', async () => {
+  const { traceCorrelation } = require('../lib/middleware/traceCorrelation');
+  const trace = traceCorrelation();
+  trace.stats.requests  = 100;
+  trace.stats.extracted = 65;
+  trace.stats.generated = 35;
+
+  const text = await promMetrics({ trace });
+  assert.match(text, /^# TYPE llm_trace_requests_total counter/m);
+  assert.match(text, /llm_trace_requests_total 100/);
+  assert.match(text, /llm_trace_extracted_total 65/);
+  assert.match(text, /llm_trace_generated_total 35/);
+});
+
+test('promMetrics: emits llm_json_log_* + per-code counter when jsonLog bound', async () => {
+  const { jsonLog } = require('../lib/middleware/jsonLog');
+  const log = jsonLog({ logger: { info: () => {}, warn: () => {} } });
+  log.stats.requests = 100;
+  log.stats.ok       = 95;
+  log.stats.failed   = 5;
+  log.stats.byErrorCode.CIRCUIT_OPEN     = 3;
+  log.stats.byErrorCode.BULKHEAD_FULL    = 2;
+
+  const text = await promMetrics({ jsonLog: log });
+  assert.match(text, /^# TYPE llm_json_log_requests_total counter/m);
+  assert.match(text, /llm_json_log_requests_total 100/);
+  assert.match(text, /llm_json_log_ok_total 95/);
+  assert.match(text, /llm_json_log_failed_total 5/);
+  assert.match(text, /llm_json_log_by_error_code_total\{code="CIRCUIT_OPEN"\} 3/);
+  assert.match(text, /llm_json_log_by_error_code_total\{code="BULKHEAD_FULL"\} 2/);
+});
+
+test('promMetrics: no extended-primitive series when none bound', async () => {
+  const text = await promMetrics({});
+  assert.doesNotMatch(text, /llm_adaptive_bulkhead_/);
+  assert.doesNotMatch(text, /llm_probe_/);
+  assert.doesNotMatch(text, /llm_adaptive_max_tokens_/);
+  assert.doesNotMatch(text, /llm_trace_/);
+  assert.doesNotMatch(text, /llm_json_log_/);
+});

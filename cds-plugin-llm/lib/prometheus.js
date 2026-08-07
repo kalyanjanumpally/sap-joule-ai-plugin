@@ -196,6 +196,108 @@ function emitCostGuard(cg) {
   return out;
 }
 
+function emitAdaptiveBulkhead(tuner) {
+  if (!tuner?.stats) return [];
+  const s = tuner.stats;
+  const out = [];
+  out.push(header('llm_adaptive_bulkhead_ticks_total', 'Total tuner ticks fired', 'counter'));
+  out.push(line('llm_adaptive_bulkhead_ticks_total', s.ticks ?? 0));
+  out.push(header('llm_adaptive_bulkhead_adjustments_total', 'Ticks that actually changed maxConcurrent', 'counter'));
+  out.push(line('llm_adaptive_bulkhead_adjustments_total', s.adjustments ?? 0));
+  out.push(header('llm_adaptive_bulkhead_grows_total', 'Ticks that grew maxConcurrent (p95 below target)', 'counter'));
+  out.push(line('llm_adaptive_bulkhead_grows_total', s.grows ?? 0));
+  out.push(header('llm_adaptive_bulkhead_shrinks_total', 'Ticks that shrank maxConcurrent (p95 above target)', 'counter'));
+  out.push(line('llm_adaptive_bulkhead_shrinks_total', s.shrinks ?? 0));
+  out.push(header('llm_adaptive_bulkhead_p95_ms', 'Latest observed p95 latency in ms', 'gauge'));
+  out.push(line('llm_adaptive_bulkhead_p95_ms', s.lastP95Ms ?? 0));
+  out.push(header('llm_adaptive_bulkhead_current_max_concurrent', 'Current tuned maxConcurrent for the underlying bulkhead', 'gauge'));
+  out.push(line('llm_adaptive_bulkhead_current_max_concurrent', s.lastMaxConcurrent ?? 0));
+  return out;
+}
+
+function emitProviderHealth(probe) {
+  if (!probe?.stats) return [];
+  const s = probe.stats;
+  const out = [];
+  out.push(header('llm_probe_probes_total', 'Total probe calls fired across all providers', 'counter'));
+  out.push(line('llm_probe_probes_total', s.probes ?? 0));
+  out.push(header('llm_probe_successes_total', 'Probes that succeeded', 'counter'));
+  out.push(line('llm_probe_successes_total', s.successes ?? 0));
+  out.push(header('llm_probe_failures_total', 'Probes that failed (throw / non-ok)', 'counter'));
+  out.push(line('llm_probe_failures_total', s.failures ?? 0));
+  out.push(header('llm_probe_timeouts_total', 'Probes that exceeded timeoutMs', 'counter'));
+  out.push(line('llm_probe_timeouts_total', s.timeouts ?? 0));
+  out.push(header('llm_probe_health_changes_total', 'healthy↔unhealthy transitions observed', 'counter'));
+  out.push(line('llm_probe_health_changes_total', s.healthChanges ?? 0));
+
+  if (typeof probe.asMcpResource === 'function') {
+    const snap = probe.asMcpResource().handler();
+    const providers = Object.entries(snap.providers ?? {});
+    if (providers.length > 0) {
+      out.push(header('llm_probe_provider_healthy', 'Provider health per bucket (1=healthy, 0=unhealthy, -1=never probed)', 'gauge'));
+      for (const [name, state] of providers) {
+        const v = state.healthy === true ? 1 : state.healthy === false ? 0 : -1;
+        out.push(line('llm_probe_provider_healthy', v, { provider: name }));
+      }
+    }
+  }
+  return out;
+}
+
+function emitAdaptiveMaxTokens(amt) {
+  if (!amt?.stats) return [];
+  const s = amt.stats;
+  const out = [];
+  out.push(header('llm_adaptive_max_tokens_requests_total', 'Total requests observed by adaptiveMaxTokens', 'counter'));
+  out.push(line('llm_adaptive_max_tokens_requests_total', s.requests ?? 0));
+  out.push(header('llm_adaptive_max_tokens_skipped_total', 'Requests skipped (unknown model / no limit / non-chat)', 'counter'));
+  out.push(line('llm_adaptive_max_tokens_skipped_total', s.skipped ?? 0));
+  out.push(header('llm_adaptive_max_tokens_adjusted_total', 'Requests where maxTokens was shrunk to fit remaining budget', 'counter'));
+  out.push(line('llm_adaptive_max_tokens_adjusted_total', s.adjusted ?? 0));
+  out.push(header('llm_adaptive_max_tokens_rejected_total', 'Requests rejected because even minTokens could not fit (BUDGET_TOO_TIGHT)', 'counter'));
+  out.push(line('llm_adaptive_max_tokens_rejected_total', s.rejected ?? 0));
+  out.push(header('llm_adaptive_max_tokens_unchanged_total', 'Requests where the requested maxTokens fit under the safe budget', 'counter'));
+  out.push(line('llm_adaptive_max_tokens_unchanged_total', s.unchanged ?? 0));
+  out.push(header('llm_adaptive_max_tokens_saved_tokens_total', 'Cumulative output tokens saved by shrinking oversized requests', 'counter'));
+  out.push(line('llm_adaptive_max_tokens_saved_tokens_total', s.totalSavedTokens ?? 0));
+  return out;
+}
+
+function emitTraceCorrelation(trace) {
+  if (!trace?.stats) return [];
+  const s = trace.stats;
+  const out = [];
+  out.push(header('llm_trace_requests_total', 'Total requests observed by traceCorrelation', 'counter'));
+  out.push(line('llm_trace_requests_total', s.requests ?? 0));
+  out.push(header('llm_trace_extracted_total', 'Requests where correlation ID was extracted (from header / cds.context / caller)', 'counter'));
+  out.push(line('llm_trace_extracted_total', s.extracted ?? 0));
+  out.push(header('llm_trace_generated_total', 'Requests where correlation ID was generated fresh (no upstream ID present)', 'counter'));
+  out.push(line('llm_trace_generated_total', s.generated ?? 0));
+  return out;
+}
+
+function emitJsonLog(log) {
+  if (!log?.stats) return [];
+  const s = log.stats;
+  const out = [];
+  out.push(header('llm_json_log_requests_total', 'Total requests observed by jsonLog', 'counter'));
+  out.push(line('llm_json_log_requests_total', s.requests ?? 0));
+  out.push(header('llm_json_log_ok_total', 'Successful requests emitted as info-level log lines', 'counter'));
+  out.push(line('llm_json_log_ok_total', s.ok ?? 0));
+  out.push(header('llm_json_log_failed_total', 'Failed requests emitted as warn/error-level log lines', 'counter'));
+  out.push(line('llm_json_log_failed_total', s.failed ?? 0));
+  if (s.byErrorCode) {
+    const entries = Object.entries(s.byErrorCode);
+    if (entries.length > 0) {
+      out.push(header('llm_json_log_by_error_code_total', 'Failed requests bucketed by LLMError code (or UNKNOWN for non-LLMError)', 'counter'));
+      for (const [code, n] of entries) {
+        out.push(line('llm_json_log_by_error_code_total', n, { code }));
+      }
+    }
+  }
+  return out;
+}
+
 function emitDeadline(dl) {
   if (!dl?.stats) return [];
   const s = dl.stats;
@@ -394,6 +496,11 @@ function isoToSecondsFromNow(iso) {
  * @param {object} [mw.bh]              bulkhead middleware (new in 1.51.0)
  * @param {object} [mw.deadline]        deadline middleware (new in 1.52.0)
  * @param {object} [mw.costGuard]       costGuard middleware (new in 1.56.0)
+ * @param {object} [mw.tuner]           adaptiveBulkhead tuner (new in 1.67.0)
+ * @param {object} [mw.probe]           providerHealthProbe (new in 1.67.0)
+ * @param {object} [mw.adaptiveMaxTokens] adaptiveMaxTokens middleware (new in 1.67.0)
+ * @param {object} [mw.trace]           traceCorrelation middleware (new in 1.67.0)
+ * @param {object} [mw.jsonLog]         jsonLog middleware (new in 1.67.0)
  * @param {object} [options]
  * @param {boolean} [options.excludeBreakdowns=false]  Skip per-tenant/model/provider breakdowns
  *                                                     (cardinality control for large fleets).
@@ -411,6 +518,12 @@ async function promMetrics(mw = {}, options = {}) {
   lines.push(...emitBulkhead(mw.bh));
   lines.push(...emitDeadline(mw.deadline));
   lines.push(...emitCostGuard(mw.costGuard));
+  // Primitives with visibility added in 1.67.0
+  lines.push(...emitAdaptiveBulkhead(mw.tuner));
+  lines.push(...emitProviderHealth(mw.probe));
+  lines.push(...emitAdaptiveMaxTokens(mw.adaptiveMaxTokens));
+  lines.push(...emitTraceCorrelation(mw.trace));
+  lines.push(...emitJsonLog(mw.jsonLog));
   let meteringLines = emitMetering(mw.metering);
   if (excludeBreakdowns) {
     meteringLines = meteringLines.filter(
