@@ -4,6 +4,65 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.68.0] — 2026-08-07
+
+### Added
+
+- **`testing.fakeLLM({ scripts, ... })` — LLMService-compatible fake for unit tests.** Returns scripted responses instead of hitting a real provider. Big dev-ex improvement for consumers writing unit tests against the plugin — no network dependency, no flaky provider timeouts, no API keys needed.
+
+  ```js
+  const { testing } = require('@saptarishi/cds-plugin-llm');
+
+  const fake = testing.fakeLLM({
+    scripts: [
+      { when: { method: 'chat', matches: /purchase order/i },
+        respond: { text: 'PO summary', usage: { input_tokens: 10, output_tokens: 20 } } },
+      { when: { method: 'embed' },
+        respond: { embeddings: [[0.1, 0.2, 0.3]], usage: { input_tokens: 5 } } },
+      // Predicate matcher — full req + method access
+      { when: (req, method) => method === 'chat' && req.messages.length > 3,
+        respond: (req) => ({ text: `long conv: ${req.messages.length} msgs` }) },
+    ],
+    defaultResponse: { text: 'fallback', usage: { input_tokens: 1, output_tokens: 1 } },
+    delayMs:         10,     // simulated latency
+    failRate:        0.0,     // 0..1 random failure rate for testing retry paths
+    failWith:        () => Object.assign(new Error('sim 429'), { status: 429 }),
+  });
+
+  const res = await fake.chat({ messages: [{ role: 'user', content: 'summarize this purchase order' }] });
+  // res.text === 'PO summary'
+  ```
+
+- **Full LLMService API surface:** `chat(req)`, `embed(req)`, `stream(req)`. `stream()` yields a single `text_delta` chunk followed by a `done` chunk — same shape as real providers.
+
+- **Middleware compatibility.** `fake.use(mw)` works — the middleware chain runs BEFORE the scripted "provider" returns, so tests can exercise the FULL middleware stack (breaker + retry + cache + guardrails + costGuard + etc.) around a scripted response. Enables reliable, network-free tests of the entire resilience quartet.
+
+- **Three matcher styles for `when`:**
+  - Object shape: `{ method: 'chat', model: 'gpt-4o', matches: /regex/ }` — all fields optional, all must match
+  - Predicate fn: `(req, method) => boolean` — full req + method access
+  - `matches` regex is tested against user-visible text (chat: all user messages concatenated; embed: input string/array)
+
+- **Two response styles for `respond`:**
+  - Fixed object: `{ text: 'reply', usage: { ... } }`
+  - Fn: `(req, method) => response` — dynamic responses based on the request
+
+- **Call history capture** — every call recorded as `{ method, request, response, error?, timestamp, durationMs }`. `fake.calls` full history; `fake.callsMatching(pred)` filtered; `fake.lastCall()` most recent; `fake.reset()` clears.
+
+- **Failure injection** — `failRate: 0.5` randomly fails 50% of calls with the configured error. Perfect for testing retry / breaker / autoRetry paths without needing a real flaky provider.
+
+- **Runtime script mutation** — `fake.setScripts([...])` replaces; `fake.addScript({...})` appends. Between test cases without recreating the fake.
+
+- **Strict mode** — `strict: true` throws on unmatched call + no default (catches missing scripts). Default `false` returns a stub (empty text / empty embeddings) to keep tests running when full scripting isn't required.
+
+### Type definitions
+
+- `testing.fakeLLM(options)` → `FakeLLM`
+- `FakeLLMScript`, `FakeLLMScriptMatcher`, `FakeLLMCall`, `FakeLLMOptions`, `FakeLLM` — full LLMService-compatible interface
+
+### Backwards compatibility
+
+Additive — no breaking changes. `testing` is a new namespace under the plugin's default export.
+
 ## [1.67.0] — 2026-08-07
 
 ### Added

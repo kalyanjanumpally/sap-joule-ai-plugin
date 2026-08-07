@@ -117,6 +117,8 @@ module.exports = {
   // Boot-time preflight validator — fail-fast config check (new in 1.66.0)
   preflight: require('./preflight').preflight,
   PreflightError: require('./preflight').PreflightError,
+  // Testing helpers — fakeLLM for network-free unit tests (new in 1.68.0)
+  testing: require('./testing'),
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

@@ -2479,6 +2479,72 @@ export class PreflightError extends Error {
   readonly report: PreflightReport;
 }
 
+// ---- Testing helpers (new in 1.68.0) ---------------------------------
+
+export interface FakeLLMScriptMatcher {
+  method?: 'chat' | 'embed' | 'stream';
+  model?:  string;
+  matches?: RegExp;
+}
+
+export interface FakeLLMScript {
+  /** Matcher — either an object shape or a predicate fn `(req, method) => boolean`. */
+  when:    FakeLLMScriptMatcher | ((req: any, method: string) => boolean);
+  /** Response — either a fixed object or a fn `(req, method) => response`. */
+  respond: unknown | ((req: any, method: string) => unknown);
+}
+
+export interface FakeLLMCall {
+  method:     'chat' | 'embed' | 'stream';
+  request:    unknown;
+  response:   unknown;
+  error:      Error | null;
+  timestamp:  number;
+  durationMs: number;
+}
+
+export interface FakeLLMOptions {
+  name?:            string;
+  modelId?:         string;
+  scripts?:         FakeLLMScript[];
+  defaultResponse?: unknown | ((req: any, method: string) => unknown);
+  /** Simulated per-call latency in ms. Default 0. */
+  delayMs?:         number;
+  /** 0..1 — random failure rate for testing retry paths. Default 0. */
+  failRate?:        number;
+  /** Called to build the failure error when failRate fires. */
+  failWith?:        (req: any, method: string) => Error;
+  /** Throw when no script matches + no defaultResponse. Default false. */
+  strict?:          boolean;
+}
+
+export interface FakeLLM {
+  readonly name: string;
+  readonly modelId: string;
+  readonly middleware: Middleware[];
+  readonly calls: FakeLLMCall[];
+  use(mw: Middleware): FakeLLM;
+  chat(req: ChatRequest): Promise<any>;
+  embed(req: EmbedRequest): Promise<any>;
+  stream(req: ChatRequest): AsyncGenerator<StreamChunk, void, void>;
+  callsMatching(pred: (call: FakeLLMCall) => boolean): FakeLLMCall[];
+  lastCall(): FakeLLMCall | null;
+  reset(): void;
+  setScripts(scripts: FakeLLMScript[]): void;
+  addScript(script: FakeLLMScript): void;
+}
+
+export namespace testing {
+  /**
+   * LLMService-compatible fake for unit tests. Returns scripted responses
+   * instead of hitting a real provider. Middleware (breaker, retry, cache,
+   * guardrails, etc.) still runs before the scripted provider — enables
+   * network-free tests of the full middleware stack.
+   * @since 1.68.0
+   */
+  function fakeLLM(options?: FakeLLMOptions): FakeLLM;
+}
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {
