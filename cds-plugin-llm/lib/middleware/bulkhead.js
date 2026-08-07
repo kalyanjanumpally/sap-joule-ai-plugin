@@ -124,16 +124,28 @@ function bulkhead(options = {}) {
         catch { /* swallow */ }
       }
       const startedAt = Date.now();
-      let ok = true;
-      try {
-        return await next();
-      } catch (e) {
-        ok = false;
-        throw e;
-      } finally {
+      let released = false;
+      const release = (ok) => {
+        if (released) return;
+        released = true;
         emit({ provider: key, durationMs: Date.now() - startedAt, ok, method: ctx?.method });
         bucket.inFlight--;
         drain(bucket);
+      };
+      try {
+        const result = await next();
+        // Stream (1.72+): defer slot release until the stream is fully
+        // consumed. Otherwise release immediately (chat/embed path).
+        const { hasStreamCompletion } = require('../streamCompletion');
+        if (hasStreamCompletion(result)) {
+          result.onComplete((info) => release(info.ok));
+          return result;
+        }
+        release(true);
+        return result;
+      } catch (e) {
+        release(false);
+        throw e;
       }
     }
 
@@ -179,16 +191,26 @@ function bulkhead(options = {}) {
       catch { /* swallow */ }
     }
     const startedExecAt = Date.now();
-    let ok = true;
-    try {
-      return await next();
-    } catch (e) {
-      ok = false;
-      throw e;
-    } finally {
+    let released2 = false;
+    const release2 = (ok) => {
+      if (released2) return;
+      released2 = true;
       emit({ provider: key, durationMs: Date.now() - startedExecAt, ok, method: ctx?.method });
       bucket.inFlight--;
       drain(bucket);
+    };
+    try {
+      const result = await next();
+      const { hasStreamCompletion } = require('../streamCompletion');
+      if (hasStreamCompletion(result)) {
+        result.onComplete((info) => release2(info.ok));
+        return result;
+      }
+      release2(true);
+      return result;
+    } catch (e) {
+      release2(false);
+      throw e;
     }
   };
 

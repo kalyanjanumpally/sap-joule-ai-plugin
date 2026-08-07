@@ -1915,6 +1915,45 @@ export interface ResilienceBundlePreset {
   bulkheadTimeoutMs:       number;
 }
 
+// ---- Stream completion tracking (new in 1.72.0) ----------------------
+
+export interface StreamCompletionInfo {
+  /** true if the stream finished normally, false if it threw. */
+  ok:         boolean;
+  /** The error if ok=false. */
+  error:      Error | null;
+  /** Number of chunks yielded (including the final `done` chunk). */
+  chunkCount: number;
+  /** Wall-clock ms from wrapping until stream finished. */
+  durationMs: number;
+  /** The final chunk with type='done' (or null if stream errored before it). */
+  doneChunk:  { type: 'done'; text?: string; usage?: any; model?: string } | null;
+}
+
+export interface StreamCompletionEnvelope<T> extends AsyncIterable<T> {
+  /**
+   * Register a callback fired exactly once when the stream is fully
+   * consumed. If the stream has already completed by the time you
+   * register, fires synchronously with the captured info.
+   */
+  onComplete(cb: (info: StreamCompletionInfo) => void): void;
+  /** Immutable snapshot — null until the stream finishes. */
+  readonly completedInfo: StreamCompletionInfo | null;
+  readonly isCompleted: boolean;
+}
+
+/**
+ * Wrap an async iterable so middleware can hook into 'stream fully
+ * consumed' events. Auto-applied by `LLMService.stream()` — middleware
+ * authors just need to check `hasStreamCompletion(result)` and call
+ * `result.onComplete(cb)` to defer 'finally' logic.
+ * @since 1.72.0
+ */
+export function wrapStreamCompletion<T>(iter: AsyncIterable<T>): StreamCompletionEnvelope<T>;
+
+/** Type guard for a wrapped stream envelope. @since 1.72.0 */
+export function hasStreamCompletion(x: unknown): x is StreamCompletionEnvelope<unknown>;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

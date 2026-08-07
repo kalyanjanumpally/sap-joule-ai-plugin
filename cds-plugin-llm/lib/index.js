@@ -121,6 +121,9 @@ module.exports = {
   testing: require('./testing'),
   // Tenant isolation wrapper — per-tenant middleware chain instances (new in 1.71.0)
   tenantIsolate: require('./middleware/tenantIsolate').tenantIsolate,
+  // Stream completion tracker — middleware can hook into stream 'fully consumed' (new in 1.72.0)
+  wrapStreamCompletion: require('./streamCompletion').wrapStreamCompletion,
+  hasStreamCompletion: require('./streamCompletion').hasStreamCompletion,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

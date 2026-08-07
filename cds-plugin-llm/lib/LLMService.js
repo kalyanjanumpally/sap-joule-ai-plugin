@@ -85,9 +85,13 @@ class LLMService extends cds.Service {
       raw: req,
       meta: {},
     };
-    // Middleware wraps around the async iterable. Middleware may inspect or
-    // transform chunks by yielding a wrapped generator from next().
-    const iter = await this._runMiddleware(ctx, () => this._streamCore(ctx.request));
+    // Wrap the provider's iterable with completion tracking (1.72.0) so
+    // downstream middleware can hook into `stream fully consumed` events
+    // via `iter.onComplete(cb)`. Fixes the long-standing gap where
+    // middleware relying on `finally` fired as soon as next() returned
+    // (with the iterable) rather than when the stream actually ended.
+    const { wrapStreamCompletion } = require('./streamCompletion');
+    const iter = await this._runMiddleware(ctx, () => wrapStreamCompletion(this._streamCore(ctx.request)));
     yield* iter;
   }
 

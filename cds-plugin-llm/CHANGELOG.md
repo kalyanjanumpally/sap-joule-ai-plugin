@@ -4,6 +4,59 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.72.0] — 2026-08-07
+
+### Added
+
+- **Streaming middleware compatibility — fixed a long-standing gap.** Middleware that used `try / finally` to release resources (bulkhead slot, breaker state) fired as soon as `next()` returned the iterable — NOT when the stream actually ended. This release ships a completion tracker that lets middleware defer `finally` logic to the moment the stream is fully consumed.
+
+- **`wrapStreamCompletion(iter)`** — wraps any async iterable in an envelope that fires `onComplete(info)` callbacks when the stream ends (success or error). Auto-applied by `LLMService.stream()` so middleware authors just need to check `hasStreamCompletion(result)` and hook in.
+
+  ```js
+  const { hasStreamCompletion } = require('@saptarishi/cds-plugin-llm');
+
+  const mw = async (ctx, next) => {
+    acquireResource();
+    const result = await next();
+    if (hasStreamCompletion(result)) {
+      result.onComplete((info) => {
+        // Fires when stream fully consumed (success or error)
+        releaseResource(info.ok, info.durationMs);
+      });
+      return result;
+    }
+    releaseResource(true);   // chat/embed path
+    return result;
+  };
+  ```
+
+- **Completion info** carries `{ ok, error, chunkCount, durationMs, doneChunk }` — the actual final `done` chunk (with real usage + model) so consumers get authoritative summary data. `durationMs` is wall-clock from wrapping until stream end.
+
+- **3 shipped middleware updated** to defer completion for streams:
+  - **`bulkhead`** — slot now released when the stream ends, not when the iterable is created. Fixes the case where fast-returning streams under-counted concurrency. A second call is now correctly rejected while an earlier stream is still consuming.
+  - **`circuitBreaker`** — success / failure recorded when the stream ends. Stream errors that fail mid-flow now count against the threshold; N stream errors in a row correctly open the circuit.
+  - **`jsonLog`** — log line emitted ONCE at stream completion, with `durationMs` reflecting real stream duration + `tokensIn/tokensOut/model` from the final `done` chunk. Adds `chunkCount` field. Error logs fire on stream failure with the captured error.
+
+- **Idempotent wrapping** — `wrapStreamCompletion(wrapStreamCompletion(x)) === x` (same reference). Safe to double-wrap; middleware and `LLMService.stream()` can both apply without conflict.
+
+- **Multiple subscribers supported** — multiple middleware can call `onComplete()` on the same envelope; all fire in registration order. Subscriber exceptions are swallowed so a broken subscriber can't affect the stream or other subscribers.
+
+- **Late subscribers** — `onComplete()` called AFTER the stream has already completed fires synchronously with the captured info. Prevents lost events in complex composition scenarios.
+
+### Type definitions
+
+- `StreamCompletionInfo` — `{ ok, error, chunkCount, durationMs, doneChunk }`
+- `StreamCompletionEnvelope<T>` — `AsyncIterable<T>` extended with `onComplete()` + `completedInfo` + `isCompleted`
+- `wrapStreamCompletion<T>(iter)`, `hasStreamCompletion(x)` — top-level exports
+
+### Backwards compatibility
+
+Additive on the runtime side:
+- Existing middleware that don't check `hasStreamCompletion()` continue to work exactly as before (fire `finally` on iterable creation).
+- Stream consumers see identical chunks — the wrapper just passes them through.
+- `LLMService.stream()` still yields `text_delta` + `done` chunks in the same shape.
+- The three updated middleware are DRAMATICALLY more useful on streams; consumers running them against streams before this release should see zero regressions on chat/embed and correct behavior on stream.
+
 ## [1.71.0] — 2026-08-07
 
 ### Added

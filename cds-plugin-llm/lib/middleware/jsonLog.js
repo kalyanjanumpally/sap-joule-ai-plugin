@@ -97,11 +97,70 @@ function jsonLog(options = {}) {
 
     try {
       const result = await next();
+      // Stream (1.72+): defer log emission until the stream is fully
+      // consumed. The final `done` chunk carries the real usage totals;
+      // durationMs reflects wall-clock from stream start → last chunk.
+      const { hasStreamCompletion } = require('../streamCompletion');
+      if (hasStreamCompletion(result)) {
+        result.onComplete((info) => {
+          if (info.ok) {
+            stats.ok++;
+            const done = info.doneChunk ?? {};
+            const usage = done.usage ?? {};
+            const costEstimate = ctx?.meta?.costEstimate;
+            const cost = done.cost ?? costEstimate?.estimatedUsd ?? null;
+            const payload = {
+              ts:            new Date().toISOString(),
+              method,
+              ok:            true,
+              durationMs:    info.durationMs,
+              tenant,
+              provider,
+              model:         done.model ?? model,
+              tokensIn:      usage.input_tokens  ?? usage.inputTokens  ?? null,
+              tokensOut:     usage.output_tokens ?? usage.outputTokens ?? null,
+              cost,
+              cachedHit:     false,          // streams don't hit cache
+              chunkCount:    info.chunkCount,
+              correlationId: corrId,
+            };
+            if (requestPreview) payload.requestPreview = requestPreview;
+            if (includeMeta && ctx?.meta) payload.meta = redactObject(ctx.meta, redactSet);
+            emit(level, payload);
+          } else {
+            const err = info.error;
+            stats.failed++;
+            const code = err?.code ?? 'UNKNOWN';
+            stats.byErrorCode[code] = (stats.byErrorCode[code] ?? 0) + 1;
+            const payload = {
+              ts:            new Date().toISOString(),
+              method,
+              ok:            false,
+              durationMs:    info.durationMs,
+              tenant,
+              provider,
+              model,
+              chunkCount:    info.chunkCount,
+              correlationId: corrId,
+              error: {
+                code,
+                primitive: err?.primitive ?? null,
+                retriable: !!err?.retriable,
+                severity:  err?.severity ?? 'error',
+                message:   err?.message ?? String(err),
+              },
+            };
+            if (requestPreview) payload.requestPreview = requestPreview;
+            if (includeMeta && ctx?.meta) payload.meta = redactObject(ctx.meta, redactSet);
+            emit(errorLevel, payload);
+          }
+        });
+        return result;
+      }
+      // Non-stream: existing sync path
       const durationMs = Date.now() - startedAt;
       stats.ok++;
       const usage = result?.usage ?? {};
-      // Cost — prefer the actual meter result if the metering middleware
-      // wrote it; else the costGuard estimate; else null.
       const costEstimate = ctx?.meta?.costEstimate;
       const cost = result?.cost ?? costEstimate?.estimatedUsd ?? null;
       const payload = {

@@ -173,6 +173,21 @@ function circuitBreaker(options = {}) {
     // CLOSED or HALF-OPEN with probe budget — try the call.
     try {
       const result = await next();
+      // Stream (1.72+): defer success/failure recording until the stream
+      // is fully consumed. Otherwise record immediately (chat/embed).
+      const { hasStreamCompletion } = require('../streamCompletion');
+      if (hasStreamCompletion(result)) {
+        result.onComplete((info) => {
+          if (info.ok) {
+            _handleSuccess(bucket, key, ctx?.method);
+          } else if (isFailure(info.error)) {
+            _handleFailure(bucket, key, info.error, ctx?.method);
+          } else {
+            bucket.consecutiveFailures = 0;
+          }
+        });
+        return result;
+      }
       _handleSuccess(bucket, key, ctx?.method);
       return result;
     } catch (err) {
