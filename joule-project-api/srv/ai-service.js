@@ -161,21 +161,16 @@ function getLLM() {
       // The bundle still buys us: one config surface, consistent
       // callbacks, named primitive access, prometheusBundle() /
       // healthBundle() for /metrics + /health wiring.
+      //
+      // Uses `resilience.presets.balanced` (cds-plugin-llm 1.70.0) —
+      // production defaults for deadline/breaker/bulkhead/retry.
+      // Overrides just the callbacks + bulkheadPerProvider tuning
+      // that are demo-specific. Budget is left for FinanceService
+      // to seed via the shared _budgetLimits reference (hot-reload).
       _resilience = resilience.bundle({
-        deadlineMs:        30_000,
-        perMethodDeadline: { chat: 30_000, embed: 5_000, stream: 60_000, batch: 300_000 },
-        breakerThreshold:  5,
-        breakerCooldownMs: 30_000,
+        ...resilience.presets.balanced,
         breakerPerProvider: true,
-        bulkheadMax:       10,
-        bulkheadQueue:     50,
-        bulkheadTimeoutMs: 5_000,
         bulkheadPerProvider: true,
-        retryAttempts:     3,
-        retryFallbackMs:   2_000,
-        retryJitterMs:     500,
-        // No budgetLimits — populated below via FinanceService seed via
-        // _budgetLimits shared reference (kept for hot-reload).
         onDeadlineExpired: (info) => cds.log('llm:deadline').warn(
           `[deadline] ${info.method} expired after ${info.elapsedMs}ms (budget ${info.timeoutMs}ms)`,
         ),
