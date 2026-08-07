@@ -108,7 +108,7 @@ test('each subclass preserves its own .name (for toString / instanceof serializa
 
 // ---- errorRegistry shape ---------------------------------------------
 
-test('errorRegistry: entries for all 10 shipped codes', () => {
+test('errorRegistry: entries for all shipped codes', () => {
   const expectedCodes = [
     'RATE_LIMIT_GIVE_UP',
     'CIRCUIT_OPEN',
@@ -118,6 +118,7 @@ test('errorRegistry: entries for all 10 shipped codes', () => {
     'ALL_PROVIDERS_FAILED',
     'COST_GUARD_BLOCKED',
     'BUDGET_EXCEEDED',
+    'BUDGET_TOO_TIGHT',
     'PROMPT_INJECTION',
     'GUARDRAIL_BLOCKED',
   ];

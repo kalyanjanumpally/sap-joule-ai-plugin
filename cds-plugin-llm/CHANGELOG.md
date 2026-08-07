@@ -4,6 +4,70 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.63.0] — 2026-08-07
+
+### Added
+
+- **`adaptiveMaxTokens` — cost-aware token budgeting middleware.** Runs BEFORE the provider call and mutates `ctx.request.maxTokens` so estimated cost fits under the caller's remaining budget × safetyFactor. Prevents the "one giant call ate my whole daily budget" failure mode.
+
+  ```js
+  const shrinker = adaptiveMaxTokens({
+    budget:       budgetMw,          // required — the 1.29 costBudget middleware
+    scope:        'perTenant',        // 'total' | 'perTenant' | 'perModel'
+    safetyFactor: 0.5,                 // use ≤ 50% of remaining $ per call
+    minTokens:    50,                  // never shrink below
+    tenantOf:     (ctx) => ctx.raw?.tenant ?? 'default',
+    onAdjust:     (info) => cds.log('llm:adaptive-tokens').info(info),
+  });
+  llm.use(shrinker);
+  ```
+
+  Example flow:
+  - Caller asks for `maxTokens: 8000`
+  - Remaining budget: `$0.10`; safetyFactor `0.5` → safe budget `$0.05`
+  - Model gpt-4o at $20/M output → safe output tokens `≈ 2500`
+  - Middleware shrinks `req.maxTokens` from `8000` to `2500` before provider sees it
+  - `ctx.meta.adaptiveMaxTokens` records `{ requested, adjusted, remainingUsd, safeUsd, model }` for downstream logging (jsonLog picks it up automatically)
+
+- **Completes the cost story.** The plugin now has four layered cost primitives:
+  - `costBudget` (1.29) — hard per-tenant / per-window accumulator ceiling
+  - `costGuard` (1.56) — per-call ceiling (independent of budget window)
+  - `estimateCost` (1.54) — pre-flight quote (no round-trip)
+  - `adaptiveMaxTokens` (1.63) — auto-shrink maxTokens to fit remaining budget
+
+- **`AdaptiveMaxTokensBlockedError`** — thrown when the safe budget cannot fit even `minTokens` of output. Inherits from `LLMError` with code `BUDGET_TOO_TIGHT`, HTTP status 402, non-retriable (budget won't refund until window resets).
+
+- **Smart skip semantics** — the middleware bows out cleanly and passes through when:
+  - Method is not in `applyTo` (default `['chat', 'stream']` — embed skipped)
+  - No `model` in request
+  - Model has no pricing entry (unknown / free / embed-only)
+  - No budget limit configured for the target scope/key (unlimited → nothing to enforce)
+
+- **Reads from every scope**. `scope: 'total'` uses the global limit; `'perTenant'` uses `tenantOf(ctx)` to look up; `'perModel'` uses `modelOf(ctx)`. Same shape as `costBudget` so pairs cleanly.
+
+- **`ctx.meta.adaptiveMaxTokens` stashed for downstream.** Every adjustment writes `{ requested, adjusted, remainingUsd, safeUsd, model }` to `ctx.meta` — the 1.59 `jsonLog` middleware picks it up automatically when `includeMeta: true`.
+
+- **Introspection + control:**
+  - `mw.stats` → `{ requests, skipped, adjusted, rejected, unchanged, totalSavedTokens }` — `totalSavedTokens` shows cumulative shrinkage for cost forecasting
+  - `mw.reset()` — clears counters
+  - `mw.asMcpResource()` → `config://adaptive-max-tokens`
+
+- **Callbacks:**
+  - `onAdjust({ requested, adjusted, remainingUsd, safeUsd, inputUsd, model, method })` — every shrink
+  - `onBlock({ remainingUsd, safeUsd, inputUsd, safeOutputTokens?, minTokens, model })` — every rejection
+
+- **New error code in taxonomy:** `BUDGET_TOO_TIGHT` added to `errorRegistry` (primitive: `adaptiveMaxTokens`, retriable: false, httpStatus: 402, severity: error). `LLMErrorCode` union extended.
+
+### Type definitions
+
+- `AdaptiveMaxTokensOptions`, `AdaptiveMaxTokensStats`, `AdaptiveMaxTokensMiddleware`
+- `AdaptiveMaxTokensBlockedError extends LLMError`
+- `LLMErrorCode` extended with `'BUDGET_TOO_TIGHT'`
+
+### Backwards compatibility
+
+Additive — no breaking changes.
+
 ## [1.62.0] — 2026-08-07
 
 ### Added

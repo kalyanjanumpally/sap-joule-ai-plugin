@@ -104,6 +104,9 @@ module.exports = {
   adaptiveBulkhead: require('./middleware/adaptiveBulkhead').adaptiveBulkhead,
   // Provider health probe — proactive circuit isolation (new in 1.62.0)
   providerHealthProbe: require('./middleware/providerHealthProbe').providerHealthProbe,
+  // Adaptive max-tokens — auto-shrink maxTokens to fit remaining budget (new in 1.63.0)
+  adaptiveMaxTokens: require('./middleware/adaptiveMaxTokens').adaptiveMaxTokens,
+  AdaptiveMaxTokensBlockedError: require('./middleware/adaptiveMaxTokens').AdaptiveMaxTokensBlockedError,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

@@ -81,6 +81,12 @@ const errorRegistry = {
     httpStatus: 402,
     severity:   'error',
   },
+  BUDGET_TOO_TIGHT: {
+    primitive:  'adaptiveMaxTokens',
+    retriable:  false,   // budget won't refund until window resets
+    httpStatus: 402,     // Payment Required — semantically same as budget exhaustion
+    severity:   'error',
+  },
   // Security family
   PROMPT_INJECTION: {
     primitive:  'promptInjectionGuard',

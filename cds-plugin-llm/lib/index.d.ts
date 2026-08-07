@@ -1925,6 +1925,7 @@ export type LLMErrorCode =
   | 'ALL_PROVIDERS_FAILED'
   | 'COST_GUARD_BLOCKED'
   | 'BUDGET_EXCEEDED'
+  | 'BUDGET_TOO_TIGHT'
   | 'PROMPT_INJECTION'
   | 'GUARDRAIL_BLOCKED';
 
@@ -2257,6 +2258,76 @@ export interface ProviderHealthProbeHandle {
  * @since 1.62.0
  */
 export function providerHealthProbe(options: ProviderHealthProbeOptions): ProviderHealthProbeHandle;
+
+// ---- Adaptive max-tokens (new in 1.63.0) ------------------------------
+
+export interface AdaptiveMaxTokensOptions {
+  /** Required. The costBudget middleware to read remaining $ from. */
+  budget:        CostBudgetMiddleware;
+  /** Which scope's remaining $ to check. Default 'total'. */
+  scope?:        BudgetScope;
+  /** Fraction of remaining $ the middleware may use (0..1]. Default 0.5. */
+  safetyFactor?: number;
+  /** Floor on the shrunk maxTokens. Below this → throw. Default 50. */
+  minTokens?:    number;
+  /** Ceiling when caller supplies no maxTokens. Default 4_000. */
+  maxTokens?:    number;
+  /** Optional per-model pricing override. Defaults to DEFAULT_PRICING. */
+  pricing?:      Record<string, { input: number; output: number }>;
+  /** Extract tenant from ctx (for perTenant scope). */
+  tenantOf?:     (ctx: MiddlewareContext) => string | null | undefined;
+  /** Extract model from ctx (for perModel scope). */
+  modelOf?:      (ctx: MiddlewareContext) => string | null | undefined;
+  /** Which methods to guard. Default ['chat', 'stream']. */
+  applyTo?:      string[];
+  onAdjust?:     (info: { requested: number; adjusted: number; remainingUsd: number; safeUsd: number; inputUsd: number; model: string; method: string }) => void | Promise<void>;
+  onBlock?:      (info: { remainingUsd: number; safeUsd: number; inputUsd: number; safeOutputTokens?: number; minTokens: number; model: string }) => void | Promise<void>;
+}
+
+export interface AdaptiveMaxTokensStats {
+  requests:         number;
+  skipped:          number;
+  adjusted:         number;
+  rejected:         number;
+  unchanged:        number;
+  totalSavedTokens: number;
+}
+
+export interface AdaptiveMaxTokensMiddleware extends Middleware {
+  readonly stats: AdaptiveMaxTokensStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://adaptive-max-tokens';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => AdaptiveMaxTokensStats & {
+      scope: BudgetScope;
+      safetyFactor: number;
+      minTokens: number;
+      maxTokens: number;
+      applyTo: string[];
+    };
+  };
+}
+
+/**
+ * Cost-aware token budgeting middleware. Runs BEFORE the provider call
+ * and mutates `ctx.request.maxTokens` so estimated cost fits under the
+ * caller's remaining budget * safetyFactor. Throws
+ * AdaptiveMaxTokensBlockedError (LLMError code 'BUDGET_TOO_TIGHT') when
+ * even minTokens can't fit. Completes the cost story: budget → estimate
+ * → guard → adaptive tokens.
+ * @since 1.63.0
+ */
+export function adaptiveMaxTokens(options: AdaptiveMaxTokensOptions): AdaptiveMaxTokensMiddleware;
+
+export class AdaptiveMaxTokensBlockedError extends LLMError {
+  readonly code: 'BUDGET_TOO_TIGHT';
+  readonly remainingUsd: number;
+  readonly minTokens: number;
+  readonly model: string;
+}
 
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
