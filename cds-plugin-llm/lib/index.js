@@ -107,6 +107,10 @@ module.exports = {
   // Adaptive max-tokens — auto-shrink maxTokens to fit remaining budget (new in 1.63.0)
   adaptiveMaxTokens: require('./middleware/adaptiveMaxTokens').adaptiveMaxTokens,
   AdaptiveMaxTokensBlockedError: require('./middleware/adaptiveMaxTokens').AdaptiveMaxTokensBlockedError,
+  // Trace correlation — extract/generate correlation ID per request (new in 1.64.0)
+  traceCorrelation: require('./middleware/traceCorrelation').traceCorrelation,
+  uuidv7: require('./middleware/traceCorrelation').uuidv7,
+  parseTraceparent: require('./middleware/traceCorrelation').parseTraceparent,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

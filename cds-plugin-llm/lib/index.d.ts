@@ -2329,6 +2329,65 @@ export class AdaptiveMaxTokensBlockedError extends LLMError {
   readonly model: string;
 }
 
+// ---- Trace correlation middleware (new in 1.64.0) ---------------------
+
+export interface TraceCorrelationOptions {
+  /**
+   * Custom extractor. Default: reads ctx.raw.correlationId, then
+   * headers['x-correlation-id'], then headers['x-request-id'], then
+   * W3C traceparent trace-id, then cds.context?.id.
+   */
+  fromCtx?: (ctx: MiddlewareContext) => string | null | undefined;
+  /** Fallback ID generator when nothing to extract. Default: crypto.randomUUID (v4). */
+  generator?: () => string;
+  /** Where to stash the id on ctx.meta. Default 'correlationId'. */
+  metaField?: string;
+  /**
+   * If true and cds.context exists without the metaField, write the id there.
+   * Default true.
+   */
+  injectIntoCdsContext?: boolean;
+  onExtract?: (info: { id: string; source: 'extracted' | 'generated'; method: string }) => void;
+}
+
+export interface TraceCorrelationStats {
+  requests:  number;
+  extracted: number;
+  generated: number;
+}
+
+export interface TraceCorrelationMiddleware extends Middleware {
+  readonly stats: TraceCorrelationStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://trace-correlation';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => TraceCorrelationStats & { metaField: string; injectIntoCdsContext: boolean };
+  };
+}
+
+/**
+ * Trace correlation middleware. Extracts or generates a correlation ID per
+ * request and stashes it on `ctx.meta.correlationId` so every downstream
+ * middleware (jsonLog, usageMetering, provider calls) surfaces the same
+ * ID. Optionally propagates into `cds.context` so CAP's own logging picks
+ * it up. Enables end-to-end distributed tracing across an SAP CAP request
+ * → LLM call chain.
+ * @since 1.64.0
+ */
+export function traceCorrelation(options?: TraceCorrelationOptions): TraceCorrelationMiddleware & {
+  uuidv7: () => string;
+  parseTraceparent: (headerValue: string) => string | null;
+  defaultFromCtx: (ctx: MiddlewareContext) => string | null;
+};
+
+/** UUIDv7 generator — 48-bit timestamp + 74 bits random. Time-ordered. @since 1.64.0 */
+export function uuidv7(): string;
+/** Parse a W3C traceparent header, returning the trace-id or null. @since 1.64.0 */
+export function parseTraceparent(headerValue: string): string | null;
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {

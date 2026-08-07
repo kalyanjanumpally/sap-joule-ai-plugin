@@ -4,6 +4,60 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.64.0] — 2026-08-07
+
+### Added
+
+- **`traceCorrelation` middleware — end-to-end distributed tracing.** Extracts (or generates) a correlation ID per request and stashes it on `ctx.meta.correlationId` so every downstream middleware — `jsonLog` (1.59), `usageMetering`, provider calls — surfaces the same ID. Optionally propagates into `cds.context` so CAP's own logging + persisted rows carry it too.
+
+  ```js
+  const { traceCorrelation } = require('@saptarishi/cds-plugin-llm');
+
+  const trace = traceCorrelation({
+    generator: traceCorrelation.uuidv7,   // time-ordered IDs
+    onExtract: (info) => cds.log('llm:trace').debug(info),
+  });
+  llm.use(trace);   // OUTER of jsonLog so log lines carry the ID
+  ```
+
+- **Lookup precedence** (default `fromCtx`):
+  1. `ctx.raw.correlationId` (caller-supplied)
+  2. `ctx.raw.headers['x-correlation-id']`
+  3. `ctx.raw.headers['x-request-id']`
+  4. W3C `traceparent` trace-id (the 32-char hex ID from the middle of the header value — parsed via `parseTraceparent`)
+  5. `cds.context?.id` (CAP's per-request UUID)
+  6. `generator()` — fresh UUID
+
+  Custom `fromCtx` overrides the default lookup entirely.
+
+- **`uuidv7()` — time-ordered UUID generator.** RFC-9562 v7 layout (48-bit ms timestamp + 4-bit version + 74 bits random). K-sortable — better index locality in a log store than v4. Default generator remains `crypto.randomUUID` (v4) for zero-dep compatibility; opt in to v7 with `generator: traceCorrelation.uuidv7`.
+
+- **`parseTraceparent(headerValue)`** — helper to extract the trace-id from a W3C traceparent header string. Returns null on malformed input. Exported for consumers who want to compose their own `fromCtx`.
+
+- **CDS context propagation** — `injectIntoCdsContext: true` (default) writes the ID to `cds.context[metaField]` if the context exists and doesn't already carry that field. Never overwrites; safe with CAP's own request-scoped context.
+
+- **Non-throwing contract.** If `fromCtx` throws, the middleware falls back to `generator()` — never breaks the request path. `onExtract` callback errors are swallowed. Missing `cds.context` (e.g. running in a bare Node script) skips propagation silently.
+
+- **Introspection:**
+  - `mw.stats` → `{ requests, extracted, generated }` — split showing how often IDs came from upstream vs. had to be generated fresh (useful to detect misconfigured upstream tracing).
+  - `mw.reset()` — clears counters
+  - `mw.asMcpResource()` → `config://trace-correlation`
+
+- **Placement guidance.** Compose OUTER of `jsonLog` (1.59) so the log line carries the correct ID, and OUTER of `usageMetering` (1.21) so LlmSpend rows are tagged with it. Recommended chain:
+  ```
+  deadline → traceCorrelation → jsonLog → guardrails → costGuard → ... → provider
+  ```
+
+### Type definitions
+
+- `TraceCorrelationOptions`, `TraceCorrelationStats`, `TraceCorrelationMiddleware`
+- `uuidv7()`, `parseTraceparent(headerValue)` — top-level exports
+- Helper functions also available as `traceCorrelation.uuidv7` / `traceCorrelation.parseTraceparent` / `traceCorrelation.defaultFromCtx`
+
+### Backwards compatibility
+
+Additive — no breaking changes.
+
 ## [1.63.0] — 2026-08-07
 
 ### Added
