@@ -100,6 +100,8 @@ module.exports = {
   // Auto-retry helper — wraps any async fn in a retry loop that respects LLMError.retriable (new in 1.60.0)
   autoRetry: require('./autoRetry').autoRetry,
   defaultRetryOn: require('./autoRetry').defaultRetryOn,
+  // Adaptive concurrency tuner — AIMD on bulkhead.maxConcurrent by p95 latency (new in 1.61.0)
+  adaptiveBulkhead: require('./middleware/adaptiveBulkhead').adaptiveBulkhead,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

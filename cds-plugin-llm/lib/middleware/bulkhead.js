@@ -49,7 +49,7 @@ class BulkheadTimeoutError extends LLMError {
 
 function bulkhead(options = {}) {
   const {
-    maxConcurrent  = 10,
+    maxConcurrent: initialMaxConcurrent = 10,
     maxQueued      = 0,
     queueTimeoutMs = 0,
     perProvider    = true,
@@ -58,14 +58,27 @@ function bulkhead(options = {}) {
     onExecute      = null,
   } = options;
 
-  if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
-    throw new Error(`bulkhead: maxConcurrent must be a positive integer (got ${maxConcurrent}).`);
+  if (!Number.isInteger(initialMaxConcurrent) || initialMaxConcurrent < 1) {
+    throw new Error(`bulkhead: maxConcurrent must be a positive integer (got ${initialMaxConcurrent}).`);
   }
   if (!Number.isInteger(maxQueued) || maxQueued < 0) {
     throw new Error(`bulkhead: maxQueued must be a non-negative integer (got ${maxQueued}).`);
   }
   if (!Number.isFinite(queueTimeoutMs) || queueTimeoutMs < 0) {
     throw new Error(`bulkhead: queueTimeoutMs must be a non-negative number (got ${queueTimeoutMs}).`);
+  }
+
+  // Mutable so adaptiveBulkhead (1.61+) can tune it at runtime via
+  // setMaxConcurrent(). Reads inside the fast path see the LATEST value.
+  let maxConcurrent = initialMaxConcurrent;
+
+  // Observer subscribers — invoked after each call completes (success or
+  // failure). Used by adaptiveBulkhead to measure latency samples.
+  const subscribers = new Set();
+  function emit(info) {
+    for (const fn of subscribers) {
+      try { fn(info); } catch { /* swallow */ }
+    }
   }
 
   const buckets = new Map();
@@ -110,9 +123,15 @@ function bulkhead(options = {}) {
         try { onExecute({ provider: key, inFlight: bucket.inFlight, queued: bucket.queue.length, method: ctx?.method }); }
         catch { /* swallow */ }
       }
+      const startedAt = Date.now();
+      let ok = true;
       try {
         return await next();
+      } catch (e) {
+        ok = false;
+        throw e;
       } finally {
+        emit({ provider: key, durationMs: Date.now() - startedAt, ok, method: ctx?.method });
         bucket.inFlight--;
         drain(bucket);
       }
@@ -159,15 +178,48 @@ function bulkhead(options = {}) {
       try { onExecute({ provider: key, inFlight: bucket.inFlight, queued: bucket.queue.length, method: ctx?.method, waitedMs: Date.now() - enqueuedAt }); }
       catch { /* swallow */ }
     }
+    const startedExecAt = Date.now();
+    let ok = true;
     try {
       return await next();
+    } catch (e) {
+      ok = false;
+      throw e;
     } finally {
+      emit({ provider: key, durationMs: Date.now() - startedExecAt, ok, method: ctx?.method });
       bucket.inFlight--;
       drain(bucket);
     }
   };
 
   mw.stats = stats;
+  /**
+   * Runtime concurrency adjustment — used by adaptiveBulkhead (1.61+) to
+   * tune the ceiling based on observed latency. In-flight calls above the
+   * new limit are NOT interrupted; they finish naturally and new admits
+   * respect the new limit.
+   */
+  mw.setMaxConcurrent = (n) => {
+    if (!Number.isInteger(n) || n < 1) {
+      throw new Error(`bulkhead.setMaxConcurrent: n must be a positive integer (got ${n}).`);
+    }
+    maxConcurrent = n;
+    // Drain any buckets that now have headroom (increasing the limit).
+    for (const b of buckets.values()) drain(b);
+  };
+  mw.getMaxConcurrent = () => maxConcurrent;
+  /**
+   * Observe every completed call. `fn` receives `{ provider, durationMs, ok,
+   * method }` — including the queue wait for calls that queued before
+   * executing. Returns an unsubscribe function.
+   */
+  mw.subscribe = (fn) => {
+    if (typeof fn !== 'function') {
+      throw new Error('bulkhead.subscribe: fn must be a function.');
+    }
+    subscribers.add(fn);
+    return () => subscribers.delete(fn);
+  };
   mw.state = (provider) => {
     const key = perProvider ? (provider ?? 'default') : 'default';
     const b = buckets.get(key);

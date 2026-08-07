@@ -1592,10 +1592,23 @@ export interface BulkheadBucketState {
   queued:   number;
 }
 
+export interface BulkheadObservation {
+  provider:   string;
+  durationMs: number;
+  ok:         boolean;
+  method:     string;
+}
+
 export interface BulkheadMiddleware extends Middleware {
   readonly stats: BulkheadStats;
   state(provider?: string): BulkheadBucketState;
   reset(provider?: string): void;
+  /** Runtime concurrency tune — used by adaptiveBulkhead. @since 1.61.0 */
+  setMaxConcurrent(n: number): void;
+  /** @since 1.61.0 */
+  getMaxConcurrent(): number;
+  /** Subscribe to per-call observations. Returns unsubscribe fn. @since 1.61.0 */
+  subscribe(fn: (obs: BulkheadObservation) => void): () => void;
   asMcpResource(): {
     uri: 'config://bulkhead';
     name: string;
@@ -2106,6 +2119,77 @@ export function autoRetry<F extends (...args: any[]) => Promise<any>>(
 
 /** Default retry predicate: `err?.retriable === true`. Exposed for composition. */
 export function defaultRetryOn(err: any): boolean;
+
+// ---- Adaptive concurrency tuner (new in 1.61.0) -----------------------
+
+export interface AdaptiveBulkheadOptions {
+  /** Required. The bulkhead middleware to tune (must be v1.61+ with .setMaxConcurrent + .subscribe). */
+  bulkhead:        BulkheadMiddleware;
+  /** Required. Target p95 latency in ms. Above → shrink; below → grow. */
+  p95TargetMs:     number;
+  /** Floor on maxConcurrent — the tuner never shrinks below this. Default 1. */
+  minConcurrent?:  number;
+  /** Ceiling on maxConcurrent — the tuner never grows above this. Default 100. */
+  maxConcurrent?:  number;
+  /** Adjustment tick interval in ms. Default 10_000. Min 100. */
+  adjustEveryMs?:  number;
+  /** AIMD grow step per tick when p95 is under target. Default 1. */
+  stepUp?:         number;
+  /** AIMD shrink step per tick when p95 is over target. Default 2. */
+  stepDown?:       number;
+  /** Rolling sample window size. Default 100. Min 5. */
+  sampleWindow?:   number;
+  /** Filter observations to a specific provider bucket. */
+  filterProvider?: (provider: string) => boolean;
+  onAdjust?: (info: {
+    action:            'grow' | 'shrink' | 'noop' | 'noop-no-samples';
+    p95Ms:             number;
+    targetMs:          number;
+    prevMaxConcurrent: number;
+    newMaxConcurrent:  number;
+    sampleCount:       number;
+  }) => void | Promise<void>;
+  onSample?: (info: BulkheadObservation) => void;
+}
+
+export interface AdaptiveBulkheadStats {
+  ticks:             number;
+  adjustments:       number;
+  grows:             number;
+  shrinks:           number;
+  lastP95Ms:         number | null;
+  lastAction:        'grow' | 'shrink' | 'noop' | 'noop-no-samples' | 'none';
+  lastMaxConcurrent: number;
+}
+
+export interface AdaptiveBulkheadHandle {
+  start(): void;
+  stop(): void;
+  /** Fire the tick logic immediately — useful for tests + manual adjustment. */
+  tickNow(): void;
+  readonly stats: AdaptiveBulkheadStats;
+  asMcpResource(): {
+    uri: 'config://adaptive-bulkhead';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => AdaptiveBulkheadStats & {
+      p95TargetMs: number; minConcurrent: number; maxConcurrent: number;
+      adjustEveryMs: number; stepUp: number; stepDown: number; sampleWindow: number;
+      currentMaxConcurrent: number; sampleCount: number; running: boolean;
+    };
+  };
+}
+
+/**
+ * Adaptive concurrency tuner for the 1.51 bulkhead. Observes each call's
+ * latency; on periodic tick, computes p95 over the sample window. If p95 is
+ * above target → shrink maxConcurrent (backpressure); if p95 is below target
+ * → grow (headroom). Classic AIMD applied to concurrency: grow slowly, shrink
+ * aggressively.
+ * @since 1.61.0
+ */
+export function adaptiveBulkhead(options: AdaptiveBulkheadOptions): AdaptiveBulkheadHandle;
 
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 

@@ -4,6 +4,63 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.61.0] — 2026-08-07
+
+### Added
+
+- **`adaptiveBulkhead({ bulkhead, p95TargetMs, ... })` — auto-tuning wrapper for the 1.51 bulkhead.** Observes each call's latency; on periodic tick, computes p95 over the sample window. If p95 > target → shrink `maxConcurrent` (backpressure); if p95 < target → grow (headroom). Classic AIMD (additive-increase, multiplicative-decrease) applied to concurrency.
+
+  ```js
+  const { bulkhead, adaptiveBulkhead } = require('@saptarishi/cds-plugin-llm');
+
+  const bh = bulkhead({ maxConcurrent: 10, maxQueued: 50, queueTimeoutMs: 5_000 });
+  const tuner = adaptiveBulkhead({
+    bulkhead:      bh,
+    p95TargetMs:   2000,
+    minConcurrent: 2,
+    maxConcurrent: 50,
+    adjustEveryMs: 10_000,
+    stepUp:        1,      // grow slowly (probe for headroom)
+    stepDown:      2,      // shrink aggressively (backpressure fast)
+    sampleWindow:  100,
+    onAdjust: (info) => cds.log('llm:tuner').info(info),
+  });
+
+  llm.use(bh);
+  tuner.start();           // begin ticking; setInterval is unref'd
+  ```
+
+- **Extends the 1.51 bulkhead with 3 new methods:**
+  - `bh.setMaxConcurrent(n)` — runtime concurrency adjustment. In-flight calls above the new limit are NOT interrupted; they finish naturally. Increasing the limit immediately drains waiters.
+  - `bh.getMaxConcurrent()` — current effective concurrency.
+  - `bh.subscribe(fn)` — register a per-call observer that receives `{ provider, durationMs, ok, method }` after each completion. Returns an unsubscribe function.
+
+- **AIMD philosophy:** `stepUp` defaults to 1, `stepDown` to 2. Grow one slot at a time — probe carefully for headroom. Shrink two slots at a time — react quickly when latency spikes. Tune stepDown higher for more aggressive backpressure.
+
+- **Rolling p95** over the last N samples (default 100). Cheap allocation-free circular buffer. Samples INCLUDE queue wait time — the tuner optimizes for user-observed latency, not just provider RTT.
+
+- **`filterProvider`** predicate — instantiate multiple tuners each pointed at the same bulkhead but tuning off a different provider's samples, or drop specific providers entirely.
+
+- **`tickNow()`** — fire the tick logic immediately. Useful for tests + on-demand adjustment (e.g. after a deployment where you want to re-evaluate ASAP).
+
+- **Lifecycle:**
+  - `start()` — idempotent; subscribes to bulkhead observations + starts `setInterval`. The interval is `unref()`'d so it doesn't hold the event loop open.
+  - `stop()` — clears the interval + unsubscribes. Future calls after stop won't collect samples.
+  - `asMcpResource()` → `config://adaptive-bulkhead` with tuner state + current concurrency.
+
+- **Stats surface:** `{ ticks, adjustments, grows, shrinks, lastP95Ms, lastAction, lastMaxConcurrent }`. `lastAction` is one of `'grow' | 'shrink' | 'noop' | 'noop-no-samples' | 'none'` — feed into your alerting for surprising behavior.
+
+### Type definitions
+
+- `BulkheadObservation` — the shape passed to `bh.subscribe()`
+- `BulkheadMiddleware` extended with `setMaxConcurrent / getMaxConcurrent / subscribe`
+- `AdaptiveBulkheadOptions`, `AdaptiveBulkheadStats`, `AdaptiveBulkheadHandle`
+- `adaptiveBulkhead(options)`
+
+### Backwards compatibility
+
+Fully additive on the bulkhead side — every existing consumer continues to work; `setMaxConcurrent / getMaxConcurrent / subscribe` are new methods, and `bh.stats` / `bh.state()` / `bh.reset()` / `bh.asMcpResource()` are unchanged. `adaptiveBulkhead` is a new top-level export.
+
 ## [1.60.0] — 2026-08-07
 
 ### Added
