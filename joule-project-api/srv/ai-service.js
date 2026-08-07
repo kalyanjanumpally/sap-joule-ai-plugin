@@ -7,15 +7,22 @@ const {
   responseCache,
   Agent, runAgents,
   guardrails, filters,
-  costBudget, BudgetExceededError,
+  BudgetExceededError,
   promptInjectionGuard, PromptInjectionError,
   schemas,
   prometheusHandler,
   streamAgents,
-  retryOnRateLimit, RateLimitGiveUpError,
-  circuitBreaker, CircuitOpenError,
-  bulkhead, BulkheadFullError, BulkheadTimeoutError,
-  deadline, DeadlineExceededError,
+  RateLimitGiveUpError,
+  CircuitOpenError,
+  BulkheadFullError, BulkheadTimeoutError,
+  DeadlineExceededError,
+  // Resilience bundle — replaces 5 llm.use() calls with one apply()
+  resilience,
+  // Cost primitives — costGuard (pre-flight enforcement) + estimateCost (quote UI)
+  costGuard, CostGuardBlockedError,
+  estimateCost,
+  // Aggregate health handler — replaces the inline /resilience aggregate
+  healthHandler,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -108,6 +115,11 @@ let _retry;
 let _deadline;
 let _breaker;
 let _bulkhead;
+let _costGuard;
+// Resilience bundle handle — kept around so prometheusBundle() / healthBundle()
+// return the exact set of primitives we wired (bundle authoritative for what
+// each getter returns; see getDeadline / getBreaker / getBulkhead / getRetry).
+let _resilience;
 // Shared limits object — passed by reference to costBudget() so
 // FinanceService can mutate it live from LlmBudget rows without a
 // restart. costBudget reads from this via limitFor() on every call.
@@ -115,19 +127,56 @@ const _budgetLimits = { total: undefined, perTenant: {}, perModel: {} };
 function getLLM() {
   if (!_llmPromise) {
     _llmPromise = cds.connect.to('llm').then((llm) => {
-      // Deadline — OUTERMOST middleware so the entire request pipeline
-      // (retries + bulkhead queue + circuit-breaker decisions + provider
-      // call) shares ONE time budget. 30s cap on chat, 60s on stream (the
-      // stream can afford longer since the user sees progressive output),
-      // 5s on embed (embedders are fast; slow embeds mean the embedder
-      // service is degraded and the request should die quickly).
-      _deadline = deadline({
-        timeoutMs: 30_000,
-        perMethod: { chat: 30_000, embed: 5_000, stream: 60_000, batch: 300_000 },
-        onExpired: (info) => cds.log('llm:deadline').warn(
+      // Instantiate the resilience stack (deadline + circuitBreaker +
+      // bulkhead + retryOnRateLimit + costBudget) via resilience.bundle,
+      // then attach INDIVIDUALLY below so we can interleave the
+      // security + observability primitives (promptInjectionGuard,
+      // guardrails, usageMeteringToCap, responseCache) between them.
+      // The bundle still buys us: one config surface, consistent
+      // callbacks, named primitive access, prometheusBundle() /
+      // healthBundle() for /metrics + /health wiring.
+      _resilience = resilience.bundle({
+        deadlineMs:        30_000,
+        perMethodDeadline: { chat: 30_000, embed: 5_000, stream: 60_000, batch: 300_000 },
+        breakerThreshold:  5,
+        breakerCooldownMs: 30_000,
+        breakerPerProvider: true,
+        bulkheadMax:       10,
+        bulkheadQueue:     50,
+        bulkheadTimeoutMs: 5_000,
+        bulkheadPerProvider: true,
+        retryAttempts:     3,
+        retryFallbackMs:   2_000,
+        retryJitterMs:     500,
+        // No budgetLimits — populated below via FinanceService seed via
+        // _budgetLimits shared reference (kept for hot-reload).
+        onDeadlineExpired: (info) => cds.log('llm:deadline').warn(
           `[deadline] ${info.method} expired after ${info.elapsedMs}ms (budget ${info.timeoutMs}ms)`,
         ),
+        onBreakerOpen: (info) => cds.log('llm:breaker').warn(
+          `[breaker] OPENED provider='${info.provider}' after ${info.consecutiveFailures} failures: ${info.lastError?.message?.slice(0, 100)}`,
+        ),
+        onBreakerClose: (info) => cds.log('llm:breaker').info(
+          `[breaker] CLOSED provider='${info.provider}' — half-open probe succeeded`,
+        ),
+        onBulkheadReject: (info) => cds.log('llm:bulkhead').warn(
+          `[bulkhead] ${info.reason} provider='${info.provider}' (inFlight=${info.inFlight}, queued=${info.queued})`,
+        ),
+        onRetry: (info) => cds.log('llm:retry').warn(
+          `[retry] attempt ${info.attempt} in ${info.waitMs}ms (status=${info.status}): ${info.error.message.slice(0, 80)}`,
+        ),
+        onRetryGiveUp: (info) => cds.log('llm:retry').error(
+          `[retry] gave up after ${info.attempts.length} retries: ${info.finalError.message.slice(0, 100)}`,
+        ),
       });
+      _deadline = _resilience.deadline;
+      _breaker  = _resilience.breaker;
+      _bulkhead = _resilience.bh;
+      _retry    = _resilience.retry;
+
+      // Deadline — OUTERMOST middleware so the entire request pipeline
+      // (retries + bulkhead queue + circuit-breaker decisions + provider
+      // call) shares ONE time budget.
       llm.use(_deadline);
       // Prompt injection guard — sits OUTER of everything else so the
       // sanitized (or refused) payload is what guardrails + cache + meter +
@@ -182,10 +231,29 @@ function getLLM() {
         },
       });
       llm.use(_guardrails);
+      // costGuard — pre-flight per-call cost ceiling. Refuses requests
+      // whose estimated cost exceeds $0.50 BEFORE spending a token.
+      // Complements costBudget below (per-tenant / per-window
+      // accumulator). Placed AFTER guardrails so the estimate counts
+      // the scrubbed content the provider actually sees, and BEFORE
+      // costBudget so both checks run independently.
+      _costGuard = costGuard({
+        maxPerCallUsd: 0.50,
+        warnAtUsd:     0.10,
+        onExceeded: (info) => cds.log('llm:cost-guard').warn(
+          `[cost-guard] BLOCKED ${info.method} model='${info.model}' — est $${info.estimatedUsd.toFixed(4)} > limit $${info.limitUsd}`,
+        ),
+        onWarn: (info) => cds.log('llm:cost-guard').info(
+          `[cost-guard] warn: est $${info.estimatedUsd.toFixed(4)} > $${info.warnAtUsd} (model='${info.model}')`,
+        ),
+      });
+      llm.use(_costGuard);
       // costBudget — starts empty; FinanceService.init() populates it from
       // the LlmBudget entity once the DB is up. Sits OUTER of the meter so
       // a refusal (BudgetExceededError) short-circuits before a $0 row would
-      // land in LlmSpend.
+      // land in LlmSpend. Kept separate from resilience.bundle because the
+      // limits object is mutated live by FinanceService.
+      const { costBudget } = require('@saptarishi/cds-plugin-llm');
       _budget = costBudget({
         limits:   _budgetLimits,        // shared reference — FinanceService mutates this
         window:   'day',
@@ -199,70 +267,11 @@ function getLLM() {
         },
       });
       llm.use(_budget);
-      // Circuit breaker — sustained-outage guard. After 5 consecutive
-      // 5xx / network failures per provider, opens the circuit for 30s
-      // and short-circuits calls with CircuitOpenError. Composes with
-      // retryOnRateLimit below: retries handle transient throttling,
-      // breaker handles when the provider is truly down. Placed OUTER
-      // of retry so an open circuit avoids burning retry budget on a
-      // known-down provider. Placed OUTER of bulkhead so short-circuits
-      // don't hold a bulkhead slot.
-      _breaker = circuitBreaker({
-        threshold:        5,
-        cooldownMs:       30_000,
-        halfOpenAttempts: 1,
-        perProvider:      true,
-        onOpen: (info) => cds.log('llm:breaker').warn(
-          `[breaker] OPENED provider='${info.provider}' after ${info.consecutiveFailures} failures: ${info.lastError?.message?.slice(0, 100)}`,
-        ),
-        onClose: (info) => cds.log('llm:breaker').info(
-          `[breaker] CLOSED provider='${info.provider}' — half-open probe succeeded`,
-        ),
-        onHalfOpen: (info) => cds.log('llm:breaker').info(
-          `[breaker] HALF-OPEN provider='${info.provider}' — testing recovery`,
-        ),
-      });
+      // Circuit breaker — instantiated by resilience.bundle above.
       llm.use(_breaker);
-      // Bulkhead — concurrency isolation. Caps in-flight calls per
-      // provider bucket at 10, queues up to 50 excess with a 5s timeout,
-      // rejects the rest with BulkheadFullError. Prevents one runaway
-      // tenant or agent loop from starving others. Placed INNER of
-      // circuitBreaker (short-circuits skip the bucket entirely) and
-      // OUTER of retryOnRateLimit (retries hold their slot across
-      // wait+retry, preventing thundering-herd on recovery).
-      _bulkhead = bulkhead({
-        maxConcurrent:  10,
-        maxQueued:      50,
-        queueTimeoutMs: 5_000,
-        perProvider:    true,
-        onReject: (info) => cds.log('llm:bulkhead').warn(
-          `[bulkhead] ${info.reason} provider='${info.provider}' (inFlight=${info.inFlight}, queued=${info.queued})`,
-        ),
-      });
+      // Bulkhead — instantiated by resilience.bundle above.
       llm.use(_bulkhead);
-      // Rate-limit retry sits between costBudget (blocks BEFORE the call)
-      // and usageMetering (records what happened). Placement rationale:
-      //   - INNER of costBudget: if a retry pushes us over the budget on
-      //     attempt N, the pre-check on attempt N+1 fires correctly.
-      //   - OUTER of usageMetering: retries don't inflate LlmSpend rows
-      //     (one logical request = one metering row).
-      // Disable the base LLMService's built-in withRetry (max: 3, baseMs: 500)
-      // via per-request retries: {max: 0} on our own chat() calls if we want
-      // this middleware to see every throttle. For the demo we let both
-      // layers work — the built-in provides quick backoff for transient
-      // errors, this layer catches sustained rate-limit pressure with a
-      // longer patience budget.
-      _retry = retryOnRateLimit({
-        maxAttempts:    3,
-        fallbackWaitMs: 2000,
-        jitterMs:       500,
-        onRetry:  (info) => cds.log('llm:retry').warn(
-          `[retry] attempt ${info.attempt} in ${info.waitMs}ms (status=${info.status}): ${info.error.message.slice(0, 80)}`,
-        ),
-        onGiveUp: (info) => cds.log('llm:retry').error(
-          `[retry] gave up after ${info.attempts.length} retries: ${info.finalError.message.slice(0, 100)}`,
-        ),
-      });
+      // Rate-limit retry — instantiated by resilience.bundle above.
       llm.use(_retry);
       _metering = usageMeteringToCap(cds, {
         tenantOf:   (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
@@ -320,6 +329,10 @@ function getDeadline() { return _deadline; }
 function getBreaker() { return _breaker; }
 /** Exported for /bulkhead-state dashboard + MCP service. */
 function getBulkhead() { return _bulkhead; }
+/** Exported for /cost-guard-state dashboard + MCP service. */
+function getCostGuard() { return _costGuard; }
+/** Exported for the demo app so it can access the bundle's helpers. */
+function getResilience() { return _resilience; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -477,7 +490,7 @@ module.exports = class AIService extends cds.ApplicationService {
       const { startObservabilityMcp } = require('./mcp-service');
       await startObservabilityMcp({
         getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
-        getDeadline, getBreaker, getBulkhead,
+        getDeadline, getBreaker, getBulkhead, getCostGuard,
       });
     });
 
@@ -616,70 +629,82 @@ module.exports = class AIService extends cds.ApplicationService {
         const snap = b.asMcpResource().handler();
         res.json(snap);
       });
-      // Aggregate resilience state — like /health but focused on the
-      // resilience quartet (deadline / breaker / bulkhead / retry) + budget.
-      // Returns { status: 'ok' | 'degraded' | 'down', degraded: [...],
-      // primitives: {...} }. CAP owns /health (returns 'UP') and /live /
-      // /ready are the k8s-native names, so we expose the aggregate here.
-      cds.app.get('/resilience', async (_req, res) => {
-        const degraded = [];
-        const primitives = {};
-
-        // Circuit breaker — any open bucket = degraded.
-        const br = getBreaker();
-        if (br) {
-          const snap = br.asMcpResource().handler();
-          const openBuckets = Object.entries(snap.buckets ?? {})
-            .filter(([, s]) => s.state === 'open')
-            .map(([k]) => k);
-          primitives.breaker = { openBuckets, opens: snap.opens, closes: snap.closes };
-          if (openBuckets.length > 0) {
-            degraded.push({ layer: 'breaker', reason: `providers open: ${openBuckets.join(', ')}` });
-          }
-        }
-        // Bulkhead — any bucket saturated OR any rejections in last window = degraded.
-        const bh = getBulkhead();
-        if (bh) {
-          const snap = bh.asMcpResource().handler();
-          const saturated = Object.entries(snap.buckets ?? {})
-            .filter(([, s]) => s.queued > 0)
-            .map(([k, s]) => ({ provider: k, inFlight: s.inFlight, queued: s.queued }));
-          primitives.bulkhead = { saturated, rejected: snap.rejected, timedOut: snap.timedOut };
-          if (snap.rejected > 0 || snap.timedOut > 0) {
-            degraded.push({ layer: 'bulkhead', reason: `${snap.rejected} rejected, ${snap.timedOut} timed out` });
-          }
-        }
-        // Deadline — expired > 0 = at least one request hit the wall.
-        const dl = getDeadline();
-        if (dl) {
-          primitives.deadline = { requests: dl.stats.requests, expired: dl.stats.expired, activeCount: dl.stats.activeCount };
-          if (dl.stats.expired > 0) {
-            degraded.push({ layer: 'deadline', reason: `${dl.stats.expired} requests exceeded time budget` });
-          }
-        }
-        // Budget — any over-limit = degraded.
-        const budget = getBudget();
-        if (budget) {
-          const snap = await budget.snapshot();
-          const totalLimit = budget.limitFor('total', 'total');
-          const overLimit = totalLimit != null && snap.total > totalLimit;
-          primitives.budget = { spent: snap.total, limit: totalLimit, overLimit };
-          if (overLimit) {
-            degraded.push({ layer: 'budget', reason: `spent ${snap.total.toFixed(2)} exceeds limit ${totalLimit}` });
-          }
-        }
-        // Retry — givenUp > 0 = requests permanently failed after retries.
-        const rt = getRetry();
-        if (rt) {
-          primitives.retry = { requests: rt.stats.requests, givenUp: rt.stats.givenUp };
-          if (rt.stats.givenUp > 0) {
-            degraded.push({ layer: 'retry', reason: `${rt.stats.givenUp} requests gave up after retries` });
-          }
-        }
-
-        const status = degraded.length === 0 ? 'ok' : 'degraded';
-        res.status(status === 'ok' ? 200 : 200).json({ status, degraded, primitives });
+      // Cost guard dashboard — pre-flight ceiling counters + estimated $ total.
+      // requests / checked / skipped / warned / blocked + estimatedUsdTotal.
+      cds.app.get('/cost-guard-state', (_req, res) => {
+        const cg = getCostGuard();
+        if (!cg) return res.status(503).json({ error: 'cost-guard not initialized yet' });
+        const snap = cg.asMcpResource().handler();
+        res.json(snap);
       });
+      // Pre-flight cost estimate — quote a request without hitting the
+      // provider. Body: { model?, messages, system?, maxTokens? }. Uses
+      // the same estimator (1.54.0) as the costGuard middleware, so
+      // callers can preview whether a request would be blocked before
+      // even trying.
+      //
+      //   curl -X POST http://.../estimate -H 'content-type: application/json' \
+      //     -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}],"maxTokens":100}'
+      cds.app.post('/estimate', express.json({ limit: '256kb' }), async (req, res) => {
+        try {
+          const { model, messages, system, maxTokens, currency } = req.body ?? {};
+          if (!Array.isArray(messages) || messages.length === 0) {
+            return res.status(400).json({ error: 'messages is required (non-empty array)' });
+          }
+          const effectiveModel = model || cds.env.requires?.llm?.modelId;
+          if (!effectiveModel) {
+            return res.status(400).json({ error: 'model is required in body or via cds.requires.llm.modelId' });
+          }
+          const est = estimateCost({
+            model:     effectiveModel,
+            messages,
+            system:    system ?? null,
+            maxTokens: maxTokens ?? 512,
+            currency:  currency ?? 'USD',
+          });
+          res.json(est);
+        } catch (e) {
+          res.status(500).json({ error: e.message });
+        }
+      });
+      // Aggregate resilience state — now backed by the shipped healthHandler
+      // (cds-plugin-llm 1.53.0). CAP owns /health (returns 'UP'), so we
+      // expose the aggregate here. Same JSON shape as before, plus:
+      //   - guardrails / injectionGuard / metering / cache stats
+      //   - custom probes: HANA vector store + embedder reachability
+      cds.app.get('/resilience', healthHandler({
+        deadline:       getDeadline(),
+        breaker:        getBreaker(),
+        bh:             getBulkhead(),
+        budget:         getBudget(),
+        retry:          getRetry(),
+        guardrails:     getGuardrails(),
+        injectionGuard: getInjectionGuard(),
+        metering:       getMetering(),
+        cache:          getCache(),
+        // Custom probes — SAP-specific reachability checks. Best-effort;
+        // failure surfaces as status='down' in the aggregate.
+        custom: [
+          {
+            name:  'vector-hana',
+            check: async () => ({
+              ok: !!(cds.vectorHana && typeof cds.vectorHana.searchByMeaning === 'function'),
+              reason: cds.vectorHana ? null : 'vector-hana plugin not loaded',
+            }),
+          },
+          {
+            name:  'embedder',
+            check: async () => {
+              try {
+                const svc = await cds.connect.to('llm-embed');
+                return { ok: !!svc, reason: svc ? null : 'llm-embed unreachable' };
+              } catch (e) {
+                return { ok: false, reason: e.message };
+              }
+            },
+          },
+        ],
+      }));
       // Liveness — process is running. Always 200 unless the express handler
       // itself is stuck. Distinct from /ready (which checks middleware wiring).
       cds.app.get('/live', (_req, res) => res.status(200).json({ status: 'live' }));
@@ -690,6 +715,7 @@ module.exports = class AIService extends cds.ApplicationService {
         if (!getDeadline())       missing.push('deadline');
         if (!getInjectionGuard()) missing.push('promptInjectionGuard');
         if (!getGuardrails())     missing.push('guardrails');
+        if (!getCostGuard())      missing.push('costGuard');
         if (!getBudget())         missing.push('costBudget');
         if (!getBreaker())        missing.push('circuitBreaker');
         if (!getBulkhead())       missing.push('bulkhead');
@@ -721,6 +747,10 @@ module.exports = class AIService extends cds.ApplicationService {
         breaker:        getBreaker(),
         bh:             getBulkhead(),
         deadline:       getDeadline(),
+        // Pre-flight cost enforcement (new in cds-plugin-llm 1.56.0) —
+        // llm_cost_guard_* counters + estimated_dollars_total for cost
+        // planning.
+        costGuard:      getCostGuard(),
       }));
       // Budget dashboard — current-window spend + configured limits.
       // Complements the OData `FinanceService.getBudgetStatus()` action
@@ -1017,4 +1047,6 @@ module.exports.getRetry = getRetry;
 module.exports.getDeadline = getDeadline;
 module.exports.getBreaker = getBreaker;
 module.exports.getBulkhead = getBulkhead;
+module.exports.getCostGuard = getCostGuard;
+module.exports.getResilience = getResilience;
 module.exports.getLLM = getLLM;

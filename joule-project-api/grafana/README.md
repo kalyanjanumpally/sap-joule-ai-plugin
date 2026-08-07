@@ -15,12 +15,13 @@ Single dashboard covering every metric family the plugin emits:
 | **Security** | Guardrails blocks/redacts by stage · Injection detector heat map |
 | **Usage & cost per model** | Requests/model (rate) · Cost/tenant (cumulative) · Cache savings · Cache hits · Input tokens (10m) · Output tokens (10m) |
 | **Resilience** | Circuit state per provider (0=closed / 1=halfOpen / 2=open) · Circuit opens vs closes · Bulkhead in-flight per provider · Bulkhead queued · Rejects & timeouts · Active in-deadline requests · Deadline expirations · Breaker short-circuits · Cooldown remaining · Consecutive failures |
+| **Cost guard** | Requests blocked (cumulative) · Requests warned · Estimated $ scanned · Requests checked · Cost-guard requests rate (total / checked / skipped) · Blocks + warnings rate · Estimated cost accumulated ($) |
 
-40 panels total. Uses standard Prometheus `rate()`, `increase()`, and instant queries. Refresh interval: 30s. Time window default: last 1h.
+48 panels total. Uses standard Prometheus `rate()`, `increase()`, and instant queries. Refresh interval: 30s. Time window default: last 1h.
 
 ## Import
 
-1. Ensure `prometheusHandler({ cache, budget, retry, guardrails, injectionGuard, metering, breaker, bh, deadline })` is wired at `/metrics` on your app (the demo app does this in `srv/ai-service.js`). See the `cds-plugin-llm` CHANGELOG entries for 1.35.0, 1.47.1, and 1.49.0-1.52.0.
+1. Ensure `prometheusHandler({ cache, budget, retry, guardrails, injectionGuard, metering, breaker, bh, deadline, costGuard })` is wired at `/metrics` on your app (the demo app does this in `srv/ai-service.js`). See the `cds-plugin-llm` CHANGELOG entries for 1.35.0, 1.47.1, 1.49.0-1.52.0, and 1.56.0.
 2. Point Prometheus at `http://<your-app>:4004/metrics` — scrape interval 15–60s is fine; scaling higher costs cardinality without much precision gain since most series are gauges.
 3. In Grafana → Dashboards → New → Import → Upload JSON file → select `dashboards/llm-observability.json`.
 4. When prompted, pick the Prometheus datasource that has this scrape configured.
@@ -63,4 +64,12 @@ label: severity=warning
 # 7. Deadline expirations spiking (provider degraded but not down)
 expr:  rate(llm_deadline_expired_total[5m]) > 0.1
 label: severity=warning
+
+# 8. Cost-guard blocking real user requests (ceiling too tight, or abuse)
+expr:  rate(llm_cost_guard_blocked_total[10m]) > 0.05
+label: severity=warning
+
+# 9. Estimated cost forecast burn rate spiking
+expr:  rate(llm_cost_guard_estimated_dollars_total[1h]) > 5
+label: severity=info
 ```

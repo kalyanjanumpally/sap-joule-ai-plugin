@@ -1427,6 +1427,366 @@
         }
       },
       "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 107,
+      "type": "row",
+      "title": "Cost guard (pre-flight enforcement)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 81,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 70,
+      "type": "stat",
+      "title": "Requests blocked (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 82,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_cost_guard_blocked_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 71,
+      "type": "stat",
+      "title": "Requests warned (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 82,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_cost_guard_warned_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 72,
+      "type": "stat",
+      "title": "Estimated $ scanned (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 82,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_cost_guard_estimated_dollars_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 73,
+      "type": "stat",
+      "title": "Requests checked (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 82,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_cost_guard_checked_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 74,
+      "type": "timeseries",
+      "title": "Cost-guard requests (rate/min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 86,
+        "w": 12,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "rate(llm_cost_guard_requests_total[5m]) * 60",
+          "refId": "A",
+          "legendFormat": "total"
+        },
+        {
+          "expr": "rate(llm_cost_guard_checked_total[5m]) * 60",
+          "refId": "B",
+          "legendFormat": "checked"
+        },
+        {
+          "expr": "rate(llm_cost_guard_skipped_total[5m]) * 60",
+          "refId": "C",
+          "legendFormat": "skipped"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 75,
+      "type": "timeseries",
+      "title": "Blocks + warnings (rate/min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 86,
+        "w": 12,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "rate(llm_cost_guard_blocked_total[5m]) * 60",
+          "refId": "A",
+          "legendFormat": "blocked"
+        },
+        {
+          "expr": "rate(llm_cost_guard_warned_total[5m]) * 60",
+          "refId": "B",
+          "legendFormat": "warned"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 76,
+      "type": "timeseries",
+      "title": "Estimated cost accumulated ($)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 92,
+        "w": 24,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "llm_cost_guard_estimated_dollars_total",
+          "refId": "A",
+          "legendFormat": "estimated $ total"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.0.0"
     }
   ],
   "refresh": "30s",

@@ -221,3 +221,88 @@ h3 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Quote widget */
+.quote { margin: 12px 0; }
+.quote-form { display: flex; flex-direction: column; gap: 8px; }
+.quote-form textarea {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: 'SF Mono', ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.quote-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.quote-controls label {
+  font-size: 12px;
+  color: var(--dim);
+}
+.quote-controls select,
+.quote-controls input {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.quote-controls input { width: 80px; }
+.quote-controls button {
+  padding: 5px 14px;
+  background: var(--accent);
+  color: #002028;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 700;
+}
+.quote-result {
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border-radius: 4px;
+  min-height: 24px;
+}
+.quote-result .empty { color: var(--dim); font-size: 12px; }
+.quote-result .err   { color: var(--err); font-size: 12px; }
+.quote-cost {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent-2);
+  font-variant-numeric: tabular-nums;
+}
+.warn-badge {
+  display: inline-block;
+  background: var(--warn);
+  color: #2a1a00;
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+.quote-detail {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text);
+  font-family: 'SF Mono', ui-monospace, Menlo, monospace;
+}
+.quote-detail .q-label { color: var(--dim); }
+.quote-notes {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--dim);
+}

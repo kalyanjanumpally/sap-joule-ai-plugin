@@ -48,6 +48,15 @@
     breakerSub:      $('#breaker-sub'),
     bulkheadInflight:$('#bulkhead-inflight'),
     bulkheadSub:     $('#bulkhead-sub'),
+    costGuardBlocked:$('#costguard-blocked'),
+    costGuardSub:    $('#costguard-sub'),
+
+    // Quote widget
+    quoteInput:  $('#quote-input'),
+    quoteModel:  $('#quote-model'),
+    quoteMax:    $('#quote-max'),
+    quoteBtn:    $('#quote-btn'),
+    quoteResult: $('#quote-result'),
 
     healthDot:   $('#health-dot'),
     healthLabel: $('#health-label'),
@@ -243,6 +252,16 @@
     els.bulkheadSub.textContent = `${totalQueued} queued · ${rej} rejected · ${to} timed out`;
     els.bulkheadInflight.className = 'kpi-primary ' + (rej > 0 || to > 0 ? 'warn' : '');
   }
+  function renderCostGuard(data) {
+    if (!data) return;
+    const blocked = data.blocked ?? 0;
+    const warned  = data.warned  ?? 0;
+    const checked = data.checked ?? 0;
+    const est     = data.estimatedUsdTotal ?? 0;
+    els.costGuardBlocked.textContent = String(blocked);
+    els.costGuardBlocked.className = 'kpi-primary ' + (blocked > 0 ? 'err' : warned > 0 ? 'warn' : '');
+    els.costGuardSub.textContent = `${checked} checked · ${warned} warned · ${money(est)} forecast`;
+  }
   function renderHealth(data) {
     if (!data) {
       els.healthDot.className = 'dot idle';
@@ -282,7 +301,7 @@
   // ---- Poll cycle ----------------------------------------------------
   async function poll() {
     setConn('live', 'polling…');
-    const [budget, cache, retry, guardrails, injection, deadline, breaker, bulkhead, health, chain] = await Promise.all([
+    const [budget, cache, retry, guardrails, injection, deadline, breaker, bulkhead, costguard, health, chain] = await Promise.all([
       safeJson('/budget-status'),
       safeJson('/cache-stats'),
       safeJson('/retry-stats'),
@@ -291,6 +310,7 @@
       safeJson('/deadline-state'),
       safeJson('/breaker-state'),
       safeJson('/bulkhead-state'),
+      safeJson('/cost-guard-state'),
       safeJson('/resilience'),
       readChain(),
     ]);
@@ -302,11 +322,60 @@
     renderDeadline(deadline);
     renderBreaker(breaker);
     renderBulkhead(bulkhead);
+    renderCostGuard(costguard);
     renderHealth(health);   // health = /resilience payload
     renderChain(chain);
     const now = new Date().toLocaleTimeString();
     setConn('live', `updated ${now}`);
   }
+
+  // ---- Quote widget --------------------------------------------------
+  async function submitQuote() {
+    const text  = (els.quoteInput.value ?? '').trim();
+    const model = els.quoteModel.value;
+    const maxTokens = Math.max(1, parseInt(els.quoteMax.value, 10) || 500);
+    if (!text) {
+      els.quoteResult.innerHTML = '<div class="empty">(enter a prompt above)</div>';
+      return;
+    }
+    els.quoteResult.innerHTML = '<div class="empty">estimating…</div>';
+    try {
+      const r = await fetch('/estimate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model, maxTokens,
+          messages: [{ role: 'user', content: text }],
+        }),
+      });
+      if (!r.ok) {
+        const err = await r.text();
+        els.quoteResult.innerHTML = `<div class="err">HTTP ${r.status}: ${escapeHtml(err.slice(0, 200))}</div>`;
+        return;
+      }
+      const est = await r.json();
+      const priceBadge = est.priced ? '' : ' <span class="warn-badge">unpriced</span>';
+      const notes = (est.notes ?? []).map(n => `<li>${escapeHtml(n)}</li>`).join('');
+      els.quoteResult.innerHTML = `
+        <div class="quote-cost">${money(est.estimatedUsd)}${priceBadge}</div>
+        <div class="quote-detail">
+          <span class="q-label">model</span> ${escapeHtml(est.model)}<br>
+          <span class="q-label">tokens in</span> ${est.tokensIn.toLocaleString()}
+          &middot; <span class="q-label">est max out</span> ${est.estMaxTokensOut.toLocaleString()}<br>
+          <span class="q-label">input</span> ${money(est.inputUsd)}
+          &middot; <span class="q-label">output</span> ${money(est.outputUsd)}<br>
+          <span class="q-label">tokenizer</span> ${escapeHtml(est.tokenizerUsed)}
+        </div>
+        ${notes ? `<ul class="quote-notes">${notes}</ul>` : ''}
+      `;
+    } catch (e) {
+      els.quoteResult.innerHTML = `<div class="err">fetch failed: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+  els.quoteBtn.addEventListener('click', submitQuote);
+  els.quoteInput.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submitQuote();
+  });
 
   function escapeHtml(s) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({

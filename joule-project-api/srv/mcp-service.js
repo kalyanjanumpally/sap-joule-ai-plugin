@@ -29,7 +29,7 @@ const { MCPServer } = require('@saptarishi/cds-plugin-llm/lib/mcp/server');
  */
 async function startObservabilityMcp({
   getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
-  getDeadline, getBreaker, getBulkhead,
+  getDeadline, getBreaker, getBulkhead, getCostGuard,
 }) {
   if (process.env.MCP_OBS_DISABLE) {
     cds.log('mcp:obs').info('[mcp:obs] disabled via MCP_OBS_DISABLE — skipping startup');
@@ -45,10 +45,10 @@ async function startObservabilityMcp({
   try {
     const server = new MCPServer({
       name:              'joule-procurement-ops',
-      version:           '0.7.0',
+      version:           '0.8.0',
       resources:         buildResources({
         getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
-        getDeadline, getBreaker, getBulkhead,
+        getDeadline, getBreaker, getBulkhead, getCostGuard,
       }),
       resourceTemplates: buildResourceTemplates(),
       tools:             buildTools({ getCache, getInjectionGuard }),
@@ -76,7 +76,7 @@ async function startObservabilityMcp({
 
 function buildResources({
   getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
-  getDeadline, getBreaker, getBulkhead,
+  getDeadline, getBreaker, getBulkhead, getCostGuard,
 }) {
   // As of cds-plugin-llm 1.40.1, MCPServer.registerResource() accepts the
   // { handler } shape shipped by middleware.asMcpResource() directly — no
@@ -107,6 +107,10 @@ function buildResources({
   if (br?.asMcpResource) resources.push(br.asMcpResource());
   const bh = getBulkhead?.();
   if (bh?.asMcpResource) resources.push(bh.asMcpResource());
+  // Cost guard (cds-plugin-llm 1.56.0) — pre-flight per-call ceiling.
+  // config://cost-guard exposes ceiling + per-call counters.
+  const cg = getCostGuard?.();
+  if (cg?.asMcpResource) resources.push(cg.asMcpResource());
 
   const gr = getGuardrails();
   if (gr?.asMcpResource) resources.push(gr.asMcpResource());
@@ -146,7 +150,7 @@ function buildResources({
     mimeType:    'application/json',
     read:        async () => buildChainSnapshot({
       getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
-      getDeadline, getBreaker, getBulkhead,
+      getDeadline, getBreaker, getBulkhead, getCostGuard,
     }),
   });
 
@@ -163,7 +167,7 @@ function buildResources({
  */
 async function buildChainSnapshot({
   getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
-  getDeadline, getBreaker, getBulkhead,
+  getDeadline, getBreaker, getBulkhead, getCostGuard,
 }) {
   const order = [];
   let position = 0;
@@ -189,12 +193,13 @@ async function buildChainSnapshot({
   };
 
   // Order matches ai-service.js's getLLM() llm.use() sequence:
-  //   deadline → promptInjectionGuard → guardrails → costBudget →
-  //   circuitBreaker → bulkhead → retryOnRateLimit → usageMeteringToCap →
-  //   responseCache
+  //   deadline → promptInjectionGuard → guardrails → costGuard →
+  //   costBudget → circuitBreaker → bulkhead → retryOnRateLimit →
+  //   usageMeteringToCap → responseCache
   await push('deadline',             getDeadline?.());
   await push('promptInjectionGuard', getInjectionGuard?.());
   await push('guardrails',           getGuardrails?.());
+  await push('costGuard',            getCostGuard?.());
   await push('costBudget',           getBudget?.());
   await push('circuitBreaker',       getBreaker?.());
   await push('bulkhead',             getBulkhead?.());
@@ -209,6 +214,7 @@ async function buildChainSnapshot({
       hasDeadline:     order.some((m) => m.kind === 'deadline'),
       hasInjection:    order.some((m) => m.kind === 'promptInjectionGuard'),
       hasGuardrails:   order.some((m) => m.kind === 'guardrails'),
+      hasCostGuard:    order.some((m) => m.kind === 'costGuard'),
       hasBudget:       order.some((m) => m.kind === 'costBudget'),
       hasBreaker:      order.some((m) => m.kind === 'circuitBreaker'),
       hasBulkhead:     order.some((m) => m.kind === 'bulkhead'),
@@ -235,6 +241,8 @@ const COUNTER_KEYS = new Set([
   'expired', 'activeCount',                                    // deadline
   'shortCircuited', 'opens', 'closes', 'halfOpens', 'failures', 'successes', 'buckets',   // breaker
   'admitted', 'queued', 'rejected', 'timedOut',                // bulkhead
+  // cds-plugin-llm 1.56.0 counters
+  'checked', 'skipped', 'warned', 'blocked', 'estimatedUsdTotal', // costGuard
 ]);
 function stripCounters(payload) {
   if (!payload || typeof payload !== 'object') return payload;
