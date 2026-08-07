@@ -250,4 +250,19 @@ function _extractText(req, method) {
     .join(' ');
 }
 
-module.exports = { fakeLLM };
+const {
+  recording,
+  replay,
+  MissingFixtureError,
+  defaultHash,
+  fileStore,
+} = require('./testingRecordReplay');
+
+module.exports = {
+  fakeLLM,
+  recording,
+  replay,
+  MissingFixtureError,
+  defaultHash,
+  fileStore,
+};

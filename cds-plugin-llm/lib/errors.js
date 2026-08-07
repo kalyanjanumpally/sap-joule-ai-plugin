@@ -87,6 +87,13 @@ const errorRegistry = {
     httpStatus: 402,     // Payment Required — semantically same as budget exhaustion
     severity:   'error',
   },
+  // Testing family
+  MISSING_FIXTURE: {
+    primitive:  'testing.replay',
+    retriable:  false,   // fixture is either recorded or not — retrying won't help
+    httpStatus: 500,     // test infrastructure issue — surfaces as server error if it leaks to prod
+    severity:   'error',
+  },
   // Security family
   PROMPT_INJECTION: {
     primitive:  'promptInjectionGuard',

@@ -121,6 +121,7 @@ test('errorRegistry: entries for all shipped codes', () => {
     'BUDGET_TOO_TIGHT',
     'PROMPT_INJECTION',
     'GUARDRAIL_BLOCKED',
+    'MISSING_FIXTURE',
   ];
   for (const code of expectedCodes) {
     assert.ok(errorRegistry[code], `expected registry entry for ${code}`);

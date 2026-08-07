@@ -4,6 +4,58 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.69.0] — 2026-08-07
+
+### Added
+
+- **`testing.recording` + `testing.replay`** — record real LLM API responses to a JSON fixture file, then replay them in tests. Natural follow-up to 1.68 `fakeLLM` for cases where scripting responses by hand is tedious (multimodal outputs, long structured JSON, streamed replies).
+
+  ```js
+  const { testing } = require('@saptarishi/cds-plugin-llm');
+
+  // 1. During test authoring — record real calls to a JSON file:
+  const rec = testing.recording({ store: 'test/fixtures/llm.json' });
+  llm.use(rec);
+  await llm.chat({ ... });   // hits real provider, records to fixture
+
+  // 2. In CI / normal test runs — replay from fixtures, no network:
+  const rep = testing.replay({ store: 'test/fixtures/llm.json' });
+  llm.use(rep);
+  await llm.chat({ ... });   // returns the recorded response
+  ```
+
+- **Store abstraction.** Pass a **file path** (JSON file on disk — auto-loaded on first use, auto-saved on each write) OR a **custom store** `{ get(hash), set(hash, entry), all() }` for in-memory / Redis / etc.
+
+- **Hash strategy.** Default hashes over `{ method, model, messages, input, system, maxTokens, temperature, format, tools }` — the fields that determine a call's semantics. Irrelevant fields (correlationId, tenant, etc.) don't affect the hash. Override with `hashOn: (req, method) => 'custom-key'` for tighter or looser matching.
+
+- **`replay` strict mode (default true)** throws `MissingFixtureError` on cache miss so tests fail loudly when a request has drifted from what was recorded. Set `strict: false` to fall through to the real provider on miss (useful for incremental fixture building — record new + replay existing in the same pass).
+
+- **`MissingFixtureError`** extends `LLMError` with code `MISSING_FIXTURE` (added to `errorRegistry`), so consumers can use the 1.57 taxonomy + 1.58 error handler + 1.65 CAP bridge for consistent error surfacing. `httpStatus: 500` — a test-config issue would be a server error if it leaked to prod.
+
+- **`skipMethods`** on both — e.g. `skipMethods: ['stream']` if streaming responses are hard to serialize as fixtures. Skipped methods fall through to the real provider (recording) or next middleware (replay).
+
+- **Non-throwing write** — if the store's `set()` throws (disk full, permission denied), `recording` records the error as a `skip` and passes the response through unchanged. Never breaks the request path.
+
+- **Introspection** — `mw.stats` (`{ requests, recorded, skipped }` for recording; `{ requests, hits, misses, fallthroughs, skipped }` for replay) + `mw.store` for direct fixture access.
+
+- **Fixture file format** — a JSON object with `{ schema: 'cds-plugin-llm-testing/v1', entries: { [hash]: { request, response, recordedAt, method } } }`. Safe to check into git; each entry is deterministic + auditable.
+
+- **`fileStore(path)`** exported so consumers can build their own record/replay tools on top of the same file abstraction.
+
+- **New error code in taxonomy.** `MISSING_FIXTURE` added to `errorRegistry` (primitive: `testing.replay`, retriable: false, httpStatus: 500, severity: error). `LLMErrorCode` union extended.
+
+### Type definitions
+
+- `FixtureEntry`, `FixtureStore` — fixture format + store interface
+- `RecordingOptions`, `RecordingStats`, `RecordingMiddleware`
+- `ReplayOptions`, `ReplayStats`, `ReplayMiddleware`
+- `testing.recording(options)`, `testing.replay(options)`, `testing.fileStore(path)`, `testing.defaultHash(req, method)`, `testing.MissingFixtureError`
+- `LLMErrorCode` extended with `'MISSING_FIXTURE'`
+
+### Backwards compatibility
+
+Additive — no breaking changes. `testing.recording` and `testing.replay` are new exports under the existing `testing` namespace from 1.68.
+
 ## [1.68.0] — 2026-08-07
 
 ### Added

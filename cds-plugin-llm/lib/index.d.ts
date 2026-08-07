@@ -1927,7 +1927,8 @@ export type LLMErrorCode =
   | 'BUDGET_EXCEEDED'
   | 'BUDGET_TOO_TIGHT'
   | 'PROMPT_INJECTION'
-  | 'GUARDRAIL_BLOCKED';
+  | 'GUARDRAIL_BLOCKED'
+  | 'MISSING_FIXTURE';
 
 export interface ErrorRegistryEntry {
   /** The middleware / helper that raises this error. */
@@ -2534,6 +2535,71 @@ export interface FakeLLM {
   addScript(script: FakeLLMScript): void;
 }
 
+// ---- Record / replay (new in 1.69.0) --------------------------------
+
+export interface FixtureEntry {
+  request:    unknown;
+  response:   unknown;
+  recordedAt: string;
+  method:     string;
+}
+
+export interface FixtureStore {
+  get(hash: string):  FixtureEntry | null;
+  set(hash: string, entry: FixtureEntry): void;
+  all():              Record<string, FixtureEntry>;
+  size?():            number;
+}
+
+export interface RecordingOptions {
+  /** File path (JSON) or custom { get, set } store. */
+  store:       string | FixtureStore;
+  /** Hash a request into a fixture key. Default: SHA-256 of the relevant fields. */
+  hashOn?:     (req: any, method: string) => string;
+  /** Callback per successful record write. */
+  onWrite?:    (info: { hash: string; method: string }) => void;
+  /** Callback per skip (method-skipped, hash-error, write-error). */
+  onSkip?:     (info: { method: string; reason: string; error?: string }) => void;
+  /** Methods to bypass recording (e.g. ['stream']). */
+  skipMethods?: string[];
+}
+
+export interface RecordingStats {
+  requests: number;
+  recorded: number;
+  skipped:  number;
+}
+
+export interface RecordingMiddleware extends Middleware {
+  readonly stats: RecordingStats;
+  readonly store: FixtureStore;
+  reset(): void;
+}
+
+export interface ReplayOptions {
+  store:       string | FixtureStore;
+  hashOn?:     (req: any, method: string) => string;
+  /** Throw MissingFixtureError on cache miss. Default true. */
+  strict?:     boolean;
+  onHit?:      (info: { hash: string; method: string }) => void;
+  onMiss?:     (info: { hash: string; method: string; model?: string }) => void;
+  skipMethods?: string[];
+}
+
+export interface ReplayStats {
+  requests:     number;
+  hits:         number;
+  misses:       number;
+  fallthroughs: number;
+  skipped:      number;
+}
+
+export interface ReplayMiddleware extends Middleware {
+  readonly stats: ReplayStats;
+  readonly store: FixtureStore;
+  reset(): void;
+}
+
 export namespace testing {
   /**
    * LLMService-compatible fake for unit tests. Returns scripted responses
@@ -2543,6 +2609,35 @@ export namespace testing {
    * @since 1.68.0
    */
   function fakeLLM(options?: FakeLLMOptions): FakeLLM;
+
+  /**
+   * Middleware that records real LLM API responses to a JSON fixture file
+   * (request-hash → response). Use during test authoring to capture real
+   * provider outputs, then swap to replay() for network-free CI runs.
+   * @since 1.69.0
+   */
+  function recording(options: RecordingOptions): RecordingMiddleware;
+
+  /**
+   * Middleware that reads fixtures recorded by recording() and returns them
+   * for matching requests. Throws MissingFixtureError on cache miss in
+   * strict mode; falls through to next() in non-strict.
+   * @since 1.69.0
+   */
+  function replay(options: ReplayOptions): ReplayMiddleware;
+
+  /** File-backed FixtureStore. Auto-loads on first use, auto-saves on set. */
+  function fileStore(path: string): FixtureStore;
+
+  /** Default hash: SHA-256 over method + relevant request fields. */
+  function defaultHash(req: any, method: string): string;
+
+  class MissingFixtureError extends LLMError {
+    readonly code:       'MISSING_FIXTURE';
+    readonly hash:       string;
+    readonly methodName: string;
+    readonly model:      string;
+  }
 }
 
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
