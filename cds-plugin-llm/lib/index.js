@@ -114,6 +114,9 @@ module.exports = {
   // CAP error bridge — LLMError → req.reject() for OData handlers (new in 1.65.0)
   toCapError: require('./capErrorBridge').toCapError,
   withCapHandler: require('./capErrorBridge').withCapHandler,
+  // Boot-time preflight validator — fail-fast config check (new in 1.66.0)
+  preflight: require('./preflight').preflight,
+  PreflightError: require('./preflight').PreflightError,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

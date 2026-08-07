@@ -2416,6 +2416,69 @@ export function withCapHandler<F extends (req: any, ...args: any[]) => Promise<a
   options?: ToCapErrorOptions,
 ): F;
 
+// ---- Boot-time preflight validator (new in 1.66.0) --------------------
+
+export type PreflightCheckStatus = 'ok' | 'warning' | 'error';
+
+export interface PreflightCheckEntry {
+  name:      string;
+  status:    PreflightCheckStatus;
+  message?:  string;
+  details?:  unknown;
+}
+
+export interface PreflightReport {
+  ok:         boolean;
+  timestamp:  string;
+  durationMs: number;
+  checks:     PreflightCheckEntry[];
+  counts: {
+    ok:      number;
+    warning: number;
+    error:   number;
+  };
+  errors:   PreflightCheckEntry[];
+  warnings: PreflightCheckEntry[];
+}
+
+export interface PreflightOptions {
+  /** Env-var names that must exist + be non-empty. */
+  requiredEnv?: string[];
+  /** Providers to probe. Each `probe()` must resolve without throwing (within timeout). */
+  providers?:   Array<{ name: string; probe: () => Promise<unknown> }>;
+  /** Middleware chain description — passed to validateMiddlewareOrder. */
+  chain?:       Array<{ kind?: string }>;
+  /** Budget-limits object — non-empty check (warning only). */
+  budgetLimits?: BudgetLimits | null;
+  /** Model IDs to verify against the pricing table. Missing → warning. */
+  models?:      string[];
+  /** Callback per check. Errors are swallowed. */
+  onCheck?:     (info: PreflightCheckEntry) => void;
+  /** Throw PreflightError on any error-status check. Default true. */
+  failFast?:    boolean;
+  /** Per-probe / per-check timeout in ms. Default 10_000. Min 100. */
+  timeoutMsPerCheck?: number;
+  /** Pricing table for model checks. Defaults to DEFAULT_PRICING. */
+  pricing?:     Record<string, { input: number; output: number }>;
+}
+
+/**
+ * Boot-time preflight validator. Runs env / provider / chain / budget /
+ * model checks and returns a structured report. Throws PreflightError
+ * on any error-status check (unless failFast: false).
+ *
+ * Call this from your app's boot path (e.g. `cds.once('served')`) so
+ * misconfigurations surface at pod startup rather than at first user
+ * request.
+ * @since 1.66.0
+ */
+export function preflight(options?: PreflightOptions): Promise<PreflightReport>;
+
+export class PreflightError extends Error {
+  readonly code: 'PREFLIGHT_FAILED';
+  readonly report: PreflightReport;
+}
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {

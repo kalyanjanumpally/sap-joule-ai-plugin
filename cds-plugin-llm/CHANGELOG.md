@@ -4,6 +4,76 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.66.0] — 2026-08-07
+
+### Added
+
+- **`preflight({ ... })` — boot-time config validator.** Runs a structured set of checks at startup so pods fail-fast if config is wrong, instead of failing on the first user request. Composable — each check is a named entry in the returned report; consumers can wire the same checks into k8s liveness probes / CI smoke tests / MCP resources.
+
+  ```js
+  const { preflight } = require('@saptarishi/cds-plugin-llm');
+
+  cds.once('served', async () => {
+    await preflight({
+      requiredEnv: ['GROQ_API_KEY'],
+      providers: [
+        { name: 'openai',    probe: async () => openaiSvc.chat({ messages: [{ role: 'user', content: 'ping' }], maxTokens: 1 }) },
+        { name: 'anthropic', probe: async () => anthropicSvc.chat({ messages: [{ role: 'user', content: 'ping' }], maxTokens: 1 }) },
+      ],
+      chain:        stack.chain,                       // from 1.55 resilience.bundle
+      budgetLimits: { total: 500, perTenant: { free: 10 } },
+      models:       ['gpt-4o-mini', 'claude-sonnet-4-6'],
+    });
+    // Throws PreflightError on missing pieces (default failFast: true).
+  });
+  ```
+
+- **5 check families:**
+  - **`requiredEnv`** — each env var exists in `process.env` and is non-empty (error on miss)
+  - **`providers`** — each `probe()` resolves within `timeoutMsPerCheck` (error on failure / timeout)
+  - **`chain`** — passes `validateMiddlewareOrder` cleanly (error on ordering errors, warning on non-info findings)
+  - **`budgetLimits`** — non-empty object with `total` / `perTenant` / `perModel` entries (warning if empty)
+  - **`models`** — each model ID exists in the pricing table (warning on miss)
+
+- **Structured report** returned regardless of pass/fail:
+
+  ```json
+  {
+    "ok":         true,
+    "timestamp":  "2026-08-07T12:34:56.789Z",
+    "durationMs": 234,
+    "checks": [
+      { "name": "env:GROQ_API_KEY",   "status": "ok" },
+      { "name": "chain:validate",     "status": "ok" },
+      { "name": "provider:openai",    "status": "ok" },
+      { "name": "provider:anthropic", "status": "error", "message": "timed out" }
+    ],
+    "counts": { "ok": 3, "warning": 0, "error": 1 },
+    "errors":   [{ "name": "provider:anthropic", ... }],
+    "warnings": []
+  }
+  ```
+
+- **`PreflightError`** — plain Error subclass with `.report` (the full structured report) + `.code: 'PREFLIGHT_FAILED'`. Thrown when any check has `status: 'error'` and `failFast: true` (default). Set `failFast: false` to get the report without throwing.
+
+- **Parallel probes.** All `providers[*].probe()` run in parallel (Promise.all with per-check timeout). Three providers with 100ms probes finish in ~100ms, not 300ms.
+
+- **Per-check timeout** — each probe wrapped in `Promise.race` with `timeoutMsPerCheck` (default 10s, min 100ms). Timeout counts as error with `PROBE_TIMEOUT` hint in the message.
+
+- **`onCheck` callback** fires per check with `{ name, status, message?, details? }` for real-time logging. Errors thrown by the callback are swallowed.
+
+- **Non-throwing contract everywhere** — malformed provider entries, probe throws, callback throws all get captured as check entries without crashing the preflight run.
+
+### Type definitions
+
+- `PreflightCheckStatus`, `PreflightCheckEntry`, `PreflightReport`, `PreflightOptions`
+- `preflight(options?)` returns `Promise<PreflightReport>`
+- `PreflightError extends Error` with `.code: 'PREFLIGHT_FAILED'` + `.report`
+
+### Backwards compatibility
+
+Additive — no breaking changes. Preflight is a one-shot function; no middleware chain integration.
+
 ## [1.65.0] — 2026-08-07
 
 ### Added
