@@ -4,6 +4,62 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.71.0] — 2026-08-07
+
+### Added
+
+- **`tenantIsolate({ tenantOf?, factory, ... })` — multi-tenant isolation wrapper.** Hands out per-tenant instances of the middleware(s) returned by `factory(tenantId)`. Each tenant gets its OWN bulkhead / breaker / tuner state so one noisy tenant can't fill another tenant's queue or trip another tenant's circuit.
+
+  ```js
+  const { tenantIsolate, bulkhead, circuitBreaker } = require('@saptarishi/cds-plugin-llm');
+
+  const iso = tenantIsolate({
+    tenantOf: (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
+    factory:  (tenantId) => {
+      // Called ONCE the first time this tenant hits us.
+      // Return a middleware fn OR array (composed in Koa style).
+      return [
+        circuitBreaker({ threshold: 3, cooldownMs: 30_000 }),
+        bulkhead({ maxConcurrent: 5, maxQueued: 20, queueTimeoutMs: 5_000 }),
+      ];
+    },
+    onTenantCreate: (id) => cds.log('tenant-iso').info(`spun up chain for '${id}'`),
+  });
+  llm.use(iso);
+  ```
+
+- **Big SAP CAP pitch story:** *"a noisy tenant can't affect another tenant's provider quota, circuit state, or observed latency."* Complements the existing per-provider bucketing (bulkhead / breaker / bucket by `ctx.service.name`) with per-tenant bucketing (bucket by `tenantOf(ctx)`).
+
+- **Default `tenantOf`** reads `ctx.raw.tenant` → `cds.context.tenant` → `'default'` — zero-config for SAP CAP apps.
+
+- **Lazy instantiation.** `factory(tenantId)` is called ONCE per new tenant; subsequent calls reuse the same middleware instances. Predictable memory: N tenants × M middleware instances.
+
+- **Koa-style composition.** If `factory` returns an array, the wrapper composes them left-to-right (outer→inner) around `next()`. Same semantics as `llm.use()` for the top-level chain.
+
+- **Robust tenant-ID handling.** Numeric / non-string tenant IDs get stringified for consistent Map keys. `null` / `undefined` / throw → falls back to `'default'`.
+
+- **Introspection:**
+  - `iso.tenants()` → all seen tenant IDs
+  - `iso.chainFor(tenantId)` → the tenant's middleware array (reach into per-primitive stats)
+  - `iso.statsFor(tenantId)` → per-tenant request count
+  - `iso.stats` → `{ requests, tenantsSeen }` aggregate
+  - `iso.reset(tenantId?)` → clear one tenant or all
+  - `iso.asMcpResource()` → `config://tenant-isolate` with per-tenant breakdown
+
+- **Callback hooks:**
+  - `onTenantCreate(tenantId)` — fires once per new tenant (log/pre-populate)
+  - `onRequest({ tenantId, method })` — fires per request
+  - Callback exceptions are swallowed — never break the request path
+
+### Type definitions
+
+- `TenantIsolateOptions`, `TenantIsolateStats`, `TenantIsolateMiddleware`
+- Middleware handles are typed compatible with existing bulkhead / breaker / tuner types
+
+### Backwards compatibility
+
+Additive — no breaking changes. `tenantIsolate` is a new top-level export. Existing per-provider bucketing on bulkhead / breaker unchanged.
+
 ## [1.70.0] — 2026-08-07
 
 ### Added

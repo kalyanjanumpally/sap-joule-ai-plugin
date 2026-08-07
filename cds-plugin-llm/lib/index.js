@@ -119,6 +119,8 @@ module.exports = {
   PreflightError: require('./preflight').PreflightError,
   // Testing helpers — fakeLLM for network-free unit tests (new in 1.68.0)
   testing: require('./testing'),
+  // Tenant isolation wrapper — per-tenant middleware chain instances (new in 1.71.0)
+  tenantIsolate: require('./middleware/tenantIsolate').tenantIsolate,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

@@ -1915,6 +1915,53 @@ export interface ResilienceBundlePreset {
   bulkheadTimeoutMs:       number;
 }
 
+// ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
+
+export interface TenantIsolateOptions {
+  /** Extract tenant ID from ctx. Default reads ctx.raw.tenant, then cds.context.tenant, then 'default'. */
+  tenantOf?: (ctx: MiddlewareContext) => string | number | null | undefined;
+  /**
+   * Called ONCE per new tenant. Returns a Middleware or Middleware[]
+   * (composed in Koa style). Each tenant gets its own INSTANCE of
+   * these middlewares (fresh bulkhead, breaker, tuner, etc.).
+   */
+  factory: (tenantId: string) => Middleware | Middleware[];
+  onTenantCreate?: (tenantId: string) => void;
+  onRequest?:      (info: { tenantId: string; method: string }) => void;
+}
+
+export interface TenantIsolateStats {
+  requests:    number;
+  tenantsSeen: number;
+}
+
+export interface TenantIsolateMiddleware extends Middleware {
+  readonly stats: TenantIsolateStats;
+  tenants():  string[];
+  chainFor(tenantId: string):  Middleware[] | null;
+  statsFor(tenantId: string):  { requests: number } | null;
+  reset(tenantId?: string): void;
+  asMcpResource(): {
+    uri: 'config://tenant-isolate';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => TenantIsolateStats & {
+      tenants: string[];
+      perTenant: Record<string, { requests: number; middlewareCount: number }>;
+    };
+  };
+}
+
+/**
+ * Multi-tenant isolation wrapper. Hands out per-tenant instances of the
+ * middleware(s) returned by `factory(tenantId)`. Each tenant gets its own
+ * bulkhead / breaker / tuner state so one noisy tenant can't fill another
+ * tenant's queue or trip another tenant's circuit.
+ * @since 1.71.0
+ */
+export function tenantIsolate(options: TenantIsolateOptions): TenantIsolateMiddleware;
+
 export namespace resilience {
   /**
    * One-liner that wires the full resilience stack in canonical order:
