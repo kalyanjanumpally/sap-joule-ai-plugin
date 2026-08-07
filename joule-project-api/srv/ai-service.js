@@ -36,6 +36,10 @@ const {
   adaptiveMaxTokens,
   traceCorrelation,
   uuidv7,
+  // CAP error bridge + boot preflight (1.65-1.66)
+  withCapHandler,
+  preflight,
+  PreflightError,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -648,6 +652,38 @@ module.exports = class AIService extends cds.ApplicationService {
         getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
         getTuner, getProbe, getAdaptiveMaxTokens, getTraceCorrelation,
       });
+
+      // Boot-time preflight (cds-plugin-llm 1.66.0) — validate env +
+      // middleware chain + budget + models at startup. Warning-severity
+      // failures logged but non-fatal (chain warnings, unknown models
+      // — informational). Skip in tests to avoid ping burden.
+      if (!process.env.PREFLIGHT_DISABLE) {
+        try {
+          const report = await preflight({
+            requiredEnv:  [],   // Env-vars vary by provider — customize per deployment
+            chain:        _resilience?.chain ?? null,
+            budgetLimits: _budgetLimits,
+            models:       [cds.env.requires?.llm?.modelId].filter(Boolean),
+            // No provider probes at boot — those would double up with the
+            // 1.62 providerHealthProbe running in the background. Set
+            // PREFLIGHT_PROBE=1 to enable a one-shot boot probe.
+            failFast:     false,
+          });
+          if (report.errors.length > 0) {
+            cds.log('preflight').error(`preflight failed: ${report.errors.length} error(s)`, report.errors);
+          } else if (report.warnings.length > 0) {
+            cds.log('preflight').warn(`preflight: ${report.warnings.length} warning(s)`, report.warnings);
+          } else {
+            cds.log('preflight').info(`preflight ok: ${report.counts.ok} checks passed in ${report.durationMs}ms`);
+          }
+        } catch (e) {
+          if (e instanceof PreflightError) {
+            cds.log('preflight').error('preflight threw', e.report);
+          } else {
+            cds.log('preflight').error(`preflight helper crashed: ${e.message}`);
+          }
+        }
+      }
     });
 
     // Graceful shutdown — clean up the tuner + probe interval timers so
@@ -984,6 +1020,14 @@ module.exports = class AIService extends cds.ApplicationService {
         // llm_cost_guard_* counters + estimated_dollars_total for cost
         // planning.
         costGuard:      getCostGuard(),
+        // Extended primitives (new in cds-plugin-llm 1.67.0 emitters)
+        // llm_adaptive_bulkhead_* + llm_probe_* +
+        // llm_adaptive_max_tokens_* + llm_trace_* + llm_json_log_*
+        tuner:              getTuner(),
+        probe:              getProbe(),
+        adaptiveMaxTokens:  getAdaptiveMaxTokens(),
+        trace:              getTraceCorrelation(),
+        jsonLog:            getJsonLog(),
       }));
       // Budget dashboard — current-window spend + configured limits.
       // Complements the OData `FinanceService.getBudgetStatus()` action
@@ -1018,7 +1062,7 @@ module.exports = class AIService extends cds.ApplicationService {
       }));
     }
 
-    this.on('summarizePurchaseOrder', async (req) => {
+    this.on('summarizePurchaseOrder', withCapHandler(async (req) => {
       const { purchaseOrderId, poJson } = req.data;
       const { text, usage, model } = await _chatWithAutoRetry({
         system: PO_SYSTEM,
@@ -1032,9 +1076,9 @@ module.exports = class AIService extends cds.ApplicationService {
         tokensUsed: (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0),
         model,
       };
-    });
+    }));
 
-    this.on('explainInvoiceRisk', async (req) => {
+    this.on('explainInvoiceRisk', withCapHandler(async (req) => {
       const { invoiceId, invoiceJson } = req.data;
       const { data, usage, model, text } = await _chatWithAutoRetry({
         system: INVOICE_SYSTEM,
@@ -1061,9 +1105,9 @@ module.exports = class AIService extends cds.ApplicationService {
         tokensUsed: (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0),
         model,
       };
-    });
+    }));
 
-    this.on('extractInvoiceLineItems', async (req) => {
+    this.on('extractInvoiceLineItems', withCapHandler(async (req) => {
       const { imageBase64, imageUrl, pdfBase64, pdfUrl, mediaType, model } = req.data;
 
       const isPdf = !!(pdfBase64 || pdfUrl);
@@ -1127,7 +1171,7 @@ module.exports = class AIService extends cds.ApplicationService {
         tokensUsed:    (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0),
         model:         usedModel,
       };
-    });
+    }));
 
     // ---- analyzeScenario: multi-agent supervisor ---------------------
     //
@@ -1142,7 +1186,7 @@ module.exports = class AIService extends cds.ApplicationService {
     // familiar guarantees carry through: per-turn usage aggregation,
     // maxSteps safety cap, cache hits on any specialist's chat() call,
     // usageMeteringToCap rows in FinanceService.LlmSpend per LLM call.
-    this.on('analyzeScenario', async (req) => {
+    this.on('analyzeScenario', withCapHandler(async (req) => {
       const { scenario } = req.data;
       // Shared with the /stream/analyzeScenario SSE endpoint — both flows
       // use identical prompts + tool wiring (contract-lookup uses the
@@ -1164,7 +1208,7 @@ module.exports = class AIService extends cds.ApplicationService {
         })),
         steps: result.steps,
       };
-    });
+    }));
 
     // ---- assessSupplierRisk — free-form supplier risk assessment ------
     //
@@ -1173,7 +1217,7 @@ module.exports = class AIService extends cds.ApplicationService {
     // geopolitical context, financial signals) instead of a specific
     // invoice. Uses schemas.SupplierRisk directly — one line vs. ~15 for
     // a hand-rolled equivalent.
-    this.on('assessSupplierRisk', async (req) => {
+    this.on('assessSupplierRisk', withCapHandler(async (req) => {
       const { supplierId, scenario } = req.data;
       const { data, usage, model, text } = await _chatWithAutoRetry({
         system: `You assess procurement supplier risk. Rate as low/medium/high based on the evidence. Cite the specific factors driving the rating; do not fabricate. If key data is missing, lower the confidence score.`,
@@ -1198,7 +1242,7 @@ module.exports = class AIService extends cds.ApplicationService {
         tokensUsed: (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0),
         model,
       };
-    });
+    }));
 
     // ---- transcribeVoiceNoteToPO — voice → PurchaseOrderDraft ---------
     //
@@ -1212,7 +1256,7 @@ module.exports = class AIService extends cds.ApplicationService {
     //   OpenAI-compat       works with gpt-4o-audio-preview (input_audio block)
     //   Anthropic / Ollama  throw the clear diagnostic shipped in 1.36.0
     //   (Groq / DeepSeek)   400 upstream — models don't speak audio
-    this.on('transcribeVoiceNoteToPO', async (req) => {
+    this.on('transcribeVoiceNoteToPO', withCapHandler(async (req) => {
       const { audioBase64, format, model } = req.data;
       const fmt = (format || 'mp3').toLowerCase();
       const MIME = {
@@ -1272,7 +1316,7 @@ module.exports = class AIService extends cds.ApplicationService {
         }
         throw e;
       }
-    });
+    }));
 
     return super.init();
   }

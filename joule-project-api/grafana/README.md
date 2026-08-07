@@ -16,8 +16,13 @@ Single dashboard covering every metric family the plugin emits:
 | **Usage & cost per model** | Requests/model (rate) · Cost/tenant (cumulative) · Cache savings · Cache hits · Input tokens (10m) · Output tokens (10m) |
 | **Resilience** | Circuit state per provider (0=closed / 1=halfOpen / 2=open) · Circuit opens vs closes · Bulkhead in-flight per provider · Bulkhead queued · Rejects & timeouts · Active in-deadline requests · Deadline expirations · Breaker short-circuits · Cooldown remaining · Consecutive failures |
 | **Cost guard** | Requests blocked (cumulative) · Requests warned · Estimated $ scanned · Requests checked · Cost-guard requests rate (total / checked / skipped) · Blocks + warnings rate · Estimated cost accumulated ($) |
+| **Adaptive concurrency tuner** | Current max_concurrent · Latest p95 (color-coded) · Grows / Shrinks cumulative · Tuner actions rate · p95 latency vs max_concurrent trend |
+| **Provider health probe** | Per-provider healthy state (1=up / 0=down / -1=unknown, color-coded) · Health changes cumulative · Timeouts · Probe outcomes rate (success / failure / timeout) |
+| **Cost-aware token budgeting** | Tokens saved (cumulative) · Requests shrunk · Requests rejected (BUDGET_TOO_TIGHT, color-coded) · Adaptive-tokens outcomes rate (adjusted / unchanged / rejected / skipped) |
+| **Trace correlation** | Extracted / total ratio (%) · Extracted cumulative · Generated cumulative |
+| **JSON logs — per-error-code breakdown** | Failed calls by error code (rate/min, labeled per-LLMError code) |
 
-48 panels total. Uses standard Prometheus `rate()`, `increase()`, and instant queries. Refresh interval: 30s. Time window default: last 1h.
+71 panels total. Uses standard Prometheus `rate()`, `increase()`, and instant queries. Refresh interval: 30s. Time window default: last 1h.
 
 ## Import
 
@@ -72,4 +77,20 @@ label: severity=warning
 # 9. Estimated cost forecast burn rate spiking
 expr:  rate(llm_cost_guard_estimated_dollars_total[1h]) > 5
 label: severity=info
+
+# 10. Provider went unhealthy (proactive detection before user request fails)
+expr:  min(llm_probe_provider_healthy) == 0
+label: severity=critical
+
+# 11. Adaptive tokens rejecting requests (budget too tight)
+expr:  rate(llm_adaptive_max_tokens_rejected_total[10m]) > 0
+label: severity=warning
+
+# 12. Adaptive tuner constantly shrinking (chronic p95 breach)
+expr:  rate(llm_adaptive_bulkhead_shrinks_total[10m]) > 0.5
+label: severity=warning
+
+# 13. Any user-facing failure by error code
+expr:  rate(llm_json_log_by_error_code_total{code!="UNKNOWN"}[5m]) > 0.1
+label: severity=warning
 ```

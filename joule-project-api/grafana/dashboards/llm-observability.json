@@ -1787,6 +1787,1012 @@
         }
       },
       "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 108,
+      "type": "row",
+      "title": "Adaptive concurrency tuner",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 98,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 109,
+      "type": "stat",
+      "title": "Current max concurrent",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 99,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_adaptive_bulkhead_current_max_concurrent",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 110,
+      "type": "stat",
+      "title": "Latest p95 (ms)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 99,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_adaptive_bulkhead_p95_ms",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1500
+              },
+              {
+                "color": "red",
+                "value": 3000
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 111,
+      "type": "stat",
+      "title": "Grows (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 99,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_adaptive_bulkhead_grows_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 112,
+      "type": "stat",
+      "title": "Shrinks (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 99,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_adaptive_bulkhead_shrinks_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 113,
+      "type": "timeseries",
+      "title": "Tuner actions (rate/min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 103,
+        "w": 12,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "rate(llm_adaptive_bulkhead_grows_total[5m]) * 60",
+          "refId": "A",
+          "legendFormat": "grows"
+        },
+        {
+          "expr": "rate(llm_adaptive_bulkhead_shrinks_total[5m]) * 60",
+          "refId": "B",
+          "legendFormat": "shrinks"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 114,
+      "type": "timeseries",
+      "title": "p95 latency vs current max_concurrent",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 103,
+        "w": 12,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "llm_adaptive_bulkhead_p95_ms",
+          "refId": "A",
+          "legendFormat": "p95 (ms)"
+        },
+        {
+          "expr": "llm_adaptive_bulkhead_current_max_concurrent * 100",
+          "refId": "B",
+          "legendFormat": "max_concurrent \u00d7 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 115,
+      "type": "row",
+      "title": "Provider health probe",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 109,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 116,
+      "type": "stat",
+      "title": "Providers healthy (per-bucket 1=up, 0=down, -1=unknown)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 110,
+        "w": 12,
+        "h": 5
+      },
+      "targets": [
+        {
+          "expr": "llm_probe_provider_healthy",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 117,
+      "type": "stat",
+      "title": "Health changes (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 110,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "expr": "llm_probe_health_changes_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 118,
+      "type": "stat",
+      "title": "Probe timeouts (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 110,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "expr": "llm_probe_timeouts_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 119,
+      "type": "timeseries",
+      "title": "Probe outcomes (rate/min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 115,
+        "w": 24,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "rate(llm_probe_successes_total[5m]) * 60",
+          "refId": "A",
+          "legendFormat": "success"
+        },
+        {
+          "expr": "rate(llm_probe_failures_total[5m]) * 60",
+          "refId": "B",
+          "legendFormat": "failure"
+        },
+        {
+          "expr": "rate(llm_probe_timeouts_total[5m]) * 60",
+          "refId": "C",
+          "legendFormat": "timeout"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 120,
+      "type": "row",
+      "title": "Cost-aware token budgeting",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 121,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 121,
+      "type": "stat",
+      "title": "Tokens saved (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 122,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_adaptive_max_tokens_saved_tokens_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 122,
+      "type": "stat",
+      "title": "Requests shrunk (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 122,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_adaptive_max_tokens_adjusted_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 123,
+      "type": "stat",
+      "title": "Requests rejected (BUDGET_TOO_TIGHT)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 122,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_adaptive_max_tokens_rejected_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 124,
+      "type": "timeseries",
+      "title": "Adaptive-tokens outcomes (rate/min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 126,
+        "w": 24,
+        "h": 6
+      },
+      "targets": [
+        {
+          "expr": "rate(llm_adaptive_max_tokens_adjusted_total[5m]) * 60",
+          "refId": "A",
+          "legendFormat": "adjusted (shrunk)"
+        },
+        {
+          "expr": "rate(llm_adaptive_max_tokens_unchanged_total[5m]) * 60",
+          "refId": "B",
+          "legendFormat": "unchanged"
+        },
+        {
+          "expr": "rate(llm_adaptive_max_tokens_rejected_total[5m]) * 60",
+          "refId": "C",
+          "legendFormat": "rejected"
+        },
+        {
+          "expr": "rate(llm_adaptive_max_tokens_skipped_total[5m]) * 60",
+          "refId": "D",
+          "legendFormat": "skipped"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 125,
+      "type": "row",
+      "title": "Trace correlation",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 132,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 126,
+      "type": "stat",
+      "title": "Extracted / total (%)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 133,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "100 * llm_trace_extracted_total / (llm_trace_extracted_total + llm_trace_generated_total)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 127,
+      "type": "stat",
+      "title": "Extracted (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 133,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_trace_extracted_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 128,
+      "type": "stat",
+      "title": "Generated (cumulative)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 133,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "llm_trace_generated_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "pluginVersion": "10.0.0"
+    },
+    {
+      "id": 129,
+      "type": "row",
+      "title": "JSON logs \u2014 per-error-code breakdown",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 137,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 130,
+      "type": "timeseries",
+      "title": "Failed calls by error code (rate/min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 138,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "rate(llm_json_log_by_error_code_total[5m]) * 60",
+          "refId": "A",
+          "legendFormat": "{{code}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.0.0"
     }
   ],
   "refresh": "30s",
