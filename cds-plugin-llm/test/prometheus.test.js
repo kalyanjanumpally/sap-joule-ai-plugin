@@ -417,3 +417,30 @@ test('promMetrics: deadline-metrics HELP/TYPE parity in a full bundle', async ()
   assert.equal(helpCount, typeCount, 'HELP/TYPE parity holds when deadline mw included');
   assert.match(text, /llm_deadline_requests_total 1/);
 });
+
+// ---- Cost guard metrics (new in 1.56.0) ---------------------------
+
+test('promMetrics: no cost_guard series when no costGuard middleware bound', async () => {
+  const text = await promMetrics({});
+  assert.doesNotMatch(text, /llm_cost_guard_/);
+});
+
+test('promMetrics: emits llm_cost_guard_* counters when costGuard mw bound', async () => {
+  const { costGuard } = require('../lib/middleware/costGuard');
+  const cg = costGuard({ maxPerCallUsd: 1, warnAtUsd: 0.1 });
+  cg.stats.requests            = 100;
+  cg.stats.checked             = 95;
+  cg.stats.skipped             = 5;
+  cg.stats.warned              = 3;
+  cg.stats.blocked             = 2;
+  cg.stats.estimatedUsdTotal   = 12.34;
+
+  const text = await promMetrics({ costGuard: cg });
+  assert.match(text, /^# TYPE llm_cost_guard_requests_total counter/m);
+  assert.match(text, /llm_cost_guard_requests_total 100/);
+  assert.match(text, /llm_cost_guard_checked_total 95/);
+  assert.match(text, /llm_cost_guard_skipped_total 5/);
+  assert.match(text, /llm_cost_guard_warned_total 3/);
+  assert.match(text, /llm_cost_guard_blocked_total 2/);
+  assert.match(text, /llm_cost_guard_estimated_dollars_total 12\.34/);
+});

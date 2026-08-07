@@ -35,6 +35,7 @@ const KNOWN_KINDS = new Set([
   'promptInjectionGuard',
   'guardrails',
   'costBudget',
+  'costGuard',
   'retryOnRateLimit',
   'circuitBreaker',
   'bulkhead',
@@ -225,6 +226,21 @@ function validateMiddlewareOrder(chain) {
       message:  'No deadline in the chain — a slow provider can burn indefinite time; requests have no hard time cap.',
       fixit:    'Add `llm.use(deadline({ timeoutMs: 30_000 }))` as the OUTERMOST middleware for a total request-time budget.',
       involved: ['deadline'],
+    });
+  }
+
+  // Rule: costGuard INNER of guardrails is INCORRECT — costGuard should
+  // run AFTER guardrails so it estimates on the scrubbed content the
+  // provider actually sees. costGuard OUTER of guardrails means the
+  // estimate is inflated by PII that would have been redacted.
+  const costGuardIdx = idxOf('costGuard');
+  if (costGuardIdx !== -1 && guardrailsIdx !== -1 && costGuardIdx < guardrailsIdx) {
+    warnings.push({
+      code:     'COST_GUARD_OUTER_OF_GUARDRAILS',
+      severity: 'warning',
+      message:  'costGuard is OUTER of guardrails — the estimate counts PII that will be redacted before reaching the provider, inflating the ceiling check.',
+      fixit:    'Move costGuard INNER of guardrails so the estimate reflects the scrubbed content the provider actually sees.',
+      involved: ['costGuard', 'guardrails'],
     });
   }
   if (idxOfAny('usageMetering', 'usageMeteringToCap') === -1) {

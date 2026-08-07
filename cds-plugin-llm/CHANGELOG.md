@@ -4,6 +4,63 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.56.0] — 2026-08-07
+
+### Added
+
+- **`costGuard` middleware — pre-flight cost enforcement.** Wraps the 1.54.0 `estimateCost` helper and runs BEFORE the provider call — refuses over-budget requests with `CostGuardBlockedError` WITHOUT spending a single token. Complements the reactive `costBudget` (post-call accumulator) with a proactive per-call ceiling.
+
+  ```js
+  const { costGuard } = require('@saptarishi/cds-plugin-llm');
+
+  const guard = costGuard({
+    maxPerCallUsd: 1.00,            // hard ceiling
+    warnAtUsd:     0.10,            // soft warning
+    onExceeded: (info) => cds.log('llm:cost-guard').warn(info),
+    onWarn:     (info) => cds.log('llm:cost-guard').info(info),
+  });
+  llm.use(guard);
+  ```
+
+- **Recommended ordering** (top = OUTERMOST):
+
+  ```
+  deadline → guardrails → costGuard → costBudget → circuitBreaker →
+  bulkhead → retryOnRateLimit → provider
+  ```
+
+  Placement rationale:
+  - **AFTER guardrails** — PII / injection scrubbing runs first, so the estimate counts the scrubbed content the provider actually sees.
+  - **BEFORE costBudget** — costBudget is a per-tenant/window accumulator; costGuard is a per-call ceiling. Independent checks.
+
+- **Opt-outs:**
+  - Non-chat methods (`embed`, `batch`) skip by default. Set `applyTo: ['chat', 'stream']` (default) or add / remove.
+  - Caller can bypass a single request with `req.costGuard: 'skip'` — useful for internal admin calls or one-off big-payload requests where you accept the cost.
+  - Unknown models pass through (`priced: false` → `estimatedUsd: 0` → passes any positive ceiling).
+
+- **Estimate stashed for downstream.** The full `estimateCost` result is written to `ctx.meta.costEstimate` before `next()` runs. Downstream middleware (metering, logging, custom headers) can read it for pre/post comparison.
+
+- **Introspection + control:**
+  - `guard.stats` → `{ requests, skipped, checked, warned, blocked, estimatedUsdTotal }`
+  - `guard.reset()` — clears counters
+  - `guard.asMcpResource()` → `config://cost-guard`
+
+- **Prometheus:** `emitCostGuard` wired into `promMetrics` — new counters `llm_cost_guard_requests_total`, `_checked_total`, `_skipped_total`, `_warned_total`, `_blocked_total`, `_estimated_dollars_total` (cumulative $ estimate for cost planning).
+
+- **`validateMiddlewareOrder` extensions:**
+  - New rule `COST_GUARD_OUTER_OF_GUARDRAILS` (warning) — costGuard OUTER of guardrails means the estimate counts PII that will be redacted, inflating the ceiling check.
+  - `costGuard` added to `KNOWN_KINDS`.
+
+### Type definitions
+
+- `CostGuardOptions`, `CostGuardStats`, `CostGuardMiddleware`
+- `CostGuardBlockedError`
+- `MiddlewareOrderingWarningCode` extended with `COST_GUARD_OUTER_OF_GUARDRAILS`
+
+### Backwards compatibility
+
+Additive — no breaking changes.
+
 ## [1.55.0] — 2026-08-07
 
 ### Added

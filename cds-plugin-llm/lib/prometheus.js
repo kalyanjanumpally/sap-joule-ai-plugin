@@ -177,6 +177,25 @@ function emitRetry(retry) {
   return out;
 }
 
+function emitCostGuard(cg) {
+  if (!cg?.stats) return [];
+  const s = cg.stats;
+  const out = [];
+  out.push(header('llm_cost_guard_requests_total', 'Total requests observed by costGuard', 'counter'));
+  out.push(line('llm_cost_guard_requests_total', s.requests ?? 0));
+  out.push(header('llm_cost_guard_checked_total', 'Requests actually cost-estimated (in scope for the applyTo filter)', 'counter'));
+  out.push(line('llm_cost_guard_checked_total', s.checked ?? 0));
+  out.push(header('llm_cost_guard_skipped_total', 'Requests skipped (out of scope, opt-out, or missing model)', 'counter'));
+  out.push(line('llm_cost_guard_skipped_total', s.skipped ?? 0));
+  out.push(header('llm_cost_guard_warned_total', 'Requests over the soft warnAtUsd threshold (still passed through)', 'counter'));
+  out.push(line('llm_cost_guard_warned_total', s.warned ?? 0));
+  out.push(header('llm_cost_guard_blocked_total', 'Requests refused because estimated cost exceeded maxPerCallUsd', 'counter'));
+  out.push(line('llm_cost_guard_blocked_total', s.blocked ?? 0));
+  out.push(header('llm_cost_guard_estimated_dollars_total', 'Cumulative estimated $ across all checked requests (rough forecast for cost planning)', 'counter'));
+  out.push(line('llm_cost_guard_estimated_dollars_total', s.estimatedUsdTotal ?? 0));
+  return out;
+}
+
 function emitDeadline(dl) {
   if (!dl?.stats) return [];
   const s = dl.stats;
@@ -374,6 +393,7 @@ function isoToSecondsFromNow(iso) {
  * @param {object} [mw.breaker]         circuitBreaker middleware (new in 1.49.0)
  * @param {object} [mw.bh]              bulkhead middleware (new in 1.51.0)
  * @param {object} [mw.deadline]        deadline middleware (new in 1.52.0)
+ * @param {object} [mw.costGuard]       costGuard middleware (new in 1.56.0)
  * @param {object} [options]
  * @param {boolean} [options.excludeBreakdowns=false]  Skip per-tenant/model/provider breakdowns
  *                                                     (cardinality control for large fleets).
@@ -390,6 +410,7 @@ async function promMetrics(mw = {}, options = {}) {
   lines.push(...emitCircuitBreaker(mw.breaker));
   lines.push(...emitBulkhead(mw.bh));
   lines.push(...emitDeadline(mw.deadline));
+  lines.push(...emitCostGuard(mw.costGuard));
   let meteringLines = emitMetering(mw.metering);
   if (excludeBreakdowns) {
     meteringLines = meteringLines.filter(

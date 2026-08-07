@@ -247,6 +247,7 @@ test('validateMiddlewareOrder: KNOWN_KINDS covers exactly the shipped middleware
     'promptInjectionGuard',
     'guardrails',
     'costBudget',
+    'costGuard',
     'retryOnRateLimit',
     'circuitBreaker',
     'bulkhead',
@@ -256,6 +257,44 @@ test('validateMiddlewareOrder: KNOWN_KINDS covers exactly the shipped middleware
     'responseCache',
   ]);
   assert.deepEqual([...KNOWN_KINDS].sort(), [...expected].sort());
+});
+
+// ---- Cost guard rules -------------------------------------------------
+
+test('validateMiddlewareOrder: COST_GUARD_OUTER_OF_GUARDRAILS fires when costGuard precedes guardrails', () => {
+  const r = validateMiddlewareOrder([
+    { kind: 'costGuard' },
+    { kind: 'guardrails' },
+  ]);
+  const w = r.warnings.find((x) => x.code === 'COST_GUARD_OUTER_OF_GUARDRAILS');
+  assert.ok(w);
+  assert.equal(w.severity, 'warning');
+  assert.match(w.message, /inflating the ceiling check/);
+});
+
+test('validateMiddlewareOrder: costGuard INNER of guardrails does NOT fire COST_GUARD_OUTER_OF_GUARDRAILS', () => {
+  const r = validateMiddlewareOrder([
+    { kind: 'guardrails' },
+    { kind: 'costGuard' },
+  ]);
+  assert.equal(r.warnings.find((x) => x.code === 'COST_GUARD_OUTER_OF_GUARDRAILS'), undefined);
+});
+
+test('validateMiddlewareOrder: canonical chain with costGuard produces zero non-info warnings', () => {
+  const r = validateMiddlewareOrder([
+    { kind: 'deadline' },
+    { kind: 'promptInjectionGuard' },
+    { kind: 'guardrails' },
+    { kind: 'costGuard' },
+    { kind: 'costBudget' },
+    { kind: 'circuitBreaker' },
+    { kind: 'bulkhead' },
+    { kind: 'retryOnRateLimit' },
+    { kind: 'usageMeteringToCap' },
+    { kind: 'responseCache' },
+  ]);
+  const nonInfo = r.warnings.filter((w) => w.severity !== 'info');
+  assert.deepEqual(nonInfo, []);
 });
 
 // ---- Result shape ------------------------------------------------------

@@ -1772,6 +1772,60 @@ export interface EstimateCostResult {
  */
 export function estimateCost(input: EstimateCostInput): EstimateCostResult;
 
+// ---- Cost guard middleware (new in 1.56.0) ---------------------------
+
+export interface CostGuardOptions {
+  /** Required. Hard ceiling per call in USD (matches `estimatedUsd` field). */
+  maxPerCallUsd: number;
+  /** Optional soft threshold — fires `onWarn` if estimate exceeds. Default null. */
+  warnAtUsd?: number | null;
+  /** Optional per-model pricing override. Defaults to DEFAULT_PRICING. */
+  pricing?: Record<string, { input: number; output: number }>;
+  /** Optional pre-loaded tokenizer. Skips the getTokenizer(model) auto-detect. */
+  tokenizer?: { name?: string; countTokens: (text: string) => number };
+  /** Which methods to guard. Default ['chat', 'stream']. */
+  applyTo?: string[];
+  onExceeded?: (info: { estimatedUsd: number; limitUsd: number; model: string; tokensIn: number; method: string }) => void | Promise<void>;
+  onWarn?:     (info: { estimatedUsd: number; warnAtUsd: number; limitUsd: number; model: string; tokensIn: number; method: string }) => void | Promise<void>;
+}
+
+export interface CostGuardStats {
+  requests:          number;
+  skipped:           number;
+  checked:           number;
+  warned:            number;
+  blocked:           number;
+  estimatedUsdTotal: number;
+}
+
+export interface CostGuardMiddleware extends Middleware {
+  readonly stats: CostGuardStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://cost-guard';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => CostGuardStats & { maxPerCallUsd: number; warnAtUsd: number | null; applyTo: string[] };
+  };
+}
+
+/**
+ * Pre-flight cost enforcement middleware. Wraps `estimateCost` and runs BEFORE
+ * the provider call — refuses over-budget requests with `CostGuardBlockedError`
+ * WITHOUT spending a token. Stashes the estimate on `ctx.meta.costEstimate` for
+ * downstream middleware.
+ * @since 1.56.0
+ */
+export function costGuard(options: CostGuardOptions): CostGuardMiddleware;
+
+export class CostGuardBlockedError extends Error {
+  readonly code: 'COST_GUARD_BLOCKED';
+  readonly estimatedUsd: number;
+  readonly limitUsd: number;
+  readonly model: string;
+}
+
 // ---- Resilience bundle (new in 1.55.0) --------------------------------
 
 export type ResiliencePrimitiveKind =
@@ -1915,6 +1969,7 @@ export type MiddlewareOrderingWarningCode =
   | 'BREAKER_INNER_OF_RETRY'
   | 'BULKHEAD_OUTER_OF_BREAKER'
   | 'DEADLINE_INNER_OF_RETRY'
+  | 'COST_GUARD_OUTER_OF_GUARDRAILS'
   | 'NO_RETRY'
   | 'NO_METERING'
   | 'NO_SECURITY_LAYER'
