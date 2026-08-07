@@ -32,6 +32,10 @@ const {
   autoRetry,
   adaptiveBulkhead,
   providerHealthProbe,
+  // Cost-aware token budgeting + distributed tracing (1.63-1.64)
+  adaptiveMaxTokens,
+  traceCorrelation,
+  uuidv7,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -128,6 +132,8 @@ let _costGuard;
 let _jsonLog;
 let _tuner;
 let _probe;
+let _adaptiveMaxTokens;
+let _traceCorrelation;
 // Auto-retry-wrapped llm.chat. Instantiated after the LLM connects; used
 // by every action handler so transient failures (BulkheadFull, CircuitOpen)
 // recover automatically without hand-writing retry code per action.
@@ -194,18 +200,32 @@ function getLLM() {
       // (retries + bulkhead queue + circuit-breaker decisions + provider
       // call) shares ONE time budget.
       llm.use(_deadline);
+      // Trace correlation (cds-plugin-llm 1.64.0) — OUTER of jsonLog so
+      // every log line + downstream middleware carries the same
+      // correlation ID. Uses uuidv7 for k-sortable log-store index
+      // locality. Extracts from ctx.raw.correlationId → x-correlation-id
+      // header → x-request-id → W3C traceparent → cds.context.id →
+      // generator. Propagates into cds.context so CAP's own logging
+      // picks it up too.
+      _traceCorrelation = traceCorrelation({
+        generator: uuidv7,
+        onExtract: (info) => cds.log('llm:trace').debug(
+          `[trace] ${info.method} ${info.source}: ${info.id}`,
+        ),
+      });
+      llm.use(_traceCorrelation);
       // JSON structured logging — near-outer so the log line captures the
       // full request duration (deadline overhead + queue wait + retries +
       // provider call). Emits one canonical JSON line per call to
-      // cds.log('llm:call'). Reads costGuard's estimate + LLMError
-      // taxonomy under the hood so a failed call surfaces
-      // { error: { code, primitive, retriable, ... } } — pipe directly to
-      // ELK / Datadog / CloudWatch.
+      // cds.log('llm:call'). correlationId is picked up from ctx.meta
+      // (populated by traceCorrelation above); the callback shape is
+      // kept for backward-compat with pre-1.64 setups.
       _jsonLog = jsonLog({
         logger: cds.log('llm:call'),
         level:      'info',
         errorLevel: 'warn',
-        correlationId: (ctx) => ctx?.raw?.correlationId
+        correlationId: (ctx) => ctx?.meta?.correlationId
+          ?? ctx?.raw?.correlationId
           ?? cds.context?.id
           ?? null,
       });
@@ -299,6 +319,27 @@ function getLLM() {
         },
       });
       llm.use(_budget);
+      // Adaptive max-tokens (cds-plugin-llm 1.63.0) — INNER of costBudget
+      // so it reads the CURRENT remaining budget after costBudget has
+      // done its pre-flight check. Shrinks req.maxTokens so a single
+      // call can't eat more than 75% of the tenant's remaining daily
+      // budget. Throws AdaptiveMaxTokensBlockedError (LLMError,
+      // code: BUDGET_TOO_TIGHT) if even minTokens (50) doesn't fit.
+      _adaptiveMaxTokens = adaptiveMaxTokens({
+        budget:       _budget,
+        scope:        'perTenant',
+        safetyFactor: 0.75,     // never use more than 75% of remaining per call
+        minTokens:    50,
+        maxTokens:    4000,
+        tenantOf:     (ctx) => ctx.raw?.tenant ?? cds.context?.tenant ?? 'default',
+        onAdjust: (info) => cds.log('llm:adaptive-tokens').info(
+          `[adaptive-tokens] shrunk ${info.requested}→${info.adjusted} (remaining=$${info.remainingUsd.toFixed(4)}, safe=$${info.safeUsd.toFixed(4)}, model=${info.model})`,
+        ),
+        onBlock: (info) => cds.log('llm:adaptive-tokens').warn(
+          `[adaptive-tokens] BLOCKED model=${info.model} remaining=$${info.remainingUsd.toFixed(6)} < minTokens=${info.minTokens}`,
+        ),
+      });
+      llm.use(_adaptiveMaxTokens);
       // Circuit breaker — instantiated by resilience.bundle above.
       llm.use(_breaker);
       // Bulkhead — instantiated by resilience.bundle above.
@@ -441,6 +482,10 @@ function getJsonLog() { return _jsonLog; }
 function getTuner() { return _tuner; }
 /** Exported for /probe-state dashboard + MCP service. */
 function getProbe() { return _probe; }
+/** Exported for /adaptive-tokens-state dashboard + MCP service. */
+function getAdaptiveMaxTokens() { return _adaptiveMaxTokens; }
+/** Exported for /trace-state dashboard + MCP service. */
+function getTraceCorrelation() { return _traceCorrelation; }
 /** Exported for the demo app so it can access the bundle's helpers. */
 function getResilience() { return _resilience; }
 
@@ -601,7 +646,7 @@ module.exports = class AIService extends cds.ApplicationService {
       await startObservabilityMcp({
         getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
         getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
-        getTuner, getProbe,
+        getTuner, getProbe, getAdaptiveMaxTokens, getTraceCorrelation,
       });
     });
 
@@ -791,6 +836,25 @@ module.exports = class AIService extends cds.ApplicationService {
         await p.probeNow();
         res.json(p.asMcpResource().handler());
       });
+      // Adaptive max-tokens dashboard — shows adjusted vs unchanged vs
+      // rejected counters and cumulative token savings. When
+      // totalSavedTokens is high, the shrinker is doing real work
+      // protecting the tenant budget.
+      cds.app.get('/adaptive-tokens-state', (_req, res) => {
+        const a = getAdaptiveMaxTokens();
+        if (!a) return res.status(503).json({ error: 'adaptive-max-tokens not initialized yet' });
+        res.json(a.asMcpResource().handler());
+      });
+      // Trace correlation dashboard — split of correlation IDs
+      // extracted (from an upstream header / cds.context) vs generated
+      // (fresh UUIDv7). Low extracted ratio suggests upstream isn't
+      // propagating a trace header — hint to add one for end-to-end
+      // request tracing.
+      cds.app.get('/trace-state', (_req, res) => {
+        const t = getTraceCorrelation();
+        if (!t) return res.status(503).json({ error: 'trace-correlation not initialized yet' });
+        res.json(t.asMcpResource().handler());
+      });
       // /error-recipe — documents the LLMError taxonomy so tools like the
       // ops-dashboard, alerting configs, and downstream API consumers can
       // discover the code → HTTP status → retriable mapping without
@@ -889,6 +953,8 @@ module.exports = class AIService extends cds.ApplicationService {
         if (!getCache())          missing.push('responseCache');
         if (!getTuner())          missing.push('adaptiveBulkhead');
         if (!getProbe())          missing.push('providerHealthProbe');
+        if (!getAdaptiveMaxTokens()) missing.push('adaptiveMaxTokens');
+        if (!getTraceCorrelation()) missing.push('traceCorrelation');
         if (missing.length > 0) {
           return res.status(503).json({ status: 'not-ready', missing });
         }
@@ -1229,5 +1295,7 @@ module.exports.getCostGuard = getCostGuard;
 module.exports.getJsonLog = getJsonLog;
 module.exports.getTuner = getTuner;
 module.exports.getProbe = getProbe;
+module.exports.getAdaptiveMaxTokens = getAdaptiveMaxTokens;
+module.exports.getTraceCorrelation = getTraceCorrelation;
 module.exports.getResilience = getResilience;
 module.exports.getLLM = getLLM;

@@ -30,6 +30,7 @@ const { MCPServer } = require('@saptarishi/cds-plugin-llm/lib/mcp/server');
 async function startObservabilityMcp({
   getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
   getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog, getTuner, getProbe,
+  getAdaptiveMaxTokens, getTraceCorrelation,
 }) {
   if (process.env.MCP_OBS_DISABLE) {
     cds.log('mcp:obs').info('[mcp:obs] disabled via MCP_OBS_DISABLE — skipping startup');
@@ -45,10 +46,11 @@ async function startObservabilityMcp({
   try {
     const server = new MCPServer({
       name:              'joule-procurement-ops',
-      version:           '0.10.0',
+      version:           '0.11.0',
       resources:         buildResources({
         getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
         getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog, getTuner, getProbe,
+  getAdaptiveMaxTokens, getTraceCorrelation,
       }),
       resourceTemplates: buildResourceTemplates(),
       tools:             buildTools({ getCache, getInjectionGuard }),
@@ -77,6 +79,7 @@ async function startObservabilityMcp({
 function buildResources({
   getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
   getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog, getTuner, getProbe,
+  getAdaptiveMaxTokens, getTraceCorrelation,
 }) {
   // As of cds-plugin-llm 1.40.1, MCPServer.registerResource() accepts the
   // { handler } shape shipped by middleware.asMcpResource() directly — no
@@ -121,6 +124,12 @@ function buildResources({
   // Provider health probe (cds-plugin-llm 1.62.0). config://provider-health.
   const probe = getProbe?.();
   if (probe?.asMcpResource) resources.push(probe.asMcpResource());
+  // Adaptive max-tokens (cds-plugin-llm 1.63.0). config://adaptive-max-tokens.
+  const amt = getAdaptiveMaxTokens?.();
+  if (amt?.asMcpResource) resources.push(amt.asMcpResource());
+  // Trace correlation (cds-plugin-llm 1.64.0). config://trace-correlation.
+  const tc = getTraceCorrelation?.();
+  if (tc?.asMcpResource) resources.push(tc.asMcpResource());
 
   const gr = getGuardrails();
   if (gr?.asMcpResource) resources.push(gr.asMcpResource());
@@ -263,6 +272,10 @@ const COUNTER_KEYS = new Set([
   'currentMaxConcurrent', 'sampleCount', 'running',                // adaptive
   // cds-plugin-llm 1.62.0 counters
   'probes', 'timeouts', 'healthChanges', 'providers',              // probe
+  // cds-plugin-llm 1.63.0 counters
+  'adjusted', 'unchanged', 'rejected', 'totalSavedTokens',         // adaptiveMaxTokens
+  // cds-plugin-llm 1.64.0 counters
+  'extracted', 'generated',                                        // traceCorrelation
 ]);
 function stripCounters(payload) {
   if (!payload || typeof payload !== 'object') return payload;

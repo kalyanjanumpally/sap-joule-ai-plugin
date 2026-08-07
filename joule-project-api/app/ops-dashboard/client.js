@@ -56,6 +56,10 @@
     tunerSub:        $('#tuner-sub'),
     probeStatus:     $('#probe-status'),
     probeSub:        $('#probe-sub'),
+    amtAdjusted:     $('#amt-adjusted'),
+    amtSub:          $('#amt-sub'),
+    traceRatio:      $('#trace-ratio'),
+    traceSub:        $('#trace-sub'),
 
     // Quote widget
     quoteInput:  $('#quote-input'),
@@ -307,6 +311,27 @@
     const timeouts = data.timeouts ?? 0;
     els.probeSub.textContent = `${data.probes ?? 0} probes · ${failures} failures · ${timeouts} timeouts · ${data.running ? 'running' : 'stopped'}`;
   }
+  function renderAdaptiveTokens(data) {
+    if (!data) return;
+    const adjusted = data.adjusted ?? 0;
+    const rejected = data.rejected ?? 0;
+    const saved    = data.totalSavedTokens ?? 0;
+    els.amtAdjusted.textContent = String(adjusted);
+    els.amtAdjusted.className = 'kpi-primary ' + (rejected > 0 ? 'err' : adjusted > 0 ? 'warn' : '');
+    els.amtSub.textContent = `${adjusted} shrunk · ${rejected} rejected · ${saved.toLocaleString()} tokens saved`;
+  }
+  function renderTrace(data) {
+    if (!data) return;
+    const extracted = data.extracted ?? 0;
+    const generated = data.generated ?? 0;
+    const total     = extracted + generated;
+    const pctExtracted = total === 0 ? '–' : Math.round((extracted / total) * 100) + '%';
+    els.traceRatio.textContent = pctExtracted;
+    // Low extracted ratio = upstream not propagating headers. Not an error,
+    // but ops might want to add a header at the ingress.
+    els.traceRatio.className = 'kpi-primary';
+    els.traceSub.textContent = `${extracted} extracted · ${generated} generated`;
+  }
   function renderHealth(data) {
     if (!data) {
       els.healthDot.className = 'dot idle';
@@ -346,7 +371,7 @@
   // ---- Poll cycle ----------------------------------------------------
   async function poll() {
     setConn('live', 'polling…');
-    const [budget, cache, retry, guardrails, injection, deadline, breaker, bulkhead, costguard, jsonlog, tuner, probe, health, chain] = await Promise.all([
+    const [budget, cache, retry, guardrails, injection, deadline, breaker, bulkhead, costguard, jsonlog, tuner, probe, amt, trace, health, chain] = await Promise.all([
       safeJson('/budget-status'),
       safeJson('/cache-stats'),
       safeJson('/retry-stats'),
@@ -359,6 +384,8 @@
       safeJson('/log-state'),
       safeJson('/tuner-state'),
       safeJson('/probe-state'),
+      safeJson('/adaptive-tokens-state'),
+      safeJson('/trace-state'),
       safeJson('/resilience'),
       readChain(),
     ]);
@@ -374,6 +401,8 @@
     renderJsonLog(jsonlog);
     renderTuner(tuner);
     renderProbe(probe);
+    renderAdaptiveTokens(amt);
+    renderTrace(trace);
     renderHealth(health);   // health = /resilience payload
     renderChain(chain);
     const now = new Date().toLocaleTimeString();
