@@ -95,6 +95,8 @@ module.exports = {
   isLLMError: require('./errors').isLLMError,
   // HTTP error handler — Express-shaped middleware for LLMError → JSON (new in 1.58.0)
   llmErrorHandler: require('./llmErrorHandler').llmErrorHandler,
+  // Structured JSON logging middleware — one canonical line per LLM call (new in 1.59.0)
+  jsonLog: require('./middleware/jsonLog').jsonLog,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

@@ -1981,6 +1981,81 @@ export interface LlmErrorResponseBody {
 export function llmErrorHandler(options?: LlmErrorHandlerOptions):
   (err: unknown, req: any, res: any, next: (err?: unknown) => void) => void;
 
+// ---- JSON logging middleware (new in 1.59.0) --------------------------
+
+export interface JsonLogPayload {
+  ts:            string;
+  method:        string;
+  ok:            boolean;
+  durationMs:    number;
+  tenant:        string | null;
+  provider:      string | null;
+  model:         string | null;
+  tokensIn?:     number | null;
+  tokensOut?:    number | null;
+  cost?:         number | null;
+  cachedHit?:    boolean;
+  correlationId: string | null;
+  requestPreview?: string;
+  meta?:         Record<string, unknown>;
+  error?: {
+    code:      LLMErrorCode | string;
+    primitive: string | null;
+    retriable: boolean;
+    severity:  'error' | 'warning';
+    message:   string;
+  };
+}
+
+export interface JsonLogOptions {
+  /** Any logger with .info() / .warn() / .error() (or a bare .log()). Required. */
+  logger:                any;
+  /** Level for successful calls. Default 'info'. */
+  level?:                string;
+  /** Level for failed calls. Default 'warn'. */
+  errorLevel?:           string;
+  /** Callback: extract a correlation id from ctx. Errors are swallowed. */
+  correlationId?:        (ctx: MiddlewareContext) => string | null | undefined;
+  /** Include the last user message (truncated) as `requestPreview`. Default false. */
+  includeRequestPreview?: boolean;
+  /** Truncation length for requestPreview. Default 200. */
+  previewChars?:         number;
+  /** Include ctx.meta (minus redactMetaFields) in the payload. Default false. */
+  includeMeta?:          boolean;
+  /** Field names to strip from ctx.meta before including. Default ['messages', 'system']. */
+  redactMetaFields?:     string[];
+}
+
+export interface JsonLogStats {
+  requests:    number;
+  ok:          number;
+  failed:      number;
+  byErrorCode: Record<string, number>;
+}
+
+export interface JsonLogMiddleware extends Middleware {
+  readonly stats: JsonLogStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://json-log';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => JsonLogStats & {
+      level: string; errorLevel: string;
+      includeRequestPreview: boolean; previewChars: number;
+      includeMeta: boolean; redactMetaFields: string[];
+    };
+  };
+}
+
+/**
+ * Structured JSON logging middleware. Emits ONE canonical JSON line per
+ * LLM call — stable schema for ELK / Datadog / CloudWatch indexing.
+ * @since 1.59.0
+ */
+export function jsonLog(options: JsonLogOptions): JsonLogMiddleware;
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {

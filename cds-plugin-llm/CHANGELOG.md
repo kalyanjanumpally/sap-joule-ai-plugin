@@ -4,6 +4,88 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.59.0] — 2026-08-07
+
+### Added
+
+- **`jsonLog` — structured logging middleware.** Emits ONE canonical JSON line per LLM call — a stable schema that ops teams can index / alert on / feed straight into ELK / Datadog / CloudWatch without a per-project mapping. Composable with any logger (cds.log, pino, winston, console).
+
+  ```js
+  const { jsonLog } = require('@saptarishi/cds-plugin-llm');
+
+  const log = jsonLog({
+    logger:        cds.log('llm:call'),
+    correlationId: (ctx) => ctx.raw?.correlationId ?? cds.context?.id ?? null,
+  });
+  llm.use(log);
+  ```
+
+  Success payload:
+
+  ```json
+  {
+    "ts":            "2026-08-07T12:34:56.789Z",
+    "method":        "chat",
+    "ok":            true,
+    "durationMs":    1234,
+    "tenant":        "acme",
+    "provider":      "llm",
+    "model":         "gpt-4o-mini",
+    "tokensIn":      42,
+    "tokensOut":     87,
+    "cost":          0.001234,
+    "cachedHit":     false,
+    "correlationId": "req-abc-123"
+  }
+  ```
+
+  Failure payload (LLMError-aware — uses 1.57 taxonomy):
+
+  ```json
+  {
+    "ts": "…", "method": "chat", "ok": false, "durationMs": 5230,
+    "tenant": "acme", "provider": "llm", "model": "gpt-4o-mini",
+    "correlationId": "req-xyz-456",
+    "error": {
+      "code":      "CIRCUIT_OPEN",
+      "primitive": "circuitBreaker",
+      "retriable": true,
+      "severity":  "error",
+      "message":   "circuitBreaker: circuit is OPEN for provider='openai' …"
+    }
+  }
+  ```
+
+- **Reads signals from every primitive shipped so far:**
+  - `ctx.meta.costEstimate` (from 1.56 `costGuard`) → `cost` field
+  - `result.usage` (every provider) → `tokensIn` / `tokensOut`
+  - `result.cached` / `.cost` (from `usageMetering` / `responseCache`) → `cachedHit` / `cost`
+  - `err.code` / `.primitive` / `.retriable` / `.severity` (1.57 `LLMError`) → structured `error` block
+
+- **Privacy-first defaults.** Log line NEVER includes messages / system by default. Opt in with `includeRequestPreview: true` to include the first `previewChars` (default 200) of the last user message. Multimodal content arrays are joined text-only (images / audio / PDFs never in the log). `redactMetaFields` (default `['messages', 'system']`) strips those keys from `ctx.meta` before including.
+
+- **Non-throwing logger contract.** If your logger explodes mid-call, the request path is unaffected — the caller sees the real result / error, not a logger crash. Same for the `correlationId` callback.
+
+- **`logger.info()` → `logger.log()` fallback.** Works with structured loggers (pino, winston) that expose per-level methods AND with bare `{ log }` shapes (console, primitive wrappers).
+
+- **Stats + MCP resource:**
+  - `log.stats` → `{ requests, ok, failed, byErrorCode: { CIRCUIT_OPEN: 3, ... } }`
+  - `log.reset()` — clears counters
+  - `log.asMcpResource()` → `config://json-log`
+
+- **Placement is flexible.** Two useful positions:
+  1. OUTER (after deadline, before guardrails): full request duration including retries + queue waits, sees raw request.
+  2. INNER of guardrails: logs the scrubbed content path only — useful when you want a request preview but never log PII.
+
+### Type definitions
+
+- `JsonLogPayload` — canonical schema for the emitted JSON
+- `JsonLogOptions`, `JsonLogStats`, `JsonLogMiddleware`
+
+### Backwards compatibility
+
+Additive — no breaking changes.
+
 ## [1.58.0] — 2026-08-07
 
 ### Added
