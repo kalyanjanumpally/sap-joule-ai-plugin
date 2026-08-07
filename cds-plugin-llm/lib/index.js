@@ -82,6 +82,8 @@ module.exports = {
   // Aggregate health check — Express-shaped route + programmatic snapshot (new in 1.53.0)
   healthHandler: require('./healthHandler').healthHandler,
   healthCheck: require('./healthHandler').healthCheck,
+  // Pre-flight cost estimator — token-counts + prices without an API round-trip (new in 1.54.0)
+  estimateCost: require('./estimateCost').estimateCost,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

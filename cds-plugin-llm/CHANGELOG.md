@@ -4,6 +4,63 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.54.0] — 2026-08-07
+
+### Added
+
+- **`estimateCost` — pre-flight cost estimator.** Token-counts a request and applies pricing to give a max-cost estimate WITHOUT hitting the provider. Zero network round-trip. Backs a "this call will cost $0.032 before you make it" pitch UX, and composes cleanly with `costBudget` for pre-flight budget checks.
+
+  ```js
+  const { estimateCost } = require('@saptarishi/cds-plugin-llm');
+
+  const est = estimateCost({
+    model:     'gpt-4o-mini',
+    messages:  [{ role: 'user', content: 'Draft a supplier onboarding email.' }],
+    system:    'You are a procurement assistant.',
+    maxTokens: 500,
+  });
+  // → {
+  //     model:           'gpt-4o-mini',
+  //     tokensIn:        24,
+  //     estMaxTokensOut: 500,
+  //     inputUsd:        0.0000036,
+  //     outputUsd:       0.0003,
+  //     estimatedUsd:    0.000304,
+  //     currency:        'USD',
+  //     priced:          true,
+  //     tokenizerUsed:   'tiktoken',
+  //     notes:           [],
+  //   }
+  ```
+
+- **`svc.estimateCost({ messages, maxTokens, ... })`** — instance method on `LLMService`. Pulls `model` default from `this.modelId`. Explicit `model` override respected.
+
+  ```js
+  const llm = await cds.connect.to('llm');
+  const est = llm.estimateCost({ messages, maxTokens: 200 });
+  if (est.estimatedUsd > 1.0) refuseAndSuggestSmaller();
+  ```
+
+- **Uses the same tokenizer + pricing infra as `usageMetering`:**
+  - `getTokenizer(model)` — real `tiktoken` / `js-tiktoken` / `@anthropic-ai/tokenizer` when installed; heuristic fallback otherwise. Reports which tokenizer was used via `tokenizerUsed`.
+  - `DEFAULT_PRICING` — same USD-per-million-tokens table. Override with `pricing: {...}` for contract discounts / region variance.
+  - Same model-family assumptions as the meter → the estimate matches the actual meter to within tokenizer variance.
+
+- **Multimodal-aware.** Content arrays are walked; `type: 'text'` blocks contribute tokens; `image` / `document` / `audio` / `tool_result` blocks are skipped with a note (`skipped N non-text content block(s)`). Callers relying on accurate vision / PDF cost estimates should refine per-provider.
+
+- **Unknown-model handling.** Models not in the pricing table return `priced: false` and `estimatedUsd: 0`, still with a valid `tokensIn` count and a note (`model 'X' not in pricing table`). Callers can spot-check `priced === false` to catch missing pricing before shipping.
+
+- **Configurable defaults.** All fields except `model` and `messages` have sensible defaults: `maxTokens=512`, `pricing=DEFAULT_PRICING`, `currency='USD'`.
+
+### Type definitions
+
+- `EstimateCostInput`, `EstimateCostResult`
+- `LLMService.estimateCost(req)` — instance method with `Omit<..., 'model'> & { model?: string }` shape
+
+### Backwards compatibility
+
+Additive — no breaking changes. `estimateCost` is a new top-level export; `LLMService.estimateCost` is a new instance method.
+
 ## [1.53.0] — 2026-08-06
 
 ### Added

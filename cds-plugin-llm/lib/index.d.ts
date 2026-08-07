@@ -325,6 +325,11 @@ export class LLMService {
   getBatch(id: string): Promise<BatchHandle>;
   getBatchResults<D = unknown>(id: string): Promise<BatchResult<D>[]>;
   cancelBatch(id: string): Promise<BatchHandle>;
+  /**
+   * Pre-flight cost estimate. No middleware, no provider round-trip.
+   * Pulls `model` default from `this.modelId`. @since 1.54.0
+   */
+  estimateCost(req: Omit<EstimateCostInput, 'model'> & { model?: string }): EstimateCostResult;
 }
 
 // ---- Batch API shapes (new in 1.25.0) ------------------------------------
@@ -1722,6 +1727,50 @@ export function healthHandler(
   mw: HealthCheckInput,
   options?: { treatDegradedAs?: number; treatDownAs?: number }
 ): (req: any, res: any) => Promise<void>;
+
+// ---- Pre-flight cost estimator (new in 1.54.0) ------------------------
+
+export interface EstimateCostInput {
+  /** Required. Model ID as it would be passed to chat(). */
+  model:      string;
+  /** Chat messages — content may be a string or an array of content blocks. */
+  messages:   Array<{ role: string; content: string | Array<{ type: string; text?: string; [k: string]: any }> }>;
+  /** Optional system prompt — counted as input tokens. */
+  system?:    string | null;
+  /** Upper bound on OUTPUT tokens. Default 512. */
+  maxTokens?: number;
+  /** Optional per-model pricing override. Defaults to DEFAULT_PRICING. */
+  pricing?:   Record<string, { input: number; output: number }>;
+  /** Display-only currency label. Default 'USD'. */
+  currency?:  string;
+  /** Optional pre-loaded tokenizer. Skips the getTokenizer(model) auto-detect. */
+  tokenizer?: { name?: string; countTokens: (text: string) => number };
+}
+
+export interface EstimateCostResult {
+  model:           string;
+  tokensIn:        number;
+  estMaxTokensOut: number;
+  inputUsd:        number;
+  outputUsd:       number;
+  estimatedUsd:    number;
+  currency:        string;
+  /** false when the model isn't in the pricing table — estimatedUsd is 0. */
+  priced:          boolean;
+  /** 'tiktoken' | 'js-tiktoken' | 'anthropic-tokenizer' | 'heuristic' | ... */
+  tokenizerUsed:   string;
+  /** Non-fatal advisories: unknown model, skipped multimodal blocks, etc. */
+  notes:           string[];
+}
+
+/**
+ * Pre-flight token-count + cost estimate. No provider round-trip.
+ * Composes with costBudget as a pre-flight budget check:
+ *   const est = estimateCost({ model, messages });
+ *   if (est.estimatedUsd > remaining) refuse();
+ * @since 1.54.0
+ */
+export function estimateCost(input: EstimateCostInput): EstimateCostResult;
 
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 

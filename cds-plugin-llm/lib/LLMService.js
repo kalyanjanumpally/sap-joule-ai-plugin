@@ -143,6 +143,21 @@ class LLMService extends cds.Service {
     return this._batchCancel(id);
   }
 
+  // Pre-flight cost estimate — same shape as the top-level estimateCost()
+  // helper but pulls model default from this.modelId. No middleware, no
+  // provider round-trip. New in 1.54.0.
+  //
+  // Falls back to this.options.{modelId,model} when the service hasn't
+  // been init()'d yet — safe to call on a fresh instance, since the
+  // estimator itself is stateless and doesn't need any middleware wiring.
+  estimateCost(req = {}) {
+    const { estimateCost: est } = require('./estimateCost');
+    return est({
+      ...req,
+      model: req.model ?? this.modelId ?? this.options?.modelId ?? this.options?.model,
+    });
+  }
+
   async _batchSubmit()  { throw batchNotSupported(this, 'batch'); }
   async _batchStatus()  { throw batchNotSupported(this, 'getBatch'); }
   async _batchResults() { throw batchNotSupported(this, 'getBatchResults'); }
