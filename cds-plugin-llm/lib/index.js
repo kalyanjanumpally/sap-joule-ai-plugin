@@ -97,6 +97,9 @@ module.exports = {
   llmErrorHandler: require('./llmErrorHandler').llmErrorHandler,
   // Structured JSON logging middleware — one canonical line per LLM call (new in 1.59.0)
   jsonLog: require('./middleware/jsonLog').jsonLog,
+  // Auto-retry helper — wraps any async fn in a retry loop that respects LLMError.retriable (new in 1.60.0)
+  autoRetry: require('./autoRetry').autoRetry,
+  defaultRetryOn: require('./autoRetry').defaultRetryOn,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

@@ -4,6 +4,64 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.60.0] — 2026-08-07
+
+### Added
+
+- **`autoRetry(fn, options)` — retriable-aware wrapper.** Wraps any async function in a retry loop that respects the 1.57 `LLMError.retriable` field. Callers get automatic recovery from transient failures WITHOUT hand-writing per-error retry code.
+
+  ```js
+  const { autoRetry } = require('@saptarishi/cds-plugin-llm');
+
+  const chat = autoRetry(llm.chat.bind(llm), {
+    maxAttempts:  3,
+    backoffMs:    500,
+    jitterMs:     200,
+    maxBackoffMs: 30_000,
+    onRetry:  (info) => cds.log('llm:auto-retry').warn(info),
+    onGiveUp: (info) => cds.log('llm:auto-retry').error(info),
+  });
+  const result = await chat({ messages: [...] });
+  ```
+
+- **Retriable errors retry automatically:**
+  - `CircuitOpenError` → waits `err.cooldownRemainingMs` (breaker's own hint), NOT exponential backoff
+  - `BulkheadFullError` → waits + retries (slot may free up)
+  - `BulkheadTimeoutError` → same
+
+- **Non-retriable errors throw immediately** — no wasted retries:
+  - `DeadlineExceededError`, `CostGuardBlockedError`, `BudgetExceededError`
+  - `PromptInjectionError`, `GuardrailBlockedError`
+  - `RateLimitGiveUpError`, `AllProvidersFailedError`
+  - Plain `Error` (no `retriable` field)
+
+- **Smart backoff.** `CIRCUIT_OPEN` honours `err.cooldownRemainingMs` directly (why guess when the breaker already told us). Others use `backoffMs * 2^attemptIdx + random(0, jitterMs)`, capped at `maxBackoffMs`. Prevents thundering-herd + respects per-error semantics.
+
+- **Original error preserved.** The re-thrown error is the actual last-attempt error — same class, same code, same subclass-specific fields. We attach `err.autoRetryAttempts = [{attempt, waitMs, code, error}, ...]` for inspection. No wrapping error class means callers keep their existing `instanceof BulkheadFullError` / `err.code === 'CIRCUIT_OPEN'` checks.
+
+- **Custom `retryOn` predicate.** Override the default `err?.retriable === true` for provider-native errors (e.g. `retryOn: err => err?.httpCode === 429`) or to be MORE restrictive (retry only bulkhead-timeout, not bulkhead-full).
+
+- **`this` + args forwarding.** `autoRetry(fn)` returns a function that forwards its `this` binding and arguments to the wrapped function — safe for method binding.
+
+- **`defaultRetryOn` exported** for composition: `retryOn: (err) => defaultRetryOn(err) || err?.httpCode === 429`.
+
+- **Stats surface:** `wrapped.stats` → `{ calls, retriedCalls, totalRetries, givenUp, totalWaitMs }`. `wrapped.reset()` clears counters.
+
+- **Callback hooks:**
+  - `onRetry({ ctx: { attempt, waitMs, code, error }, error })` — fires before each wait
+  - `onGiveUp({ attempts, finalError })` — fires once after exhausting maxAttempts
+  - Callback exceptions are swallowed — never break the request path
+
+### Type definitions
+
+- `AutoRetryOptions`, `AutoRetryStats`, `AutoRetryWrapped<F>`
+- `autoRetry<F>(fn, options?)` returns `AutoRetryWrapped<F>` — a callable with `.stats` + `.reset()`
+- `defaultRetryOn(err)`
+
+### Backwards compatibility
+
+Additive — no breaking changes. `autoRetry` is a wrapper over any async function; it doesn't touch the middleware chain or existing error classes.
+
 ## [1.59.0] — 2026-08-07
 
 ### Added

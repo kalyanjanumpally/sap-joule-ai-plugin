@@ -2056,6 +2056,57 @@ export interface JsonLogMiddleware extends Middleware {
  */
 export function jsonLog(options: JsonLogOptions): JsonLogMiddleware;
 
+// ---- Auto-retry helper (new in 1.60.0) --------------------------------
+
+export interface AutoRetryOptions {
+  /** Max total attempts including the initial call. Default 3. */
+  maxAttempts?: number;
+  /** Base exponential-backoff delay (backoffMs * 2^attemptIdx). Default 500. */
+  backoffMs?: number;
+  /** Random jitter added to each wait (0..jitterMs). Default 200. */
+  jitterMs?: number;
+  /** Cap on any single wait. Default 30_000. */
+  maxBackoffMs?: number;
+  /** Custom predicate. Default: `err?.retriable === true` (LLMError 1.57 taxonomy). */
+  retryOn?: (err: any) => boolean;
+  onRetry?:  (info: { ctx: { attempt: number; waitMs: number; code: string | null; error: string }; error: any }) => void | Promise<void>;
+  onGiveUp?: (info: { attempts: Array<{ attempt: number; waitMs: number; code: string | null; error: string }>; finalError: any }) => void | Promise<void>;
+}
+
+export interface AutoRetryStats {
+  calls:          number;
+  retriedCalls:   number;
+  totalRetries:   number;
+  givenUp:        number;
+  totalWaitMs:    number;
+}
+
+export interface AutoRetryWrapped<F extends (...args: any[]) => Promise<any>> {
+  (...args: Parameters<F>): ReturnType<F>;
+  readonly stats: AutoRetryStats;
+  reset(): void;
+}
+
+/**
+ * Wrap any async function in a retry loop that respects the LLMError 1.57
+ * `retriable` field. Retries transient failures (CircuitOpen, BulkheadFull,
+ * BulkheadTimeout); gives up immediately on non-retriable (Deadline, Budget,
+ * CostGuard, Injection, Guardrail, etc.). CIRCUIT_OPEN uses
+ * `err.cooldownRemainingMs` as the wait; other retries use exponential
+ * backoff with jitter, capped at `maxBackoffMs`.
+ *
+ * The re-thrown error is the ORIGINAL from the last attempt, with
+ * `.autoRetryAttempts` attached for inspection.
+ * @since 1.60.0
+ */
+export function autoRetry<F extends (...args: any[]) => Promise<any>>(
+  fn: F,
+  options?: AutoRetryOptions,
+): AutoRetryWrapped<F>;
+
+/** Default retry predicate: `err?.retriable === true`. Exposed for composition. */
+export function defaultRetryOn(err: any): boolean;
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {
