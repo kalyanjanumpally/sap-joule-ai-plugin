@@ -4,6 +4,61 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.74.0] — 2026-08-07
+
+### Added
+
+- **4 new CLI commands for chain observability** — bundled into the existing `saptarishi-llm` binary + a new `cds-llm` alias so consumers who prefer the shorter name get it.
+
+  ```bash
+  cds-llm chain-visualize chain.json     # ASCII box-drawing diagram
+  cds-llm chain-diff a.json b.json       # diff two snapshots (CI drift check)
+  cds-llm chain-validate chain.json      # check for ordering warnings/errors
+  cds-llm preflight config.json          # env / models / chain / budget checks
+  ```
+
+- **`chain-visualize`** — Unicode box-drawing diagram of the middleware chain with per-step config summary. Reads a `config://chain` snapshot from a file (or stdin). Perfect for pitch decks + debugging.
+
+  ```
+  ┌──────────────────────────────────────────────────┐
+  │            OUTER (request enters here)           │
+  └──────────────────────────────────────────────────┘
+    │                                                │
+    ▼
+  ┌──────────────────────────────────────────────────┐
+  │ [ 0] deadline          timeoutMs=30000           │
+  └──────────────────────────────────────────────────┘
+    │                                                │
+    ▼
+  ┌──────────────────────────────────────────────────┐
+  │ [ 1] bulkhead          maxConcurrent=10 …        │
+  └──────────────────────────────────────────────────┘
+    ...
+  ```
+
+- **`chain-diff`** — wraps 1.73 `chainDiff()`. Exit code 0 if identical, 1 on drift, 2 on file/usage error. `--json` for structured output, `--no-colors` to strip ANSI. Auto-detects TTY for color output.
+
+- **`chain-validate`** — wraps 1.48 `validateMiddlewareOrder()`. Exit 0 clean, 1 on error findings. `--strict` treats warnings as errors too. Human output groups findings by severity with `✗ / ⚠ / ℹ` markers and per-finding `fixit:` hints.
+
+- **`preflight`** — wraps 1.66 `preflight()`. Reads a config JSON with `requiredEnv / budgetLimits / models / chain`. Exit 0 on pass, 1 on error. Human output shows each check with `✓ / ⚠ / ✗` markers + duration.
+
+- **`cds-llm` binary alias** — the same CLI is now installed under BOTH `saptarishi-llm` and `cds-llm` names. `cds-llm` is easier to type + matches the plugin's SAP CAP flavor.
+
+- **CI workflow example:**
+  ```bash
+  # 1. Snapshot current chain into a baseline (do once, check into git)
+  curl http://.../mcp/... > chain-baseline.json
+
+  # 2. On every deploy, fetch the live chain and diff
+  curl http://.../mcp/... > /tmp/chain-live.json
+  cds-llm chain-diff chain-baseline.json /tmp/chain-live.json --no-colors \
+    || { echo "chain drifted — review required"; exit 1; }
+  ```
+
+### Backwards compatibility
+
+Additive — no breaking changes. Existing `saptarishi-llm` commands unchanged. New binary alias `cds-llm` points to the same script.
+
 ## [1.73.0] — 2026-08-07
 
 ### Added

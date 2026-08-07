@@ -1,6 +1,6 @@
 {
   "name": "@saptarishi/cds-plugin-llm",
-  "version": "1.73.0",
+  "version": "1.74.0",
   "description": "LLM-agnostic AI service for SAP CAP. Speaks Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI, Ollama, Groq, Fireworks, DeepSeek, Mistral, any OpenAI-compatible endpoint, and SAP Generative AI Hub behind one API. Supports vision / multimodal input, streaming responses, structured outputs, tool use / function calling, and automatic retries with exponential backoff.",
   "repository": {
     "type": "git",
@@ -14,7 +14,8 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "bin": {
-    "saptarishi-llm": "bin/saptarishi-llm.js"
+    "saptarishi-llm": "bin/saptarishi-llm.js",
+    "cds-llm":        "bin/saptarishi-llm.js"
   },
   "files": [
     "bin/",

@@ -11,6 +11,11 @@ const COMMANDS = {
   init: require('./commands/init'),
   mcp: require('./commands/mcp'),
   'cost-predict': require('./commands/costPredict'),
+  // Chain observability commands (new in 1.74.0)
+  'chain-visualize': require('./commands/chainVisualize'),
+  'chain-diff':      require('./commands/chainDiff'),
+  'chain-validate':  require('./commands/chainValidate'),
+  preflight:         require('./commands/preflightCmd'),
   help: async () => { printHelp(); return 0; },
 };
 
@@ -40,6 +45,9 @@ const GLOBAL_OPTS = {
   'output-factor': { type: 'string' },
   'percentile':    { type: 'string' },
   'tokenizer':     { type: 'string' },
+  // Chain observability flags (1.74.0)
+  'no-colors':     { type: 'boolean' },
+  'strict':        { type: 'boolean' },
 };
 
 async function run(argv) {
@@ -110,6 +118,10 @@ commands:
   init        Scaffold a CAP app pre-wired to this plugin
   mcp         Expose the configured provider as an MCP server (stdio)
   cost-predict Estimate batch spend from a JSONL of chat requests
+  chain-visualize <chain.json>          ASCII diagram of a middleware chain
+  chain-diff <a.json> <b.json>          Diff two chain snapshots (CI drift check)
+  chain-validate <chain.json>           Check chain ordering for warnings/errors
+  preflight <config.json>               Run boot-time config check (env/models/chain)
   help        Show this help
 
 common options:
