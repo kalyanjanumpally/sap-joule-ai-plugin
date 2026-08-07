@@ -29,21 +29,19 @@
 //   });
 //   llm.use(bh);
 
-class BulkheadFullError extends Error {
+const { LLMError } = require('../errors');
+
+class BulkheadFullError extends LLMError {
   constructor(provider, maxQueued) {
-    super(`bulkhead: queue is full for provider='${provider}' (maxQueued=${maxQueued}).`);
-    this.name = 'BulkheadFullError';
-    this.code = 'BULKHEAD_FULL';
+    super(`bulkhead: queue is full for provider='${provider}' (maxQueued=${maxQueued}).`, 'BULKHEAD_FULL');
     this.provider = provider;
     this.maxQueued = maxQueued;
   }
 }
 
-class BulkheadTimeoutError extends Error {
+class BulkheadTimeoutError extends LLMError {
   constructor(provider, queueTimeoutMs) {
-    super(`bulkhead: request timed out in queue for provider='${provider}' after ${queueTimeoutMs}ms.`);
-    this.name = 'BulkheadTimeoutError';
-    this.code = 'BULKHEAD_TIMEOUT';
+    super(`bulkhead: request timed out in queue for provider='${provider}' after ${queueTimeoutMs}ms.`, 'BULKHEAD_TIMEOUT');
     this.provider = provider;
     this.queueTimeoutMs = queueTimeoutMs;
   }

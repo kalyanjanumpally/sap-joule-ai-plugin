@@ -24,11 +24,11 @@
 // INNER of costBudget so a budget-exhausted-then-retry pattern still trips
 // the budget check on the second attempt.
 
-class RateLimitGiveUpError extends Error {
+const { LLMError } = require('../errors');
+
+class RateLimitGiveUpError extends LLMError {
   constructor(finalError, attempts) {
-    super(`retryOnRateLimit: gave up after ${attempts.length} attempts. Last error: ${finalError.message}`);
-    this.name = 'RateLimitGiveUpError';
-    this.code = 'RATE_LIMIT_GIVE_UP';
+    super(`retryOnRateLimit: gave up after ${attempts.length} attempts. Last error: ${finalError.message}`, 'RATE_LIMIT_GIVE_UP');
     this.attempts = attempts;
     this.cause = finalError;
   }

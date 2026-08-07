@@ -89,6 +89,10 @@ module.exports = {
   CostGuardBlockedError: require('./middleware/costGuard').CostGuardBlockedError,
   // Resilience bundle — one-liner wiring for the full resilience stack (new in 1.55.0)
   resilience: require('./resilience'),
+  // Structured error taxonomy — LLMError base + errorRegistry (new in 1.57.0)
+  LLMError: require('./errors').LLMError,
+  errorRegistry: require('./errors').errorRegistry,
+  isLLMError: require('./errors').isLLMError,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

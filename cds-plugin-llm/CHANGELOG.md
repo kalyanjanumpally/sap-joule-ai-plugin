@@ -4,6 +4,80 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.57.0] — 2026-08-07
+
+### Added
+
+- **Structured error taxonomy.** New `LLMError` base class + `errorRegistry` maps every shipped error code to structured metadata: `{ primitive, retriable, httpStatus, severity }`. All 10 public error classes now inherit from `LLMError`, giving consumers one place to handle everything the plugin might throw.
+
+  ```js
+  const { LLMError, errorRegistry, isLLMError } = require('@saptarishi/cds-plugin-llm');
+
+  try {
+    await llm.chat(...);
+  } catch (err) {
+    if (isLLMError(err)) {
+      res.status(err.httpStatus).json({
+        code:       err.code,
+        primitive:  err.primitive,
+        retriable:  err.retriable,
+        message:    err.message,
+      });
+      return;
+    }
+    throw err;   // unknown / provider-native — re-raise
+  }
+  ```
+
+- **10 error classes now inherit from `LLMError`:**
+
+  | Class | Code | Primitive | Retriable | HTTP | Severity |
+  |---|---|---|---|---|---|
+  | `CircuitOpenError` | `CIRCUIT_OPEN` | circuitBreaker | ✓ (after cooldown) | 503 | error |
+  | `BulkheadFullError` | `BULKHEAD_FULL` | bulkhead | ✓ | 429 | warning |
+  | `BulkheadTimeoutError` | `BULKHEAD_TIMEOUT` | bulkhead | ✓ | 429 | warning |
+  | `DeadlineExceededError` | `DEADLINE_EXCEEDED` | deadline | ✗ | 504 | error |
+  | `RateLimitGiveUpError` | `RATE_LIMIT_GIVE_UP` | retryOnRateLimit | ✗ | 429 | error |
+  | `AllProvidersFailedError` | `ALL_PROVIDERS_FAILED` | chatWithFallback | ✗ | 502 | error |
+  | `CostGuardBlockedError` | `COST_GUARD_BLOCKED` | costGuard | ✗ | 402 | error |
+  | `BudgetExceededError` | `BUDGET_EXCEEDED` | costBudget | ✗ | 402 | error |
+  | `PromptInjectionError` | `PROMPT_INJECTION` | promptInjectionGuard | ✗ | 400 | error |
+  | `GuardrailBlockedError` | `GUARDRAIL_BLOCKED` | guardrails | ✗ | 400 | error |
+
+- **HTTP status semantics** are matched to the failure mode:
+  - `503 Service Unavailable` — circuit open (provider is down)
+  - `504 Gateway Timeout` — deadline exceeded
+  - `502 Bad Gateway` — all providers failed
+  - `429 Too Many Requests` — bulkhead saturated / rate-limit gave up
+  - `402 Payment Required` — cost ceiling / budget exhausted
+  - `400 Bad Request` — user input triggered a security filter
+
+- **`isLLMError(err)`** — convenience type-guard: `if (isLLMError(e)) handle(e); else throw e;`.
+
+- **Retriability semantics** — separates "safe to retry the exact same request" (circuit-open after cooldown, bulkhead saturated) from "same request will always fail" (budget exhausted, security block, exceeded ceiling). Retry-loops upstream of the plugin can now automatically retry the right classes and give up on the rest.
+
+- **Preserved subclass identity.** Each subclass still reports its specific `.name` (`CircuitOpenError`, `BulkheadFullError`, etc.) via `new.target.name`, so `instanceof` and `toString()` continue to work as expected.
+
+### Type definitions
+
+- `LLMErrorCode` — string-literal union of all 10 shipped codes
+- `ErrorRegistryEntry` — `{ primitive, retriable, httpStatus, severity }`
+- `errorRegistry` — `Record<LLMErrorCode | string, ErrorRegistryEntry>`
+- `LLMError` — base class with typed `readonly code / primitive / retriable / httpStatus / severity`
+- All 10 subclasses' TS declarations now `extends LLMError` (was `extends Error`)
+- `isLLMError(err): err is LLMError`
+
+### Backwards compatibility
+
+Fully additive on the runtime side:
+- Every error still has the same `.code` field with the same value.
+- Every error still has the same subclass name (via `new.target.name`).
+- Every subclass-specific field (`provider`, `attempts`, `estimatedUsd`, etc.) is preserved.
+- Every error is still `instanceof Error` (`LLMError extends Error`).
+
+New behavior:
+- Every error is now also `instanceof LLMError` — this is new but can only be a strict superset of previous behavior; no existing consumer code that checked `instanceof <specific subclass>` will regress.
+
 ## [1.56.0] — 2026-08-07
 
 ### Added

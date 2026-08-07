@@ -28,13 +28,14 @@
 //       onFailover: (info) => cds.log('llm:fallback').warn('failing over', info),
 //     });
 
-class AllProvidersFailedError extends Error {
+const { LLMError } = require('./errors');
+
+class AllProvidersFailedError extends LLMError {
   constructor(lastError, attempts) {
     super(
       `chatWithFallback: all ${attempts.length} providers failed. Last error: ${lastError?.message ?? 'unknown'}`,
+      'ALL_PROVIDERS_FAILED',
     );
-    this.name = 'AllProvidersFailedError';
-    this.code = 'ALL_PROVIDERS_FAILED';
     this.attempts = attempts;
     this.cause = lastError;
   }

@@ -27,11 +27,11 @@
 //   promptInjectionGuard → guardrails → costBudget → usageMetering →
 //   responseCache → provider
 
-class PromptInjectionError extends Error {
+const { LLMError } = require('../errors');
+
+class PromptInjectionError extends LLMError {
   constructor(score, evidence) {
-    super(`prompt injection detected (score ${score.toFixed(2)}): ${evidence.join('; ')}`);
-    this.name = 'PromptInjectionError';
-    this.code = 'PROMPT_INJECTION';
+    super(`prompt injection detected (score ${score.toFixed(2)}): ${evidence.join('; ')}`, 'PROMPT_INJECTION');
     this.score = score;
     this.evidence = evidence;
   }

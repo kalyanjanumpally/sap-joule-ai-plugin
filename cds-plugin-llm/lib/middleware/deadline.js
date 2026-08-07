@@ -20,11 +20,11 @@
 //   });
 //   llm.use(dl);
 
-class DeadlineExceededError extends Error {
+const { LLMError } = require('../errors');
+
+class DeadlineExceededError extends LLMError {
   constructor(timeoutMs, method) {
-    super(`deadline: ${method} exceeded ${timeoutMs}ms budget.`);
-    this.name = 'DeadlineExceededError';
-    this.code = 'DEADLINE_EXCEEDED';
+    super(`deadline: ${method} exceeded ${timeoutMs}ms budget.`, 'DEADLINE_EXCEEDED');
     this.timeoutMs = timeoutMs;
     this.method = method;
   }

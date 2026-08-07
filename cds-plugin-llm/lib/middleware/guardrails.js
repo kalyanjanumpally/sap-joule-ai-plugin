@@ -24,11 +24,11 @@
 // stream-side moderation should collect the stream and filter at the end
 // or wire their own middleware.
 
-class GuardrailBlockedError extends Error {
+const { LLMError } = require('../errors');
+
+class GuardrailBlockedError extends LLMError {
   constructor(reason, details = {}) {
-    super(`guardrail blocked: ${reason}`);
-    this.name = 'GuardrailBlockedError';
-    this.code = 'GUARDRAIL_BLOCKED';
+    super(`guardrail blocked: ${reason}`, 'GUARDRAIL_BLOCKED');
     this.reason = reason;
     this.details = details;
   }

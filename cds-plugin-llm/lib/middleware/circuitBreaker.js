@@ -27,13 +27,14 @@
 //   });
 //   llm.use(breaker);
 
-class CircuitOpenError extends Error {
+const { LLMError } = require('../errors');
+
+class CircuitOpenError extends LLMError {
   constructor(provider, cooldownRemainingMs, lastError) {
     super(
       `circuitBreaker: circuit is OPEN for provider='${provider}' — ${cooldownRemainingMs}ms cooldown remaining. Last error: ${lastError?.message ?? 'unknown'}`,
+      'CIRCUIT_OPEN',
     );
-    this.name = 'CircuitOpenError';
-    this.code = 'CIRCUIT_OPEN';
     this.provider = provider;
     this.cooldownRemainingMs = cooldownRemainingMs;
     this.cause = lastError;

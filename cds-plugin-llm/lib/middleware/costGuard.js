@@ -33,13 +33,14 @@
 const { estimateCost } = require('../estimateCost');
 const { DEFAULT_PRICING } = require('../pricing');
 
-class CostGuardBlockedError extends Error {
+const { LLMError } = require('../errors');
+
+class CostGuardBlockedError extends LLMError {
   constructor(estimatedUsd, limitUsd, model) {
     super(
       `costGuard: estimated cost $${estimatedUsd.toFixed(6)} exceeds per-call limit $${limitUsd.toFixed(6)} for model '${model}'.`,
+      'COST_GUARD_BLOCKED',
     );
-    this.name = 'CostGuardBlockedError';
-    this.code = 'COST_GUARD_BLOCKED';
     this.estimatedUsd = estimatedUsd;
     this.limitUsd = limitUsd;
     this.model = model;

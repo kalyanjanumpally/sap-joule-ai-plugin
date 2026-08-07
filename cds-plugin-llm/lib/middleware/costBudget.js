@@ -47,14 +47,14 @@
 //   }
 
 const { DEFAULT_PRICING } = require('../pricing');
+const { LLMError } = require('../errors');
 
-class BudgetExceededError extends Error {
+class BudgetExceededError extends LLMError {
   constructor(scope, key, current, limit, currency) {
     super(
       `budget exceeded: ${scope}='${key}' — spent ${current.toFixed(4)} ${currency}, limit ${limit} ${currency}.`,
+      'BUDGET_EXCEEDED',
     );
-    this.name = 'BudgetExceededError';
-    this.code = 'BUDGET_EXCEEDED';
     this.scope = scope;
     this.key = key;
     this.current = current;

@@ -1341,7 +1341,7 @@ export interface GuardrailsMiddleware extends Middleware {
  */
 export function guardrails(options?: GuardrailsOptions): GuardrailsMiddleware;
 
-export class GuardrailBlockedError extends Error {
+export class GuardrailBlockedError extends LLMError {
   readonly code: 'GUARDRAIL_BLOCKED';
   readonly reason: string;
   readonly details: { stage: 'input' | 'output'; filterIndex: number };
@@ -1483,7 +1483,7 @@ export interface RetryOnRateLimitMiddleware extends Middleware {
  */
 export function retryOnRateLimit(options?: RetryOnRateLimitOptions): RetryOnRateLimitMiddleware;
 
-export class RateLimitGiveUpError extends Error {
+export class RateLimitGiveUpError extends LLMError {
   readonly code: 'RATE_LIMIT_GIVE_UP';
   readonly attempts: Array<{ attempt: number; waitMs: number; status: number | null; error: string }>;
   readonly cause: Error;
@@ -1556,7 +1556,7 @@ export interface CircuitBreakerMiddleware extends Middleware {
  */
 export function circuitBreaker(options?: CircuitBreakerOptions): CircuitBreakerMiddleware;
 
-export class CircuitOpenError extends Error {
+export class CircuitOpenError extends LLMError {
   readonly code: 'CIRCUIT_OPEN';
   readonly provider: string;
   readonly cooldownRemainingMs: number;
@@ -1620,13 +1620,13 @@ export interface BulkheadMiddleware extends Middleware {
  */
 export function bulkhead(options?: BulkheadOptions): BulkheadMiddleware;
 
-export class BulkheadFullError extends Error {
+export class BulkheadFullError extends LLMError {
   readonly code: 'BULKHEAD_FULL';
   readonly provider: string;
   readonly maxQueued: number;
 }
 
-export class BulkheadTimeoutError extends Error {
+export class BulkheadTimeoutError extends LLMError {
   readonly code: 'BULKHEAD_TIMEOUT';
   readonly provider: string;
   readonly queueTimeoutMs: number;
@@ -1668,7 +1668,7 @@ export interface DeadlineMiddleware extends Middleware {
  */
 export function deadline(options?: DeadlineOptions): DeadlineMiddleware;
 
-export class DeadlineExceededError extends Error {
+export class DeadlineExceededError extends LLMError {
   readonly code: 'DEADLINE_EXCEEDED';
   readonly timeoutMs: number;
   readonly method: string;
@@ -1819,7 +1819,7 @@ export interface CostGuardMiddleware extends Middleware {
  */
 export function costGuard(options: CostGuardOptions): CostGuardMiddleware;
 
-export class CostGuardBlockedError extends Error {
+export class CostGuardBlockedError extends LLMError {
   readonly code: 'COST_GUARD_BLOCKED';
   readonly estimatedUsd: number;
   readonly limitUsd: number;
@@ -1896,6 +1896,53 @@ export namespace resilience {
   const CANONICAL_ORDER: readonly ResiliencePrimitiveKind[];
 }
 
+// ---- Structured error taxonomy (new in 1.57.0) -----------------------
+
+/** All error codes shipped by the plugin. */
+export type LLMErrorCode =
+  | 'RATE_LIMIT_GIVE_UP'
+  | 'CIRCUIT_OPEN'
+  | 'BULKHEAD_FULL'
+  | 'BULKHEAD_TIMEOUT'
+  | 'DEADLINE_EXCEEDED'
+  | 'ALL_PROVIDERS_FAILED'
+  | 'COST_GUARD_BLOCKED'
+  | 'BUDGET_EXCEEDED'
+  | 'PROMPT_INJECTION'
+  | 'GUARDRAIL_BLOCKED';
+
+export interface ErrorRegistryEntry {
+  /** The middleware / helper that raises this error. */
+  primitive:  string;
+  /** Whether it's safe for the caller to try the exact same request again. */
+  retriable:  boolean;
+  /** Suggested HTTP status if the error surfaces as an API response. */
+  httpStatus: number;
+  /** Log-level hint: 'error' or 'warning'. */
+  severity:   'error' | 'warning';
+}
+
+/** Read-only mapping: code → metadata. */
+export const errorRegistry: Record<LLMErrorCode | string, ErrorRegistryEntry>;
+
+/**
+ * Base class for every public error thrown by the plugin. Subclasses
+ * pass their code to super(); LLMError enriches with metadata from
+ * `errorRegistry` (primitive, retriable, httpStatus, severity).
+ * @since 1.57.0
+ */
+export class LLMError extends Error {
+  readonly code:       LLMErrorCode | string;
+  readonly primitive:  string;
+  readonly retriable:  boolean;
+  readonly httpStatus: number;
+  readonly severity:   'error' | 'warning';
+  constructor(message: string, code: LLMErrorCode | string);
+}
+
+/** Convenience: `if (isLLMError(e)) handle(e)`. @since 1.57.0 */
+export function isLLMError(err: unknown): err is LLMError;
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {
@@ -1953,7 +2000,7 @@ export interface ChatWithFallbackOptions {
  */
 export function chatWithFallback<T = any>(options: ChatWithFallbackOptions): Promise<FallbackResult<T>>;
 
-export class AllProvidersFailedError extends Error {
+export class AllProvidersFailedError extends LLMError {
   readonly code: 'ALL_PROVIDERS_FAILED';
   readonly attempts: FallbackAttempt[];
   readonly cause?: Error;
@@ -2006,7 +2053,7 @@ export function validateMiddlewareOrder(chain: Array<{ kind?: string }>): Middle
 /** Filter out warnings by code — useful in tests or intentional exceptions. @since 1.48.0 */
 export function filterWarnings(result: MiddlewareOrderingResult, ignoredCodes?: string[]): MiddlewareOrderingResult;
 
-export class BudgetExceededError extends Error {
+export class BudgetExceededError extends LLMError {
   readonly code: 'BUDGET_EXCEEDED';
   readonly scope: BudgetScope;
   readonly key: string;
@@ -2128,7 +2175,7 @@ export interface PromptInjectionGuardMiddleware extends Middleware {
  */
 export function promptInjectionGuard(options?: PromptInjectionGuardOptions): PromptInjectionGuardMiddleware;
 
-export class PromptInjectionError extends Error {
+export class PromptInjectionError extends LLMError {
   readonly code: 'PROMPT_INJECTION';
   readonly score: number;
   readonly evidence: string[];
