@@ -1943,6 +1943,44 @@ export class LLMError extends Error {
 /** Convenience: `if (isLLMError(e)) handle(e)`. @since 1.57.0 */
 export function isLLMError(err: unknown): err is LLMError;
 
+// ---- HTTP error handler middleware (new in 1.58.0) -------------------
+
+export interface LlmErrorHandlerOptions {
+  /**
+   * Optional callback fired for each LLMError caught.
+   * Errors thrown by this callback are swallowed.
+   */
+  log?: (err: LLMError, meta: { method?: string; url?: string; status: number; code: string }) => void;
+  /** Field names to strip from the response body (subclass-specific fields + 'stack'). */
+  mask?: string[];
+  /** Include the stack trace in the response body. Default false. */
+  includeStack?: boolean;
+  /** Pass non-LLMError errors to next() instead of catching. Default true. */
+  passThroughNonLLMErrors?: boolean;
+}
+
+export interface LlmErrorResponseBody {
+  error: {
+    code:       LLMErrorCode | string;
+    primitive:  string;
+    retriable:  boolean;
+    severity:   'error' | 'warning';
+    message:    string;
+    details?:   Record<string, unknown>;
+    stack?:     string;
+  };
+}
+
+/**
+ * Express/CAP-shaped 4-arg error middleware. Catches any LLMError from
+ * downstream, converts it to a structured JSON response with the correct
+ * HTTP status and (when applicable) a `Retry-After` header.
+ * Non-LLMError errors pass through to next() by default.
+ * @since 1.58.0
+ */
+export function llmErrorHandler(options?: LlmErrorHandlerOptions):
+  (err: unknown, req: any, res: any, next: (err?: unknown) => void) => void;
+
 // ---- Provider fallback chain (new in 1.50.0) --------------------------
 
 export interface FallbackProviderEntry {

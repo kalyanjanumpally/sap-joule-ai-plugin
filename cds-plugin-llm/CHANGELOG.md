@@ -4,6 +4,65 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.58.0] — 2026-08-07
+
+### Added
+
+- **`llmErrorHandler` — HTTP error middleware for LLMError.** Express/CAP-shaped 4-arg error middleware. Catches any `LLMError` (1.57 taxonomy) from downstream, converts it to a structured JSON response with the correct HTTP status and (when applicable) a `Retry-After` header.
+
+  ```js
+  const { llmErrorHandler } = require('@saptarishi/cds-plugin-llm');
+
+  app.use(llmErrorHandler({
+    log: (err, meta) => cds.log('llm:http').warn(
+      `[${meta.method} ${meta.url}] ${err.code} → HTTP ${meta.status}`,
+    ),
+  }));
+  ```
+
+  Response:
+
+  ```json
+  HTTP 503
+  Content-Type: application/json
+  Retry-After: 25
+
+  {
+    "error": {
+      "code":      "CIRCUIT_OPEN",
+      "primitive": "circuitBreaker",
+      "retriable": true,
+      "severity":  "error",
+      "message":   "circuitBreaker: circuit is OPEN for provider='openai' — 25000ms cooldown remaining. …",
+      "details":   { "provider": "openai", "cooldownRemainingMs": 25000 }
+    }
+  }
+  ```
+
+- **`Retry-After` header** set automatically when the plugin can suggest a specific wait:
+  - `CircuitOpenError` → `ceil(cooldownRemainingMs / 1000)`
+  - `BulkheadFullError` / `BulkheadTimeoutError` → `1` (retry immediately with backoff)
+  - Other retriable errors — no header (caller decides backoff strategy)
+
+- **Non-LLMError pass-through.** By default, non-`LLMError` exceptions are forwarded to `next(err)` so downstream / default error handlers see them unchanged. Set `passThroughNonLLMErrors: false` to catch everything as a generic `500 { code: 'INTERNAL_ERROR' }` — defense-in-depth for APIs that must never leak a stack trace or internal message.
+
+- **`mask` + `includeStack`** — strip specific fields from the response body (e.g. `mask: ['cooldownRemainingMs']` to hide backoff hints from external clients). `includeStack: true` adds the stack trace to the response for internal debugging; `mask: ['stack']` overrides it back off.
+
+- **`log` callback** fires with `(err, { method, url, status, code })` for each caught `LLMError`. Errors thrown by the callback are swallowed (never affect the outgoing response).
+
+- **Handles bare `http.ServerResponse` shape** (writeHead / end) in addition to Express (status / json), so it drops into any Node HTTP server.
+
+- **Details are subclass-specific.** Everything except the base `LLMError` fields (`code`, `primitive`, `retriable`, `httpStatus`, `severity`, `cause`, `stack`) is serialized into `details`. `Error`-shaped values get flattened to `{ message, name, code }` to keep the response bounded.
+
+### Type definitions
+
+- `LlmErrorHandlerOptions`, `LlmErrorResponseBody`
+- `llmErrorHandler(options?)` returns Express-shaped `(err, req, res, next) => void`
+
+### Backwards compatibility
+
+Additive — no breaking changes.
+
 ## [1.57.0] — 2026-08-07
 
 ### Added

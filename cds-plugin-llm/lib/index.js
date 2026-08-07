@@ -93,6 +93,8 @@ module.exports = {
   LLMError: require('./errors').LLMError,
   errorRegistry: require('./errors').errorRegistry,
   isLLMError: require('./errors').isLLMError,
+  // HTTP error handler — Express-shaped middleware for LLMError → JSON (new in 1.58.0)
+  llmErrorHandler: require('./llmErrorHandler').llmErrorHandler,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,
