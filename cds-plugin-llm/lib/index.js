@@ -132,6 +132,9 @@ module.exports = {
   // Structured output validator — JSON Schema check on LLM responses (new in 1.76.0)
   structuredOutputValidator: require('./middleware/structuredOutputValidator').structuredOutputValidator,
   StructuredOutputInvalidError: require('./middleware/structuredOutputValidator').StructuredOutputInvalidError,
+  // Idempotency — dedupe duplicate requests over a short TTL (new in 1.77.0)
+  idempotency: require('./middleware/idempotency').idempotency,
+  IdempotencyInFlightError: require('./middleware/idempotency').IdempotencyInFlightError,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

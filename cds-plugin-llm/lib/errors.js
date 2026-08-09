@@ -114,6 +114,13 @@ const errorRegistry = {
     httpStatus: 502,     // Bad Gateway — upstream (LLM) returned malformed data
     severity:   'error',
   },
+  // Idempotency family
+  IDEMPOTENCY_IN_FLIGHT: {
+    primitive:  'idempotency',
+    retriable:  true,    // safe to retry once the original completes (short wait)
+    httpStatus: 409,     // Conflict — a request with this key is already being processed
+    severity:   'warning',
+  },
 };
 
 // ---- Base class -------------------------------------------------------

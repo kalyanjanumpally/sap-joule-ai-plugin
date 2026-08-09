@@ -2138,6 +2138,72 @@ export class StructuredOutputInvalidError extends LLMError {
  */
 export function structuredOutputValidator(options?: StructuredOutputValidatorOptions): StructuredOutputValidatorMiddleware;
 
+// ---- Idempotency (new in 1.77.0) -----------------------------------
+
+export interface IdempotencyStats {
+  totalRequests:     number;
+  hits:              number;
+  inFlightCoalesced: number;
+  misses:            number;
+  rejected:          number;
+  evictions:         number;
+  streamsBypassed:   number;
+  errorsBypassed:    number;
+}
+
+export interface IdempotencyOptions {
+  /** Completed-cache TTL in ms. Default 60_000 (1 minute). */
+  ttlMs?:           number;
+  /** LRU max entries. Default 1000. */
+  maxSize?:         number;
+  /** Hash function used when no explicit key. Default hashes model/messages/system/tools/format/etc. */
+  hashOf?:          (ctx: MiddlewareContext) => string;
+  /** Explicit key extractor (e.g. Stripe-style Idempotency-Key header). Falsy return → falls back to hashOf. */
+  keyFrom?:         ((ctx: MiddlewareContext) => string | null | undefined) | null;
+  /** Behavior when a duplicate arrives while the original is still in flight. Default 'coalesce'. */
+  onInFlight?:      'coalesce' | 'reject';
+  /** Behavior when a duplicate arrives within ttlMs after the original completes. Default 'return'. */
+  onDuplicate?:     'return'   | 'reject';
+  /** Cache streams too. Default false (streams bypass — each caller gets a fresh iterator). */
+  captureStreams?:  boolean;
+  /** Clock override for tests. */
+  now?:             () => number;
+}
+
+export interface IdempotencyMiddleware extends Middleware {
+  readonly stats: IdempotencyStats;
+  reset(): void;
+  size(): number;
+  has(key: string): boolean;
+  asMcpResource(): {
+    uri: 'config://idempotency';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => IdempotencyStats & {
+      ttlMs:       number;
+      maxSize:     number;
+      onInFlight:  'coalesce' | 'reject';
+      onDuplicate: 'return' | 'reject';
+      current:     number;
+    };
+  };
+}
+
+export class IdempotencyInFlightError extends LLMError {
+  readonly key:       string;
+  readonly completed: boolean;
+}
+
+/**
+ * Deduplicates duplicate LLM requests over a short TTL window. Protects
+ * against client retries on flaky networks that would otherwise cause
+ * double-billing. Different semantics from responseCache (long warm
+ * cache) and retryOnRateLimit (auto-retry on server errors).
+ * @since 1.77.0
+ */
+export function idempotency(options?: IdempotencyOptions): IdempotencyMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

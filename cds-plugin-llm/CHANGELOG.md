@@ -4,6 +4,47 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.77.0] — 2026-08-09
+
+### Added
+
+- **`idempotency({ ttlMs?, keyFrom?, onInFlight?, onDuplicate?, ... })` — request deduplication over a short TTL window.** Protects against client retries on flaky networks that would otherwise cause double-billing for the same logical call. Different semantics from `responseCache` (long-lived intentional warm cache) and `retryOnRateLimit` (that middleware IS the retry; this handles the mirror case of dedup'ing CLIENT retries).
+
+  ```js
+  const { idempotency } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(idempotency({
+    ttlMs:   60_000,                                       // completed-window: 60s
+    maxSize: 1000,
+    keyFrom: (ctx) => ctx.raw?.headers?.['idempotency-key'],  // Stripe-style
+  }));
+  ```
+
+- **Two duplicate windows, each with two failure modes:**
+
+  | Window | Mode | Behavior |
+  | --- | --- | --- |
+  | in-flight (original still running) | `coalesce` (default) | subsequent callers await the SAME promise; one provider call happens |
+  | in-flight | `reject` | throws `IdempotencyInFlightError` with `completed: false` |
+  | completed (within `ttlMs`) | `return` (default) | subsequent callers get the cached result reference |
+  | completed | `reject` | throws `IdempotencyInFlightError` with `completed: true` |
+
+- **Key computation.** Explicit `keyFrom(ctx)` takes priority — supports Stripe-style `Idempotency-Key` headers or custom logic. Falls back to `hashOf(ctx)` (SHA-256 over model / messages / system / input / maxTokens / temperature / format / tools / seed). Falsy or throwing `keyFrom` transparently falls back. Empty/invalid keys bypass caching entirely.
+
+- **LRU eviction with expiry.** Fixed-size Map (insertion-order preserves LRU). On access, expired entries at the head are swept. On write, if at capacity, oldest is evicted. Touching an entry (hit or coalesce) moves it to the end.
+
+- **Errors are NOT cached.** A failed original call is removed from the store immediately — subsequent retry legitimately re-invokes the provider. Coalesced callers on an in-flight failure all receive the same rejection. `stats.errorsBypassed` tracks this.
+
+- **Streams bypass by default** (`captureStreams: false`). Async iterators can't be shared safely — each caller must own its iteration. `captureStreams: true` is available for advanced use where callers coordinate consumption. `stats.streamsBypassed` counts.
+
+- **New error code `IDEMPOTENCY_IN_FLIGHT`** in the 1.57 taxonomy: `httpStatus: 409` (Conflict — a request with this key is already being processed), `retriable: true` (safe to retry once the original completes), `severity: warning`. `IdempotencyInFlightError` carries `key` (full hash) and `completed` (boolean).
+
+- **Introspection.** `stats: { totalRequests, hits, inFlightCoalesced, misses, rejected, evictions, streamsBypassed, errorsBypassed }` + `size()` + `has(key)` + `reset()` + `asMcpResource()` → `config://idempotency`.
+
+- **TypeScript.** `IdempotencyOptions`, `IdempotencyStats`, `IdempotencyMiddleware`, `IdempotencyInFlightError`.
+
+- **Recommended placement.** OUTER of `usageMetering` / `costBudget` (dedupes shouldn't re-bill), INNER of `promptInjectionGuard` / `guardrails` (still validate every caller's input, but dedupe the LLM call).
+
 ## [1.76.0] — 2026-08-07
 
 ### Added
