@@ -2241,6 +2241,70 @@ export function waitForBatch(svc: any, id: string, opts?: WaitForBatchOptions): 
  */
 export function runBatch(svc: any, requests: any[], opts?: WaitForBatchOptions): Promise<any[]>;
 
+// ---- PII redaction (new in 1.80.0) -----------------------------------
+
+export type PiiDetectorName = 'email' | 'phone' | 'ssn' | 'creditCard' | 'iban';
+
+export interface PiiCustomDetector {
+  pattern: RegExp;                    // must have global flag
+  validate?: (match: string) => boolean;
+}
+
+export interface PiiRedactOptions {
+  /** Built-in detectors to enable. Default: all. */
+  detectors?:       PiiDetectorName[];
+  /** Additional custom detectors keyed by name. Patterns MUST have the 'g' flag. */
+  customDetectors?: Record<string, PiiCustomDetector>;
+  /** Token generator. Default: `<PII_${TYPE}_${index}>`. */
+  tokenFor?:        (type: string, index: number) => string;
+  /** Request fields to scan. Default ['messages', 'system', 'input']. */
+  fields?:          string[];
+  /** Un-mask tokens in the response text. Default true (round-trip). */
+  unmaskResponse?:  boolean;
+  /** Detect streams and skip response un-masking (stats.streamsSkipped++). Default true. */
+  captureStreams?:  boolean;
+}
+
+export interface PiiRedactStats {
+  totalRequests:     number;
+  requestsWithPii:   number;
+  tokensReplaced:    number;
+  responsesUnmasked: number;
+  streamsSkipped:    number;
+  byType:            Record<string, number>;
+}
+
+export interface PiiRedactMiddleware extends Middleware {
+  readonly stats: PiiRedactStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://pii-redact';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => PiiRedactStats & {
+      detectors:      string[];
+      unmaskResponse: boolean;
+      captureStreams: boolean;
+    };
+  };
+}
+
+/**
+ * Automatic PII masking. Detects emails / phones / SSNs / credit cards /
+ * IBANs (and any custom regex) in outbound requests and replaces them
+ * with reversible tokens BEFORE the request reaches the provider.
+ * Optionally un-masks in the response text for round-trip use.
+ * Companion to guardrails (which BLOCKS) — this SANITIZES so calls
+ * proceed safely.
+ * @since 1.80.0
+ */
+export function piiRedact(options?: PiiRedactOptions): PiiRedactMiddleware;
+
+export const BUILT_IN_PII_DETECTORS: Record<PiiDetectorName, { pattern: RegExp; validate?: (m: string) => boolean }>;
+
+export function luhnValid(digits: string): boolean;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

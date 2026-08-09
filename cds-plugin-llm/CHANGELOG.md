@@ -4,6 +4,63 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.80.0] — 2026-08-09
+
+### Added
+
+- **`piiRedact({ detectors?, customDetectors?, unmaskResponse?, ... })` — automatic PII masking with reversible round-trip.** Detects emails / phones / SSNs / credit cards / IBANs (and any custom regex) in outbound requests and replaces them with tokens BEFORE the request reaches the provider. Optionally un-masks tokens in the response text so the caller sees the original values back.
+
+  ```js
+  const { piiRedact } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(piiRedact({
+    detectors:      ['email', 'phone', 'ssn', 'creditCard', 'iban'],
+    unmaskResponse: true,
+  }));
+
+  const res = await llm.chat({
+    messages: [{ role: 'user', content: 'send followup to alice@example.com' }],
+  });
+  //  provider only ever saw:  "send followup to <PII_EMAIL_1>"
+  //  caller receives:         "acknowledged — will email alice@example.com"
+  ```
+
+- **Complements `guardrails` (which BLOCKS PII) and `promptInjectionGuard` (which flags injection patterns).** This middleware SANITIZES so calls proceed safely — different failure mode. Use guardrails to reject; use piiRedact to allow-with-masking.
+
+- **Built-in detectors (dep-free):**
+  - **`email`** — RFC 5321 basic pattern
+  - **`phone`** — E.164 + common US/EU formats; validated to require 10–15 digits (avoids capturing short numeric IDs)
+  - **`ssn`** — US SSN strict format (`\d{3}-\d{2}-\d{4}` with area-code exclusions like 000/666/9xx)
+  - **`creditCard`** — 13–19 digit runs with optional separators; **Luhn-validated** to filter false-positives (invoice numbers, part numbers, ...)
+  - **`iban`** — 2-letter country + 2 check digits + 11–30 alphanumeric
+
+- **Custom detectors** — pass any regex (must have `g` flag) + optional `validate` callback. Great for domain-specific tokens like employee IDs, PO numbers, or account references:
+
+  ```js
+  piiRedact({
+    customDetectors: {
+      employeeId: { pattern: /EMP\d{6}/g },
+      poNumber:   { pattern: /PO-\d{8}/g },
+    },
+  });
+  ```
+
+- **Reversible + de-duplicated.** Same original value gets the same token across a request (so "call alice@x.com; reply to alice@x.com" produces one token, not two). On response, tokens are replaced with originals — longest-token-first ordering handles `<PII_EMAIL_10>` vs `<PII_EMAIL_1>` collisions correctly.
+
+- **Non-destructive to `ctx.request`.** The middleware mutates `ctx.request` for the inner `next()` call only, then restores the original in a `finally` block so outer middleware sees no side effects.
+
+- **Configurable scope** — `fields: ['messages', 'system', 'input']` by default. `messages` walks both string content and multimodal `content[].type === 'text'` blocks; image / document blocks pass through untouched.
+
+- **Streams** — request-side redaction always works. Response un-masking on streams is DEFERRED (tokens may split across chunks) — `stats.streamsSkipped` counts occurrences so you can dashboard the gap.
+
+- **Custom token format** — `tokenFor: (type, index) => string`. Default `<PII_${TYPE}_${index}>`; swap for `[[email#1]]`, `{{PII_EMAIL_1}}`, or any other convention your prompts expect.
+
+- **Introspection.** `stats: { totalRequests, requestsWithPii, tokensReplaced, responsesUnmasked, streamsSkipped, byType: { email, phone, ssn, ... } }` + `reset()` + `asMcpResource()` → `config://pii-redact`.
+
+- **TypeScript.** `PiiRedactOptions`, `PiiRedactStats`, `PiiRedactMiddleware`, `PiiDetectorName`, `PiiCustomDetector`, `BUILT_IN_PII_DETECTORS`, `luhnValid`.
+
+- **Recommended placement.** OUTER of the provider (must redact before request leaves). INNER of `jsonLog` / `replayBuffer` so observability sees the redacted view — bonus safety across the stack.
+
 ## [1.79.0] — 2026-08-09
 
 ### Added

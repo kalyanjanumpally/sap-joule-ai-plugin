@@ -139,6 +139,10 @@ module.exports = {
   waitForBatch:      require('./batchHelpers').waitForBatch,
   runBatch:          require('./batchHelpers').runBatch,
   BatchTimeoutError: require('./batchHelpers').BatchTimeoutError,
+  // PII redaction — mask emails/phones/SSNs/credit cards/IBANs on request; un-mask on response (new in 1.80.0)
+  piiRedact:         require('./middleware/piiRedact').piiRedact,
+  BUILT_IN_PII_DETECTORS: require('./middleware/piiRedact').BUILT_IN_DETECTORS,
+  luhnValid:         require('./middleware/piiRedact').luhnValid,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,
