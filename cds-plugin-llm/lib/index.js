@@ -135,6 +135,10 @@ module.exports = {
   // Idempotency — dedupe duplicate requests over a short TTL (new in 1.77.0)
   idempotency: require('./middleware/idempotency').idempotency,
   IdempotencyInFlightError: require('./middleware/idempotency').IdempotencyInFlightError,
+  // Batch orchestration helpers on top of the 1.25.0 batch API (new in 1.79.0)
+  waitForBatch:      require('./batchHelpers').waitForBatch,
+  runBatch:          require('./batchHelpers').runBatch,
+  BatchTimeoutError: require('./batchHelpers').BatchTimeoutError,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

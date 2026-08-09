@@ -4,6 +4,77 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.79.0] — 2026-08-09
+
+### Added
+
+- **Batch orchestration helpers + `saptarishi-llm batch` CLI** on top of the existing 1.25.0 batch API. Reduces the poll-until-done boilerplate for evals, offline enrichment, backfills, and other bulk workloads that can tolerate the 24h SLA in exchange for ~50% cost savings.
+
+- **`waitForBatch(svc, id, opts)` — poll-until-terminal helper.** Handles the polling loop that every batch consumer ends up writing by hand.
+
+  ```js
+  const { waitForBatch } = require('@saptarishi/cds-plugin-llm');
+
+  const status = await waitForBatch(llm, handle.id, {
+    pollIntervalMs: 30_000,
+    timeoutMs:      6 * 60 * 60 * 1000,   // 6h
+    onProgress: (s) => log.info(`${s.status} — ${s.counts?.succeeded ?? 0} done`),
+  });
+  ```
+  Returns when status hits `completed` / `failed` / `canceled`. Throws `BatchTimeoutError` past `timeoutMs`. `onProgress` fires on every poll (errors swallowed — a broken listener never breaks the loop). Test-friendly `now` + `sleep` overrides.
+
+- **`runBatch(svc, requests, opts)` — one-shot: submit → wait → results.** For the very common "kick off + block until done" flow.
+
+  ```js
+  const rows = await runBatch(llm, [
+    { customId: 'inv-001', messages: [...] },
+    { customId: 'inv-002', messages: [...] },
+  ], { pollIntervalMs: 60_000 });
+  // → BatchResult[] with { customId, text, model, usage, error? }
+  ```
+  Throws if the terminal status is anything other than `completed`.
+
+- **`saptarishi-llm batch` CLI** — offline workflows without writing code:
+
+  ```
+  saptarishi-llm batch submit  <requests.jsonl> [--out batch.id]
+  saptarishi-llm batch status  <id> [--json]
+  saptarishi-llm batch results <id> [--out results.jsonl] [--json]
+  saptarishi-llm batch wait    <id> [--poll 30] [--timeout 3600] [--out results.jsonl]
+  saptarishi-llm batch cancel  <id>
+  ```
+
+  Input JSONL — one request per line:
+  ```json
+  {"customId":"r1","messages":[{"role":"user","content":"..."}],"maxTokens":200}
+  ```
+  Output JSONL — one BatchResult per line:
+  ```json
+  {"customId":"r1","text":"...","model":"...","usage":{...}}
+  ```
+
+- **Shell-composable workflow.** Fits Unix pipelines cleanly:
+
+  ```sh
+  # Overnight eval:
+  saptarishi-llm batch submit eval-set.jsonl --provider anthropic --out batch.id
+  saptarishi-llm batch wait $(cat batch.id) --poll 60 --out results.jsonl
+
+  # Progress check during long runs:
+  saptarishi-llm batch status $(cat batch.id) --json | jq '.counts'
+
+  # Emergency cancel:
+  saptarishi-llm batch cancel $(cat batch.id)
+  ```
+
+- **Sensible model defaulting.** `batch submit` fills in `--model` on any JSONL row that doesn't specify one — matches the intuitive "same model for the whole batch" default while still letting individual rows override.
+
+- **Exit codes** — `0` on success (or in-progress status), `1` on failed/canceled batch or timeout, `2` on usage errors. CI/cron-friendly.
+
+- **TypeScript** — `waitForBatch`, `runBatch`, `WaitForBatchOptions`, `BatchTimeoutError`.
+
+- **`cds-llm` alias** (from 1.74) also exposes `cds-llm batch ...`.
+
 ## [1.78.0] — 2026-08-09
 
 ### Added

@@ -17,6 +17,7 @@ const COMMANDS = {
   'chain-validate':  require('./commands/chainValidate'),
   preflight:         require('./commands/preflightCmd'),
   doctor:            require('./commands/doctor'),
+  batch:             require('./commands/batch'),
   help: async () => { printHelp(); return 0; },
 };
 
@@ -52,6 +53,9 @@ const GLOBAL_OPTS = {
   // Doctor flags (1.78.0)
   'skip-network':  { type: 'boolean' },
   'timeout':       { type: 'string' },
+  // Batch flags (1.79.0)
+  'out':           { type: 'string' },
+  'poll':          { type: 'string' },
 };
 
 async function run(argv) {
@@ -127,6 +131,7 @@ commands:
   chain-validate <chain.json>           Check chain ordering for warnings/errors
   preflight <config.json>               Run boot-time config check (env/models/chain)
   doctor                                One-shot env diagnostic (Node/pkg/env/providers/MCP)
+  batch <sub> ...                       Offline batch workflows (submit/status/wait/results/cancel)
   help        Show this help
 
 common options:

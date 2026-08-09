@@ -2204,6 +2204,43 @@ export class IdempotencyInFlightError extends LLMError {
  */
 export function idempotency(options?: IdempotencyOptions): IdempotencyMiddleware;
 
+// ---- Batch orchestration helpers (new in 1.79.0) ---------------------
+
+export interface WaitForBatchOptions {
+  /** Poll interval between getBatch() calls. Default 30_000ms (30s). */
+  pollIntervalMs?: number;
+  /** Max wait before giving up. Default 6h. */
+  timeoutMs?:      number;
+  /** Fired on every poll (including the first). Errors are swallowed. */
+  onProgress?:     (status: any) => void | Promise<void>;
+  /** Clock override for tests. */
+  now?:            () => number;
+  /** Delay override for tests. */
+  sleep?:          (ms: number) => Promise<void>;
+}
+
+export class BatchTimeoutError extends Error {
+  readonly batchId:    string;
+  readonly elapsedMs:  number;
+  readonly lastStatus: string;
+}
+
+/**
+ * Poll `svc.getBatch(id)` until the batch reaches a terminal state
+ * (completed/failed/canceled) or the timeout elapses. Returns the
+ * final status object. Reduces boilerplate around the poll-until-done
+ * pattern for evals + offline pipelines.
+ * @since 1.79.0
+ */
+export function waitForBatch(svc: any, id: string, opts?: WaitForBatchOptions): Promise<any>;
+
+/**
+ * One-shot: submit a batch, wait for completion, return results.
+ * Throws if the terminal status is not 'completed'.
+ * @since 1.79.0
+ */
+export function runBatch(svc: any, requests: any[], opts?: WaitForBatchOptions): Promise<any[]>;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
