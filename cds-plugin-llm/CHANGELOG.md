@@ -4,6 +4,50 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.78.0] — 2026-08-09
+
+### Added
+
+- **`saptarishi-llm doctor` — one-shot environment diagnostic.** Runs a battery of static + live checks and reports pass/warn/fail per check with remediation tips. Where `verify` probes a single provider, `doctor` sweeps the whole environment. Rounds out the CLI observability arc: `chain-visualize` / `chain-diff` / `chain-validate` / `preflight` → `doctor`.
+
+  ```
+  $ saptarishi-llm doctor
+  ✓ ok      node-version  v22.11.0
+  ✓ ok      package-version  @saptarishi/cds-plugin-llm v1.78.0
+  ✓ ok      environment  2 credential(s) detected: ANTHROPIC_API_KEY=sk-a...9dQr, GROQ_API_KEY=gsk_...m8kA
+  ✓ ok      mcp-transports  httpTransport, streamableHttpTransport
+  ✓ ok      provider:anthropic  claude-opus-4-7 responded in 412ms
+  ✗ error   provider:groq  failed in 118ms: Unauthorized
+
+  summary: 5 ok, 0 warnings, 1 errors  (623ms)
+
+  remediation:
+    ✗ provider:groq: Credentials rejected. Verify GROQ_API_KEY at the provider console.
+  ```
+
+- **Checks performed:**
+  - **`node-version`** — verifies Node ≥ 18
+  - **`package-version`** — self-reports plugin name + version
+  - **`environment`** — enumerates known credential env vars, reports which are set (redacted preview: `sk-a...9dQr`)
+  - **`mcp-transports`** — attempts to load `httpTransport` + `streamableHttpTransport` modules
+  - **`provider:<kind>`** (one per detected credential) — tiny chat probe with latency + `ok`-substring check
+
+- **Automatic provider detection.** Sweeps `ANTHROPIC_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY` / `FIREWORKS_API_KEY` / `DEEPSEEK_API_KEY` / `MISTRAL_API_KEY` / `AZURE_OPENAI_API_KEY` / `AICORE_URL` / `OLLAMA_URL` and probes each one. Force a single one with `--provider <kind>`.
+
+- **Remediation tips**. Error-shape → hint mapping. Recognizes 401 (credentials rejected + which env var to check), 429 (rate-limited), network errors (`ENOTFOUND` / `ECONNREFUSED` / `ETIMEDOUT` — check firewall / VPN / DNS), missing env vars, and timeouts.
+
+- **Redaction.** Credentials are never printed in full — shown as first-4 + `...` + last-4 (e.g. `sk-a...9dQr`). Short strings (≤ 8 chars) mask completely as `***`.
+
+- **Flags:**
+  - `--provider <kind>` — probe only this provider (default: all detected)
+  - `--skip-network` — env / package / MCP checks only (fast, safe for CI)
+  - `--timeout <ms>` — per-provider probe timeout (default 15000)
+  - `--json` — structured `{ checks, counts, durationMs }` report for scripts
+
+- **Exit code**: `0` if all pass, `1` on any error, `2` on usage error. Composable in shell one-liners: `saptarishi-llm doctor --skip-network --json | jq '.counts'`.
+
+- **`cds-llm` alias** (from 1.74) also exposes: `cds-llm doctor`.
+
 ## [1.77.0] — 2026-08-09
 
 ### Added

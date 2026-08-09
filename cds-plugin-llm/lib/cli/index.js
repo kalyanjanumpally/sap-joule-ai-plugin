@@ -16,6 +16,7 @@ const COMMANDS = {
   'chain-diff':      require('./commands/chainDiff'),
   'chain-validate':  require('./commands/chainValidate'),
   preflight:         require('./commands/preflightCmd'),
+  doctor:            require('./commands/doctor'),
   help: async () => { printHelp(); return 0; },
 };
 
@@ -48,6 +49,9 @@ const GLOBAL_OPTS = {
   // Chain observability flags (1.74.0)
   'no-colors':     { type: 'boolean' },
   'strict':        { type: 'boolean' },
+  // Doctor flags (1.78.0)
+  'skip-network':  { type: 'boolean' },
+  'timeout':       { type: 'string' },
 };
 
 async function run(argv) {
@@ -122,6 +126,7 @@ commands:
   chain-diff <a.json> <b.json>          Diff two chain snapshots (CI drift check)
   chain-validate <chain.json>           Check chain ordering for warnings/errors
   preflight <config.json>               Run boot-time config check (env/models/chain)
+  doctor                                One-shot env diagnostic (Node/pkg/env/providers/MCP)
   help        Show this help
 
 common options:
