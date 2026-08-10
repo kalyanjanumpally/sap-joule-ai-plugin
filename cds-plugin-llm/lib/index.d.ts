@@ -2793,6 +2793,81 @@ export class SafetyClassifierBlockedError extends LLMError {
  */
 export function safetyClassifier(options?: SafetyClassifierOptions): SafetyClassifierMiddleware;
 
+// ---- Prompt regression detector (new in 1.89.0) ----------------------
+
+export interface RegressionFixture {
+  name?:     string;
+  path?:     string;
+  request: {
+    system?:   string;
+    messages:  Array<any>;
+    maxTokens?: number;
+    format?:   Record<string, unknown>;
+    [k: string]: unknown;
+  };
+  criteria:  JudgeCriteria;
+  context?:  string;
+  threshold?: number;
+}
+
+export interface RegressionResult {
+  name:              string;
+  verdict:           'pass' | 'fail' | 'error';
+  score:             number;
+  criteriaResults?:  JudgeCriterionResult[];
+  overallRationale?: string;
+  response?:         string;
+  error?:            string;
+  durationMs:        number;
+}
+
+export interface RegressionReport {
+  total:    number;
+  passed:   number;
+  failed:   number;
+  errors:   number;
+  passRate: number;
+  results:  RegressionResult[];
+}
+
+export interface PromptRegressionOptions {
+  llm?:              { chat: (req: any) => Promise<any> };
+  chat?:             (req: any) => Promise<any>;
+  fixtures:          RegressionFixture[];
+  judgeLlm?:         { chat: (req: any) => Promise<any> };
+  judgeChat?:        (req: any) => Promise<any>;
+  judgeModel?:       string;
+  judgeSystem?:      string;
+  judgeTemperature?: number;
+  concurrency?:      number;
+  onProgress?:       (info: RegressionResult & { index: number; total: number }) => void | Promise<void>;
+  defaultThreshold?: number;
+}
+
+/**
+ * Given a folder of fixture files (or an array of in-memory
+ * fixtures), runs each prompt through the LLM, uses llmJudge (1.84)
+ * to score against criteria, and aggregates a pass/fail report.
+ * Perfect for CI eval loops that catch prompt regressions.
+ * @since 1.89.0
+ */
+export function promptRegression(options: PromptRegressionOptions): Promise<RegressionReport>;
+
+/**
+ * Read every .json file in `dir`, parse, tag each with .name
+ * (from filename if not present) + .path. Non-JSON files are
+ * silently skipped. Deterministic order (alphabetical by name).
+ * @since 1.89.0
+ */
+export function loadFixtures(dir: string): RegressionFixture[];
+
+/**
+ * Render a RegressionReport as a human-readable multi-line string.
+ * Optional colors:true for ANSI escape codes.
+ * @since 1.89.0
+ */
+export function formatRegressionReport(report: RegressionReport, options?: { colors?: boolean }): string;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

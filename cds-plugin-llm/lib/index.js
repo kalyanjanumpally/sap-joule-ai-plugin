@@ -160,6 +160,10 @@ module.exports = {
   // Content safety classifier — model-based classification via OpenAI moderation + Anthropic refusal detection (new in 1.88.0)
   safetyClassifier:  require('./middleware/safetyClassifier').safetyClassifier,
   SafetyClassifierBlockedError: require('./middleware/safetyClassifier').SafetyClassifierBlockedError,
+  // Prompt regression detector — CI eval loop on top of llmJudge (new in 1.89.0)
+  promptRegression:  require('./promptRegression').promptRegression,
+  loadFixtures:      require('./promptRegression').loadFixtures,
+  formatRegressionReport: require('./promptRegression').formatReport,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

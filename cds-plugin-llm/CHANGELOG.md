@@ -4,6 +4,79 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.89.0] — 2026-08-10
+
+### Added
+
+- **`promptRegression({ fixtures, llm, judgeLlm? }) → { total, passed, failed, errors, passRate, results }` — batch prompt-quality harness on top of `llmJudge` (1.84).** Given a folder of fixture files (or in-memory objects), runs each prompt through the LLM, judges responses against criteria, aggregates a pass/fail report. Turns "did my prompt change break anything?" into a green/red CI signal.
+
+  ```js
+  const { promptRegression, loadFixtures } = require('@saptarishi/cds-plugin-llm');
+
+  const report = await promptRegression({
+    llm,                             // service under test
+    fixtures: loadFixtures('./test/fixtures'),
+    judgeLlm: strongerLlm,           // often more capable than llm under test
+    judgeModel: 'claude-opus-4-7',
+    concurrency: 5,
+    onProgress: (info) => console.log(info.name, info.verdict),
+  });
+
+  // {
+  //   total: 12, passed: 11, failed: 1, errors: 0,
+  //   passRate: 0.917,
+  //   results: [{ name, verdict, score, criteriaResults, response, durationMs }, ...],
+  // }
+
+  if (report.passRate < 0.90) process.exit(1);   // CI gate
+  ```
+
+- **Fixture format** — JSON files (or in-memory objects) with:
+  ```json
+  {
+    "name":     "extract invoice line items",
+    "request": {
+      "system":   "You extract invoices...",
+      "messages": [{ "role": "user", "content": "Extract this: ..." }],
+      "format":   { "type": "object", "properties": { ... } }
+    },
+    "criteria": "response must include a vendor and totalAmount",
+    "context":  "Ground truth: vendor=Acme, totalAmount=1234.56",
+    "threshold": 0.7
+  }
+  ```
+  `criteria` accepts the same three forms as `llmJudge`: single string, array of strings, or full rubric with weights. `threshold` is per-fixture; falls back to `defaultThreshold` (0.7).
+
+- **`loadFixtures(dir)` helper** — reads every `.json` file in a directory, parses, tags each with `name` (from filename if not specified) + `path` (for error messages). Non-JSON files silently skipped. Deterministic alphabetical order (repeat runs produce identical result[] orderings — makes diffs meaningful).
+
+- **`formatRegressionReport(report, { colors? })` — human-readable output** for CI logs:
+  ```
+    ✓ extract-invoice-line-items  (score=0.92, 1240ms)
+    ✓ summarize-purchase-order  (score=0.88, 980ms)
+    ✗ assess-supplier-risk  (score=0.42, 1560ms)
+       ✗ grounding: does not cite the supplier ID from context
+       ✗ confidence: missing the confidence field
+    ! transcribe-voice-note  (score=0.00, 50ms)
+       error: llm response had no text field
+
+  summary: 2 passed, 1 failed, 1 errors  (pass rate: 50.0%)
+  ```
+  ANSI colors via `colors: true` — great for terminal, safe for pipes (default is monochrome).
+
+- **Fail fast on bad fixtures.** Fixtures are validated upfront (before ANY LLM call) — a typo in one file surfaces immediately instead of eating half your test budget before the next `missing criteria` error.
+
+- **Per-fixture error isolation.** A provider outage on fixture #5 doesn't fail the batch — that entry gets `verdict: 'error'`, `error: <msg>`, and the harness carries on. Perfect for large eval suites where flaky provider calls shouldn't mask real regressions.
+
+- **Concurrent execution** — `concurrency: 5` runs 5 fixtures in parallel by default. Combine with the bulkhead middleware for provider-side control.
+
+- **Separate judge model** — the well-known pattern: judge with a stronger model (`opus`, `gpt-4o`) than the one being judged (`haiku`, `mini`). Pass `judgeLlm` or `judgeChat` distinct from the main `llm`.
+
+- **`onProgress` callback** fires with `{ name, verdict, score, index, total, ... }` per fixture as they complete. Errors swallowed. Great for streaming progress to CI log.
+
+- **TypeScript.** `RegressionFixture`, `RegressionResult`, `RegressionReport`, `PromptRegressionOptions`.
+
+- **Not middleware — a top-level helper.** Regression runs happen in CI, not in the request pipeline. Wire the LLM under test with your standard chain (metering, cost limits, etc.); those apply to eval calls just like production traffic.
+
 ## [1.88.0] — 2026-08-10
 
 ### Added
