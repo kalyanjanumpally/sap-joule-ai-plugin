@@ -19,6 +19,7 @@ const COMMANDS = {
   doctor:            require('./commands/doctor'),
   batch:             require('./commands/batch'),
   'export-dashboard': require('./commands/exportDashboard'),
+  'lint-prompts':     require('./commands/lintPrompts'),
   help: async () => { printHelp(); return 0; },
 };
 
@@ -64,6 +65,9 @@ const GLOBAL_OPTS = {
   'datasource':    { type: 'string' },
   'job':           { type: 'string' },
   'account':       { type: 'string' },
+  // Lint prompts flags (1.98.0) — 'max-tokens' already declared above
+  'forbidden':     { type: 'string' },
+  'ignore':        { type: 'string' },
 };
 
 async function run(argv) {
@@ -141,6 +145,7 @@ commands:
   doctor                                One-shot env diagnostic (Node/pkg/env/providers/MCP)
   batch <sub> ...                       Offline batch workflows (submit/status/wait/results/cancel)
   export-dashboard --format <fmt>       Emit Grafana / Datadog / New Relic dashboards + Prometheus alert rules
+  lint-prompts <dir>                    Static analysis of prompt templates (missing vars / injection / etc.)
   help        Show this help
 
 common options:

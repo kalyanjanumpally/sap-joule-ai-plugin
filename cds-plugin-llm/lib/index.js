@@ -190,6 +190,12 @@ module.exports = {
   hashAuditEntry:     require('./middleware/sensitiveDataAudit').hashEntry,
   // Streaming token throttler — rate-limit stream chunk emission for smooth UI cursor (new in 1.97.0)
   streamThrottle:     require('./middleware/streamThrottle').streamThrottle,
+  // Prompt template linter — static-analysis for prompt templates (new in 1.98.0)
+  lintPrompt:         require('./lintPrompt').lintPrompt,
+  lintPrompts:        require('./lintPrompt').lintPrompts,
+  formatLintReport:   require('./lintPrompt').formatLintReport,
+  KNOWN_LINT_RULES:   require('./lintPrompt').KNOWN_RULES,
+  DEFAULT_INJECTION_PATTERNS: require('./lintPrompt').DEFAULT_INJECTION_PATTERNS,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

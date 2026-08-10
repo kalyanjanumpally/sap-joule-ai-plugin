@@ -4,6 +4,79 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.98.0] — 2026-08-10
+
+### Added
+
+- **`lintPrompt(text, options?) → { ok, errors, warnings, info, stats }` + `saptarishi-llm lint-prompts <dir>` CLI — static analysis for prompt templates.** Catches common issues BEFORE they hit production — missing / stale `{{variable}}` substitutions, malformed variables, mixed indentation, trailing whitespace, prompt-injection patterns inside the system prompt itself, role markers, forbidden phrases, overly long prompts. Companion to `promptRegression` (1.89) — the linter catches **template** issues (static analysis), the regression detector catches **behavioral** drift (dynamic scoring).
+
+  ```js
+  const { lintPrompt } = require('@saptarishi/cds-plugin-llm');
+
+  const report = lintPrompt(text, {
+    variables: { poId: 'PO-42', supplier: 'Acme' },
+    maxTokens: 2000,
+    forbidden: ['ignore previous', 'act as'],
+  });
+
+  //  {
+  //    ok: false,
+  //    errors: [
+  //      { code: 'MISSING_VAR', line: 5, col: 12, message: 'Variable {{buyer}} is used but not provided.', fixit: '...' },
+  //      { code: 'INJECTION_PATTERN', line: 12, col: 1, message: '...ignore all previous...', fixit: '...' },
+  //    ],
+  //    warnings: [
+  //      { code: 'MIXED_INDENT', ... },
+  //      { code: 'TRAILING_WHITESPACE', line: 8, ... },
+  //    ],
+  //    info: [{ code: 'UNUSED_VAR', ... }],
+  //    stats: { chars, lines, tokens, variablesUsed, variablesDeclared },
+  //  }
+  ```
+
+- **CLI companion**: `saptarishi-llm lint-prompts <dir> [options]` (also `cds-llm lint-prompts ...`). Walks a directory of `.txt` / `.md` / `.prompt` files, lints each, prints a human-readable report. **CI-integratable** — exit code 0 clean, 1 any errors, 2 usage/read errors.
+
+  ```sh
+  saptarishi-llm lint-prompts ./prompts
+  saptarishi-llm lint-prompts ./prompts --max-tokens 2000
+  saptarishi-llm lint-prompts ./prompts --forbidden ./banned.txt --ignore UNUSED_VAR,TRAILING_WHITESPACE
+  saptarishi-llm lint-prompts ./prompts --json > lint-report.json
+  ```
+
+- **11 stable rule codes** — each suppressible via `ignore: ['CODE']`:
+  - **Errors** (fail-CI): `MISSING_VAR`, `MALFORMED_VAR`, `INJECTION_PATTERN`, `EMPTY`
+  - **Warnings**: `TOO_LONG`, `MIXED_INDENT`, `TRAILING_WHITESPACE`, `ROLE_MARKER`, `FORBIDDEN_PHRASE`, `DUPLICATE_LINE`
+  - **Info**: `UNUSED_VAR`
+
+- **Variable analysis** — declares vs. references cross-check. `{{name}}` and `{{ name }}` (whitespace tolerant), dotted paths (`{{user.name}}`). `MALFORMED_VAR` catches typos like `{{ bad name }}` (embedded spaces).
+
+- **Injection pattern detection** (`DEFAULT_INJECTION_PATTERNS`) catches the common jailbreak seeds accidentally left in prompts:
+  - `ignore previous instructions` / `disregard all prompts` (classic prompt injection)
+  - `you are now a jailbroken assistant` (role-swap)
+  - `system:` inline (system-prompt inline injection)
+  - `<|im_start|>` / `<|end_header_id|>` (chat template tokens leaking through)
+
+  Custom patterns via `injectionPatterns: [{ re: RegExp, name: string }]`.
+
+- **Role marker warning** — lines containing `assistant:` / `user:` / `human:` / `system:` (with word-boundary check to avoid false positives on "You are a helpful assistant.") get `ROLE_MARKER` warning. These can confuse LLM turn boundaries when copy-pasted from chat logs.
+
+- **Forbidden phrase checklist** — pass an array of phrases to flag (case-insensitive). CLI supports `--forbidden <file>` reading one phrase per line (`#` prefix = comment). Useful for organizational compliance rules ("don't say 'guarantee'", "don't use 'we promise'", etc.).
+
+- **`lintPrompts(prompts, options?)` batch API** — lints an object of `{ name: text }` prompts, returns `{ ok, byName, summary }`. Great for prompt-registry integration.
+
+- **`formatLintReport(report, { colors? })`** — human-readable renderer for CI logs. `✗ error` (red), `⚠ warn` (yellow), `info` (dim). ANSI colors optional; safe for pipes when disabled.
+
+- **Exit codes** — CLI-friendly: 0 clean, 1 any errors, 2 usage / read errors. Composable in shell one-liners.
+
+- **TypeScript.** `LintIssue`, `LintReport`, `LintOptions`, `LintBatchReport`, `KNOWN_LINT_RULES`, `DEFAULT_INJECTION_PATTERNS`.
+
+- **`cds-llm` alias** (from 1.74) also exposes: `cds-llm lint-prompts ...`.
+
+- **Recommended workflow.**
+  1. Store prompts in `./prompts/*.md` (one prompt per file, with `# Frontmatter` optional)
+  2. Add `saptarishi-llm lint-prompts ./prompts --max-tokens 2000` to the CI pipeline
+  3. Combine with `saptarishi-llm chain-visualize` (1.74) + `promptRegression` (1.89) for the full prompt-QA loop: **static analysis** (this) → **structural check** (visualize) → **behavioral scoring** (regression)
+
 ## [1.97.0] — 2026-08-10
 
 ### Added

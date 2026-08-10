@@ -3373,6 +3373,80 @@ export interface StreamThrottleMiddleware extends Middleware {
  */
 export function streamThrottle(options?: StreamThrottleOptions): StreamThrottleMiddleware;
 
+// ---- Prompt template linter (new in 1.98.0) ---------------------------
+
+export interface LintIssue {
+  code:    string;
+  line:    number;
+  col:     number;
+  message: string;
+  fixit:   string;
+}
+
+export interface LintReport {
+  ok:       boolean;
+  errors:   LintIssue[];
+  warnings: LintIssue[];
+  info:     LintIssue[];
+  stats: {
+    chars:              number;
+    lines:              number;
+    tokens:             number;
+    variablesUsed:      string[];
+    variablesDeclared:  string[];
+  };
+}
+
+export interface LintOptions {
+  variables?:         Record<string, unknown> | null;
+  maxTokens?:         number | null;
+  forbidden?:         string[];
+  injectionPatterns?: Array<{ re: RegExp; name: string }>;
+  ignore?:            string[];
+  noDuplicateLines?:  boolean;
+}
+
+export interface LintBatchReport {
+  ok:       boolean;
+  byName:   Record<string, LintReport>;
+  summary: {
+    promptCount:   number;
+    totalErrors:   number;
+    totalWarnings: number;
+  };
+}
+
+/**
+ * Static analysis for prompt templates. Catches common issues:
+ * missing / stale {{var}} substitutions, malformed variables, mixed
+ * indentation, trailing whitespace, prompt-injection patterns in
+ * the system prompt itself, role markers, forbidden phrases, overly
+ * long prompts. Companion to promptRegression (1.89) — this catches
+ * TEMPLATE issues (static), that catches BEHAVIORAL drift (dynamic).
+ * @since 1.98.0
+ */
+export function lintPrompt(text: string, options?: LintOptions): LintReport;
+
+/**
+ * Batch variant. Lints an object of { name: text } prompts and
+ * aggregates results.
+ * @since 1.98.0
+ */
+export function lintPrompts(prompts: Record<string, string>, options?: LintOptions): LintBatchReport;
+
+/**
+ * Render a LintReport (or LintBatchReport) as a human-readable
+ * multi-line string. Optional colors:true for ANSI escape codes.
+ * @since 1.98.0
+ */
+export function formatLintReport(
+  report: LintReport | LintBatchReport,
+  options?: { colors?: boolean },
+): string;
+
+export const KNOWN_LINT_RULES: ReadonlySet<string>;
+export const DEFAULT_INJECTION_PATTERNS: Array<{ re: RegExp; name: string }>;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
