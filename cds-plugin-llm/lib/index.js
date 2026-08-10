@@ -143,6 +143,8 @@ module.exports = {
   piiRedact:         require('./middleware/piiRedact').piiRedact,
   BUILT_IN_PII_DETECTORS: require('./middleware/piiRedact').BUILT_IN_DETECTORS,
   luhnValid:         require('./middleware/piiRedact').luhnValid,
+  // Task-aware model routing — declare policy centrally instead of hand-picking per call (new in 1.81.0)
+  modelRouter:       require('./middleware/modelRouter').modelRouter,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

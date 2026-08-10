@@ -4,6 +4,70 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.81.0] — 2026-08-10
+
+### Added
+
+- **`modelRouter({ rules?, fallback?, onRoute? })` — task-aware model routing middleware.** Declares model-selection policy centrally instead of call sites hand-picking. Rewrites `ctx.request.model` (and optionally `maxTokens` / `temperature` / any override) based on first-match-wins declarative rules. Cost saver + latency optimizer.
+
+  ```js
+  const { modelRouter } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(modelRouter({
+    rules: [
+      // Embeddings → cheap
+      { match: { method: 'embed' },
+        route: { model: 'text-embedding-3-small' } },
+
+      // Structured extraction → JSON-mode-capable
+      { match: { hasFormat: true, hasTools: true },
+        route: { model: 'claude-opus-4-7' } },
+      { match: { hasFormat: true },
+        route: { model: 'gpt-4o' } },
+
+      // Multi-turn agents → strong reasoning
+      { match: { hasTools: true },
+        route: { model: 'claude-opus-4-7' } },
+
+      // Summarization by prompt sniff
+      { match: { systemContains: /summarize|tl;?dr/i },
+        route: { model: 'claude-haiku-4-5', temperature: 0.3 } },
+
+      // Enterprise tenant → premium
+      { match: (ctx) => ctx.raw?.tenant === 'enterprise',
+        route: { model: 'claude-opus-4-7' } },
+    ],
+    fallback: { model: 'gpt-4o-mini' },
+    onRoute:  (info) => cds.log('llm:router').info(info),
+  }));
+  ```
+
+- **Rich matcher shortcuts (dep-free):**
+  - `method` — string / string[]: `chat` | `embed` | `stream` | `batch`
+  - `hasTools` / `hasFormat` — boolean (agent flow vs structured output)
+  - `hasImages` / `hasPdfs` / `hasAudio` — multimodal content presence
+  - `model` — current model (string or array) — chain multiple routers by pre-condition
+  - `systemContains` — substring or `RegExp` on the system prompt
+  - `systemMatches` — `RegExp` only, tighter than `systemContains`
+  - `minInputTokens` / `maxInputTokens` — rough char/4 heuristic; route long inputs to a bigger context window
+  - Custom predicate: `match: (ctx) => boolean` — full escape hatch for tenant / auth / feature-flag routing
+
+- **All match criteria are ANDed** — combine freely. `{ method: 'chat', hasTools: true, hasFormat: true }` matches only chat requests that have both.
+
+- **Route directive.** Any key in `route:` overrides the corresponding request field: `model`, `maxTokens`, `temperature`, and any custom key (`topP`, `seed`, `stop`, ...) — flow through untouched. Plus `reason:` and `tags:` for observability annotation.
+
+- **Non-destructive.** Mutates `ctx.request` only for the inner `next()` call, restores original in a `finally` block. Outer middleware sees the pre-router request; inner + provider see the routed one. Same guarantee as `piiRedact` (1.80).
+
+- **Meta annotation.** Stamps `ctx.meta.routed = true`, `ctx.meta.routedRule = index`, `ctx.meta.routedFrom = <old model>`, `ctx.meta.routedTo = <new model>`. `jsonLog` / `replayBuffer` / any observability sink can attribute the choice. Configurable via `exposeMetaOn: 'raw'` for stacks where `ctx.raw` is the primary surface.
+
+- **Introspection.** `stats: { totalRequests, routed, unrouted, fallbackApplied, byRuleIndex: { 0, 1, 2, ... }, byModel: { 'gpt-4o': 42, ... } }` + `reset()` + `asMcpResource()` → `config://model-router`.
+
+- **Fallback.** Optional `fallback: { model, maxTokens?, temperature? }` — applied when no rule matches. Tracked as `stats.fallbackApplied` separately from rule hits.
+
+- **TypeScript.** `ModelRouterOptions`, `ModelRouterRule`, `ModelRouterMatch`, `ModelRouterRoute`, `ModelRouterStats`, `ModelRouterMiddleware`.
+
+- **Recommended placement.** OUTER of `adaptiveMaxTokens` (so max-tokens adjustment reads the NEW model's price), OUTER of `responseCache` (cache keyed on the routed model → higher hit rate for identical prompts across a policy family), OUTER of `costGuard` (estimator counts the routed model's price).
+
 ## [1.80.0] — 2026-08-09
 
 ### Added

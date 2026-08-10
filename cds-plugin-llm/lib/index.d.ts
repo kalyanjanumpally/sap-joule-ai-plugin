@@ -2305,6 +2305,86 @@ export const BUILT_IN_PII_DETECTORS: Record<PiiDetectorName, { pattern: RegExp; 
 
 export function luhnValid(digits: string): boolean;
 
+// ---- Model router (new in 1.81.0) -----------------------------------
+
+export interface ModelRouterMatch {
+  method?:        string | string[];
+  hasTools?:      boolean;
+  hasFormat?:     boolean;
+  hasImages?:     boolean;
+  hasPdfs?:       boolean;
+  hasAudio?:      boolean;
+  model?:         string | string[];
+  systemContains?: string | RegExp;
+  systemMatches?:  RegExp;
+  minInputTokens?: number;
+  maxInputTokens?: number;
+}
+
+export interface ModelRouterRoute {
+  model?:       string;
+  maxTokens?:   number;
+  temperature?: number;
+  reason?:      string;
+  tags?:        string[];
+  [k: string]:  unknown;
+}
+
+export interface ModelRouterRule {
+  match: ModelRouterMatch | ((ctx: MiddlewareContext) => boolean);
+  route: ModelRouterRoute;
+}
+
+export interface ModelRouterOptions {
+  rules?:     ModelRouterRule[];
+  fallback?:  ModelRouterRoute | null;
+  onRoute?:   ((info: {
+    ruleIndex: number;
+    fromModel: string | null;
+    toModel:   string | null;
+    reason:    string | null;
+    tags:      string[] | null;
+    method:    string;
+  }) => void) | null;
+  /** Where to stamp routing meta. 'meta' (default) or 'raw'. */
+  exposeMetaOn?: 'meta' | 'raw';
+}
+
+export interface ModelRouterStats {
+  totalRequests:   number;
+  routed:          number;
+  unrouted:        number;
+  fallbackApplied: number;
+  byRuleIndex:     Record<number, number>;
+  byModel:         Record<string, number>;
+}
+
+export interface ModelRouterMiddleware extends Middleware {
+  readonly stats: ModelRouterStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://model-router';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ModelRouterStats & {
+      ruleCount:     number;
+      hasFallback:   boolean;
+      fallbackModel: string | null;
+    };
+  };
+}
+
+/**
+ * Task-aware model routing. Rewrites ctx.request.model (and
+ * optionally maxTokens / temperature / any override) based on
+ * declarative rules — first match wins. Route embeddings to
+ * cheapest, complex reasoning to Opus, simple summarization to
+ * Haiku, without call sites hand-picking models.
+ * @since 1.81.0
+ */
+export function modelRouter(options?: ModelRouterOptions): ModelRouterMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
