@@ -4,6 +4,73 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.84.0] — 2026-08-10
+
+### Added
+
+- **`llmJudge({ llm, criteria, response, context?, threshold? }) → { score, verdict, criteriaResults, ... }` — LLM-as-judge helper.** Wraps the standard eval-as-a-judge pattern: declare pass/fail criteria in natural language, submit an LLM output for scoring, get back a structured judgment with per-criterion scores, weighted total, verdict, and rationale.
+
+  ```js
+  const { llmJudge } = require('@saptarishi/cds-plugin-llm');
+
+  // Multi-criterion rubric
+  const j = await llmJudge({
+    llm,                                   // any LLMService with .chat, or pass `chat:` fn
+    criteria: [
+      { name: 'accuracy',  description: 'facts match source',     weight: 2 },
+      { name: 'brevity',   description: '2 sentences max',        weight: 1 },
+      { name: 'grounding', description: 'cites specific IDs',     weight: 3 },
+    ],
+    response: 'Steel contract CTR-2026-101 ends 2027-06-30.',
+    context:  'Source: contract CTR-2026-101 dated 2024-04-01.',
+    threshold: 0.75,
+    judgeModel: 'claude-opus-4-7',         // often stronger than judged model
+  });
+  // {
+  //   score: 0.87, verdict: 'pass',
+  //   criteriaResults: [
+  //     { name: 'accuracy',  score: 1.0, passed: true,  rationale: '...' },
+  //     { name: 'brevity',   score: 0.7, passed: true,  rationale: '...' },
+  //     { name: 'grounding', score: 0.9, passed: true,  rationale: '...' },
+  //   ],
+  //   overallRationale: '...',
+  //   model: 'claude-opus-4-7',
+  //   usage: { input_tokens, output_tokens },
+  // }
+  ```
+
+- **Three criteria forms** — all normalize internally:
+  - `criteria: 'answer must cite a source'` — single string
+  - `criteria: ['accuracy', 'brevity']` — array of strings (auto-named `criterion1`, `criterion2`)
+  - `criteria: [{ name, description, weight }, ...]` — full rubric with weights
+
+- **Weighted scoring** — final `score = Σ(criterion_score × weight) / Σ(weight)`. Per-criterion `passed` at score ≥ 0.5. Overall `verdict` at weighted score ≥ `threshold` (default 0.7). All scores clamped to `[0, 1]`.
+
+- **Grounded evaluation.** Pass a `context:` (source of truth / expected answer / reference doc) — the judge system prompt instructs strict cross-checking and marks fabrications as 0 on accuracy. Perfect for RAG-answer eval where the judge verifies facts against the retrieved chunks.
+
+- **`judgeMany({ responses, concurrency? })` — batch variant.** Scores N responses in parallel with a concurrency cap (default 5). Per-response errors captured as `{ verdict: 'error', error }` — one bad response never fails the batch. Perfect for CI eval-set scoring:
+
+  ```js
+  const results = await judgeMany({
+    llm,
+    criteria,
+    responses: evalSet.map((row) => ({ response: row.actual, context: row.expected })),
+  });
+  const passRate = results.filter((r) => r.verdict === 'pass').length / results.length;
+  ```
+
+- **Judge model separately configurable.** Common pattern: judge with a stronger model (opus / gpt-4o) than the one being judged (haiku / mini) — this catches errors the weaker model won't. `judgeModel:` and `judgeSystem:` for full control.
+
+- **Uses `format:` internally** — the judge output is constrained by a JSON Schema, so parse failures are rare. If a provider doesn't honor `format:` natively, the helper falls back to extracting JSON from `result.text` (raw parse → code fence → first-brace-scan) — same battle-tested extractor as `structuredOutputValidator` (1.76).
+
+- **Two calling forms:**
+  - `{ llm }` — pass an `LLMService` handle; the helper calls `llm.chat`
+  - `{ chat }` — pass a raw async function directly; useful for tests + custom transports
+
+- **TypeScript.** `LlmJudgeOptions`, `JudgeCriteria`, `JudgeCriterion`, `JudgeCriterionResult`, `JudgeResult`, `JudgeManyOptions`, `JudgeManyEntry`, `DEFAULT_JUDGE_SYSTEM`.
+
+- **Not middleware — a top-level helper.** Judges happen outside the request pipeline (they're eval jobs). Wire the judge's own `llm` with your standard chain (metering, cost guards, etc.) — those apply to judge calls too.
+
 ## [1.83.0] — 2026-08-10
 
 ### Added

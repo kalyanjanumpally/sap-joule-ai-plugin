@@ -2537,6 +2537,78 @@ export function promptCacheStats(options?: PromptCacheStatsOptions): PromptCache
 
 export const DEFAULT_CACHE_MULTIPLIERS: Record<PromptCacheProvider, PromptCacheMultipliers>;
 
+// ---- LLM-as-judge helper (new in 1.84.0) -----------------------------
+
+export interface JudgeCriterion {
+  name?:        string;
+  description:  string;
+  weight?:      number;
+}
+
+export type JudgeCriteria = string | Array<string | JudgeCriterion>;
+
+export interface JudgeCriterionResult {
+  name:        string;
+  description: string;
+  score:       number;
+  rationale:   string;
+  passed:      boolean;
+}
+
+export interface JudgeResult {
+  score:            number;
+  verdict:          'pass' | 'fail';
+  criteriaResults:  JudgeCriterionResult[];
+  overallRationale: string;
+  model:            string | null;
+  usage:            unknown | null;
+  threshold:        number;
+  raw:              unknown;
+}
+
+export interface LlmJudgeOptions {
+  llm?:              { chat: (req: any) => Promise<any> };
+  chat?:             (req: any) => Promise<any>;
+  criteria:          JudgeCriteria;
+  response:          string;
+  context?:          string;
+  threshold?:        number;
+  judgeModel?:       string;
+  judgeSystem?:      string;
+  judgeTemperature?: number;
+  maxTokens?:        number;
+}
+
+/**
+ * Wrap the standard eval-as-a-judge pattern: define pass/fail criteria
+ * in natural language, submit an LLM output for scoring, get back a
+ * structured judgment with per-criterion scores, weighted total,
+ * verdict, and rationale.
+ * @since 1.84.0
+ */
+export function llmJudge(options: LlmJudgeOptions): Promise<JudgeResult>;
+
+export interface JudgeManyEntry {
+  response: string;
+  context?: string;
+}
+
+export interface JudgeManyOptions extends Omit<LlmJudgeOptions, 'response'> {
+  responses:   Array<string | JudgeManyEntry>;
+  concurrency?: number;
+}
+
+/**
+ * Judge N responses against the same criteria in parallel with a
+ * concurrency cap. Per-response errors are captured as
+ * { verdict: 'error', error: string } — one bad response never
+ * fails the whole batch.
+ * @since 1.84.0
+ */
+export function judgeMany(options: JudgeManyOptions): Promise<Array<JudgeResult | { verdict: 'error'; error: string; score: 0 }>>;
+
+export const DEFAULT_JUDGE_SYSTEM: string;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

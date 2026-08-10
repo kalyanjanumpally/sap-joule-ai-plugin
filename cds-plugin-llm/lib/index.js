@@ -151,6 +151,10 @@ module.exports = {
   // Prompt caching stats — surfaces provider cache savings (Anthropic/OpenAI/DeepSeek/Gemini) as ops metrics (new in 1.83.0)
   promptCacheStats:  require('./middleware/promptCacheStats').promptCacheStats,
   DEFAULT_CACHE_MULTIPLIERS: require('./middleware/promptCacheStats').DEFAULT_CACHE_MULTIPLIERS,
+  // LLM-as-judge helper — multi-criterion scoring for CI eval loops (new in 1.84.0)
+  llmJudge:          require('./llmJudge').llmJudge,
+  judgeMany:         require('./llmJudge').judgeMany,
+  DEFAULT_JUDGE_SYSTEM: require('./llmJudge').DEFAULT_JUDGE_SYSTEM,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,
