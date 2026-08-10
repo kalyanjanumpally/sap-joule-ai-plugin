@@ -3116,6 +3116,59 @@ export interface OtelSpansOptions {
  */
 export function otelSpans(options: OtelSpansOptions): Middleware;
 
+// ---- Retry-after propagation (new in 1.94.0) -------------------------
+
+export interface RetryAfterPropagationOptions {
+  /** Force a specific provider instead of auto-detecting from headers. */
+  provider?:        'openai' | 'anthropic' | 'gemini' | 'bedrock' | string | null;
+  /** Override parsers by provider key. Default: shipped 4-provider set. */
+  parsers?:         Record<string, (headers: unknown, status?: number) => any>;
+  /** Fires when a retry hint is captured. Errors swallowed. */
+  onCapture?:       ((info: {
+    provider:      string;
+    retryAfterMs:  number | undefined;
+    resetAtMs:     number | undefined;
+    rateLimit:     any;
+    errorCode:     string | null;
+  }) => void) | null;
+  /** If no provider detected and no hint parsed, apply this default (ms). */
+  fallbackRetryMs?: number | null;
+}
+
+export interface RetryAfterPropagationStats {
+  totalErrors:     number;
+  hintsCaptured:   number;
+  unknownProvider: number;
+  fallbackApplied: number;
+  byProvider:      Record<string, number>;
+}
+
+export interface RetryAfterPropagationMiddleware extends Middleware {
+  readonly stats: RetryAfterPropagationStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://retry-after-propagation';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => RetryAfterPropagationStats & {
+      provider:            string | null;
+      fallbackRetryMs:     number | null;
+      supportedProviders:  string[];
+    };
+  };
+}
+
+/**
+ * Enriches outbound errors with `retryAfterMs` + `resetAtMs` fields
+ * parsed from provider rate-limit headers (using shipped 1.38+
+ * parsers). Complements `retryOnRateLimit` (1.47): that middleware
+ * WAITS + retries internally; this one SURFACES the retry hint to
+ * the caller when the internal retry gives up or is disabled.
+ * @since 1.94.0
+ */
+export function retryAfterPropagation(options?: RetryAfterPropagationOptions): RetryAfterPropagationMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

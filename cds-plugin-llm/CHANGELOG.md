@@ -4,6 +4,71 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.94.0] — 2026-08-10
+
+### Added
+
+- **`retryAfterPropagation({ onCapture?, fallbackRetryMs?, ... })` — enriches outbound errors with retry-timing hints parsed from provider rate-limit headers.** Complements `retryOnRateLimit` (1.47): that middleware WAITS + retries internally; this one SURFACES the retry hint to the CALLER when the internal retry gives up or is disabled. Lets apps implement smart backoff at their layer instead of hard-coding delays.
+
+  ```js
+  const { retryAfterPropagation } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(retryAfterPropagation({
+    onCapture: (info) => cds.log('llm:rate-limit').warn(
+      `provider=${info.provider} retry after ${info.retryAfterMs}ms`,
+    ),
+  }));
+
+  // In your controller / OData handler:
+  try {
+    return await llm.chat(req);
+  } catch (err) {
+    if (err.retryAfterMs) {
+      res.set('Retry-After', Math.ceil(err.retryAfterMs / 1000));
+      return res.status(429).json({ error: 'try again later' });
+    }
+    throw err;
+  }
+  ```
+
+- **Enrichment fields** (never overwrites existing values):
+  - `err.retryAfterMs` — milliseconds until safe to retry
+  - `err.resetAtMs` — Unix timestamp (ms) when quota resets
+  - `err.rateLimit` — full parsed shape (requests/tokens limit + remaining + reset)
+  - `err.retryAfterHint` — `{ provider, source }` for observability (source = `'headers'` or `'fallback'`)
+
+- **Auto-detects provider from header shape** — no config needed for the four shipped providers:
+  - **OpenAI-compat** (also Groq, DeepSeek, Mistral, Fireworks, Azure OpenAI) — `x-ratelimit-limit-requests` / `-remaining-*` / `-reset-*`
+  - **Anthropic** — `anthropic-ratelimit-tokens-remaining` etc.
+  - **Google Gemini** — `x-goog-request-id`
+  - **AWS Bedrock** — parses SDK-response object
+
+  Manual `provider:` override for edge cases + custom `parsers: { <provider>: fn }` for unshipped endpoints.
+
+- **Falls back to `err.retryAfterSec`** when headers aren't available but the provider populated the field directly on the error (some SDKs do this).
+
+- **Optional `fallbackRetryMs`** — when no provider detected and no headers to parse, apply a caller-supplied default. Useful for "we know this endpoint's usual quota window" — set once, catch all edge cases.
+
+- **Soft-fail everywhere.** Parser exceptions, missing headers, and unknown providers all pass the error through untouched (with `stats.unknownProvider++`). Never turns a rate-limit error into a middleware crash.
+
+- **Reads both `err.headers` and `err.response.headers`** — matches the two conventions LLM SDKs use.
+
+- **Handles Headers-like objects** (fetch `Response.headers` with `.get()`) and plain objects transparently — same detection logic works either way.
+
+- **Introspection.** `stats: { totalErrors, hintsCaptured, unknownProvider, fallbackApplied, byProvider: { openai, anthropic, ... } }` + `reset()` + `asMcpResource()` → `config://retry-after-propagation` (includes `supportedProviders` list).
+
+- **TypeScript.** `RetryAfterPropagationOptions`, `RetryAfterPropagationStats`, `RetryAfterPropagationMiddleware`.
+
+- **Recommended placement.** OUTER of `retryOnRateLimit` (1.47) so if the internal retry gives up, we STILL enrich the surfaced `RateLimitGiveUpError` for the caller. Combine with `llmErrorHandler` (1.58): the handler emits the error as JSON, and a tiny Express middleware between them sets `Retry-After` from `err.retryAfterMs`:
+
+  ```js
+  app.use((err, req, res, next) => {
+    if (err.retryAfterMs) res.set('Retry-After', Math.ceil(err.retryAfterMs / 1000));
+    next(err);
+  });
+  app.use(llmErrorHandler());
+  ```
+
 ## [1.93.0] — 2026-08-10
 
 ### Added
