@@ -4,6 +4,82 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.95.0] — 2026-08-10
+
+### Added
+
+- **`chainSnapshot(llm, options?) → { order, generatedAt, version, ... }` — extract live middleware chain config for GitOps + CI drift detection.** Walks a live `LLMService.middleware` array and emits the same `{ order: [{ position, kind, config }] }` shape consumed by `chainDiff` (1.73) and `validateMiddlewareOrder` (1.48). Enables the missing "read live chain state" step in the chain observability arc.
+
+  ```js
+  const { chainSnapshot, chainDiff, formatChainDiff } = require('@saptarishi/cds-plugin-llm');
+
+  // In your app — capture a baseline:
+  const snap = chainSnapshot(llm);
+  fs.writeFileSync('chain-baseline.json', JSON.stringify(snap, null, 2));
+
+  // Expose an endpoint that returns the live snapshot:
+  app.get('/chain-snapshot', (_req, res) => res.json(chainSnapshot(llm)));
+
+  // In CI — fail if the live chain drifted from the committed baseline:
+  const baseline = JSON.parse(fs.readFileSync('chain-baseline.json', 'utf8'));
+  const live     = await fetch('https://api.myapp.com/chain-snapshot').then(r => r.json());
+  const diff     = chainDiff(baseline, live);
+  if (!diff.ok) {
+    console.error(formatChainDiff(diff, { colors: process.stdout.isTTY }));
+    process.exit(1);
+  }
+  ```
+
+- **Automatic kind detection** for all 28 shipped middleware — no config needed. Priority:
+  1. Explicit `mw.kind` property (best; custom middleware factories can set it)
+  2. `mw.asMcpResource().uri` lookup in the shipped `URI_TO_KIND` table
+  3. `unknown-<N>` fallback (numbered incrementally); `snapshot.unknownCount` tracks how many
+
+- **Custom kind mapping** for unshipped middleware:
+  ```js
+  chainSnapshot(llm, {
+    kindMap: {
+      'config://my-custom-mw': 'myCustomMw',
+      'config://other':        'otherMw',
+    },
+  });
+  ```
+
+- **Config extraction via `asMcpResource().handler()`** — same mechanism the MCP surface uses. Every shipped middleware exposes `asMcpResource()`; the snapshot reads that payload as the config.
+
+- **Stats filter (default) for stable diffing.** Counters change on every call and would produce noisy diffs — the default `extractConfig` strips ~50 well-known stats fields (`totalRequests`, `hits`, `misses`, `byProvider`, `byModel`, `errors`, etc. — full list in `KNOWN_STATS_FIELDS`). Config knobs (`ttlMs`, `maxEntries`, `threshold`, `action`, etc.) are preserved. `includeStats: true` opts out.
+
+- **Custom `extractConfig`** for domain-specific filtering:
+  ```js
+  chainSnapshot(llm, {
+    extractConfig: (payload, mw) => ({
+      ttlMs: payload.ttl * 1000,   // rename + transform
+      // omit everything else
+    }),
+  });
+  ```
+
+- **Metadata fields:**
+  - `generatedAt` — ISO timestamp (identifies when the snapshot was captured)
+  - `version` — plugin version (`@saptarishi/cds-plugin-llm`); useful for detecting plugin-upgrade-related drift
+  - `unknownCount` — number of middleware that fell through to the `unknown-<N>` fallback (surfaces "your custom middleware isn't registered" without failing)
+
+- **Round-trips cleanly through `chainDiff` and `validateMiddlewareOrder`.** The snapshot shape is designed to be passed directly:
+  ```js
+  const diff = chainDiff(baseline, chainSnapshot(llm));
+  const val  = validateMiddlewareOrder(chainSnapshot(llm).order);
+  ```
+
+- **Soft-fail on broken middleware.** If a middleware's `asMcpResource()` throws, the snapshot logs it as `config: undefined` rather than crashing the whole snapshot. Snapshots stay reliable even if one middleware has a bug.
+
+- **TypeScript.** `ChainSnapshotResult`, `ChainSnapshotEntry`, `ChainSnapshotOptions`, `URI_TO_KIND`, `KNOWN_STATS_FIELDS`.
+
+- **Recommended workflow.**
+  1. During development, run `chainSnapshot(llm)` locally, commit the JSON as `chain-baseline.json`
+  2. Ship a `/chain-snapshot` HTTP endpoint (10 lines of Express) or a `saptarishi.llm.chainSnapshot` MCP resource
+  3. In CI post-deploy, fetch the live snapshot, run `chainDiff` against the baseline, fail on drift
+  4. When you intentionally change the chain, regenerate the baseline + commit the diff — the PR review + git history becomes the audit trail
+
 ## [1.94.0] — 2026-08-10
 
 ### Added

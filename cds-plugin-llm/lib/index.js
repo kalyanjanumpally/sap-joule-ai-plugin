@@ -179,6 +179,10 @@ module.exports = {
   otelSpans:         require('./middleware/otelSpans').otelSpans,
   // Retry-after propagation — enriches errors with retryAfterMs + resetAtMs from provider rate-limit headers (new in 1.94.0)
   retryAfterPropagation: require('./middleware/retryAfterPropagation').retryAfterPropagation,
+  // Chain snapshot for GitOps — extract live chain config for diffing against baseline (new in 1.95.0)
+  chainSnapshot:     require('./chainSnapshot').chainSnapshot,
+  URI_TO_KIND:       require('./chainSnapshot').URI_TO_KIND,
+  KNOWN_STATS_FIELDS: require('./chainSnapshot').KNOWN_STATS_FIELDS,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

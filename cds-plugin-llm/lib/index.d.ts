@@ -3169,6 +3169,50 @@ export interface RetryAfterPropagationMiddleware extends Middleware {
  */
 export function retryAfterPropagation(options?: RetryAfterPropagationOptions): RetryAfterPropagationMiddleware;
 
+// ---- Chain snapshot for GitOps (new in 1.95.0) -----------------------
+
+export interface ChainSnapshotEntry {
+  position: number;
+  kind:     string;
+  config?:  Record<string, unknown>;
+}
+
+export interface ChainSnapshotResult {
+  generatedAt:   string;
+  order:         ChainSnapshotEntry[];
+  version?:      string;
+  unknownCount?: number;
+}
+
+export interface ChainSnapshotOptions {
+  /** Custom URI → kind overrides for non-shipped middleware. */
+  kindMap?:        Record<string, string>;
+  /** Custom config extractor. Return only the fields you want to persist. */
+  extractConfig?:  (payload: any, mw: any) => Record<string, unknown> | null;
+  /** Keep counter fields in the config. Default false (strip for stable diffing). */
+  includeStats?:   boolean;
+  /** Include plugin version in the snapshot. Default true. */
+  includeVersion?: boolean;
+  /** Override plugin version (test-only). */
+  versionSource?:  string;
+}
+
+/**
+ * Walks a live LLMService's middleware array and emits the
+ * `{ order: [{ position, kind, config }] }` shape consumed by
+ * chainDiff (1.73) + validateMiddlewareOrder (1.48). Enables
+ * GitOps workflows: commit a baseline snapshot, diff against
+ * live on every deploy, fail CI when the chain drifts.
+ * @since 1.95.0
+ */
+export function chainSnapshot(llm: { middleware: any[] }, options?: ChainSnapshotOptions): ChainSnapshotResult;
+
+/** URI → kind lookup for shipped middleware. */
+export const URI_TO_KIND: Readonly<Record<string, string>>;
+
+/** Stats field names stripped by chainSnapshot's default `extractConfig`. */
+export const KNOWN_STATS_FIELDS: ReadonlySet<string>;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
