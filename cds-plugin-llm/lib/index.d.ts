@@ -2385,6 +2385,79 @@ export interface ModelRouterMiddleware extends Middleware {
  */
 export function modelRouter(options?: ModelRouterOptions): ModelRouterMiddleware;
 
+// ---- Embedding dedup cache (new in 1.82.0) ---------------------------
+
+export interface EmbeddingDedupStore {
+  get(key: string): unknown | Promise<unknown>;
+  set(key: string, value: unknown): void | Promise<void>;
+  has?(key: string): boolean;
+  delete?(key: string): void;
+  clear?(): void;
+  size?: number | (() => number);
+}
+
+export interface EmbeddingDedupOptions {
+  /** LRU max entries when using the built-in store. Default 10_000. */
+  maxEntries?:     number;
+  /** Skip caching texts longer than this. Default 100_000 chars. */
+  maxTextLength?:  number;
+  /** Normalize text before hashing. Default: trim + collapse whitespace. */
+  normalize?:      (text: string) => string;
+  /** Hash function producing the cache key. Default: sha256 hex. */
+  hash?:           (text: string) => string;
+  /** Custom store. Must expose { get, set }. Default: built-in LRU. */
+  store?:          EmbeddingDedupStore | null;
+}
+
+export interface EmbeddingDedupStats {
+  totalRequests:   number;
+  totalTexts:      number;
+  hits:            number;
+  misses:          number;
+  allHitRequests:  number;
+  skippedTooLong:  number;
+}
+
+export interface EmbeddingDedupMiddleware extends Middleware {
+  readonly stats: EmbeddingDedupStats;
+  reset(): void;
+  size(): number;
+  clear(): void;
+  has(text: string): boolean;
+  asMcpResource(): {
+    uri: 'config://embedding-dedup';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => EmbeddingDedupStats & {
+      maxEntries:    number;
+      maxTextLength: number;
+      currentSize:   number;
+      hitRate:       number;
+    };
+  };
+}
+
+export class EmbeddingLRU implements EmbeddingDedupStore {
+  constructor(maxEntries: number);
+  get(key: string): unknown;
+  set(key: string, value: unknown): void;
+  has(key: string): boolean;
+  delete(key: string): void;
+  clear(): void;
+  readonly size: number;
+}
+
+/**
+ * Content-addressable cache for `llm.embed({ input })` calls.
+ * Normalizes each text, hashes it, looks up the vector. Same text →
+ * same vector, no re-embedding. Big saver for RAG pipelines that
+ * re-embed the same chunks on every re-index / re-rank / query
+ * expansion.
+ * @since 1.82.0
+ */
+export function embeddingDedup(options?: EmbeddingDedupOptions): EmbeddingDedupMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

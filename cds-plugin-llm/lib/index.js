@@ -145,6 +145,9 @@ module.exports = {
   luhnValid:         require('./middleware/piiRedact').luhnValid,
   // Task-aware model routing — declare policy centrally instead of hand-picking per call (new in 1.81.0)
   modelRouter:       require('./middleware/modelRouter').modelRouter,
+  // Embedding dedup cache — content-addressable per-text cache for embed() calls (new in 1.82.0)
+  embeddingDedup:    require('./middleware/embeddingDedup').embeddingDedup,
+  EmbeddingLRU:      require('./middleware/embeddingDedup').EmbeddingLRU,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,

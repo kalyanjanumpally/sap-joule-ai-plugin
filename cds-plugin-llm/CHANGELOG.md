@@ -4,6 +4,52 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.82.0] — 2026-08-10
+
+### Added
+
+- **`embeddingDedup({ maxEntries?, maxTextLength?, normalize?, hash?, store? })` — content-addressable per-text embedding cache.** Normalizes each text, hashes it, looks up the vector. Same text → same vector, no re-embedding. Big saver for RAG pipelines that re-embed the same chunks on every re-index / re-rank / query expansion.
+
+  ```js
+  const { embeddingDedup } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(embeddingDedup({
+    maxEntries:    10_000,
+    maxTextLength: 100_000,
+  }));
+
+  await llm.embed({ input: ['a', 'b', 'c'] });  // all 3 hit provider
+  await llm.embed({ input: ['b', 'c', 'd'] });  // only 'd' hits provider
+  ```
+
+- **Distinct from siblings:**
+
+  | Middleware | Cache unit | Key strategy |
+  | --- | --- | --- |
+  | `responseCache` | whole request | exact request hash |
+  | `responseCache({ semantic: {...} })` | whole request | cosine over stored embedding |
+  | **`embeddingDedup`** | **individual text within `embed({ input: [...] })`** | **exact text hash after normalize** |
+
+  Existing users of `responseCache` on embed calls should keep it — the two layer nicely. Whole-request cache handles "same call again"; embeddingDedup handles "different call with overlapping texts". Together they eliminate near-100% of duplicate embed spending in typical RAG workloads.
+
+- **Partial-hit optimization.** If 900 of 1000 texts are cached, only the 100 misses hit the provider. Mutates `ctx.request.input` for the inner `next()` call, then merges hits + fresh embeddings back by original position. Restores `ctx.request` in a `finally` block — outer chain sees no side effects.
+
+- **All-hit fast path.** When every text is already cached, the middleware synthesizes a response (`{ embeddings, model, usage: { input_tokens: 0 }, cached: true }`) without calling the provider at all. Saves both cost and latency; `usageMetering` sees a zero-token entry.
+
+- **Handles both input shapes.** `input: 'text'` (single string) and `input: ['text', 'text', ...]` (array). Return shape mirrors input shape — `embeddings: [1,2,3]` for a string input, `embeddings: [[1,2,3], [4,5,6]]` for an array.
+
+- **Normalization defaults.** `trim + collapse whitespace`. Handles "   hello   world  " and "hello\n\tworld" and "hello world" as the same cache key. Custom `normalize:` lets you lowercase, strip punctuation, or apply domain-specific canonicalization.
+
+- **Pluggable store.** Default is a built-in `EmbeddingLRU(maxEntries)` (Map with LRU-on-touch semantics). Custom stores implement `{ get, set }` — Redis, HANA table, whatever. `has` / `delete` / `clear` optional but supported when present.
+
+- **`maxTextLength` guard.** Skips caching for very long texts (default 100 KB char cap) — a single huge chunk shouldn't monopolize the cache. Longer texts still get embedded, they just always miss.
+
+- **Introspection.** `stats: { totalRequests, totalTexts, hits, misses, allHitRequests, skippedTooLong }` + `size()` + `clear()` + `has(text)` + `reset()` + `asMcpResource()` → `config://embedding-dedup` (includes `hitRate` computed for dashboards).
+
+- **TypeScript.** `EmbeddingDedupOptions`, `EmbeddingDedupStats`, `EmbeddingDedupMiddleware`, `EmbeddingDedupStore`, `EmbeddingLRU`.
+
+- **Recommended placement.** OUTER of `usageMetering` (dedup should NOT re-bill; hits show up as zero-token rows). INNER of `responseCache` if you use both (semantic whole-request lookup first, then per-text dedup as backstop).
+
 ## [1.81.0] — 2026-08-10
 
 ### Added
