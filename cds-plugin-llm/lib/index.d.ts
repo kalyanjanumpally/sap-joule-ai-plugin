@@ -3213,6 +3213,115 @@ export const URI_TO_KIND: Readonly<Record<string, string>>;
 /** Stats field names stripped by chainSnapshot's default `extractConfig`. */
 export const KNOWN_STATS_FIELDS: ReadonlySet<string>;
 
+// ---- Sensitive-data audit trail (new in 1.96.0) ----------------------
+
+export interface AuditEntry {
+  sequence:      number;
+  timestamp:     string;
+  method:        string;
+  model:         string | null;
+  correlationId: string | null;
+  piiCategories: string[];
+  piiCount:      number;
+  requestChars:  number;
+  responseChars: number;
+  usage:         unknown | null;
+  prevHash:      string | null;
+  hash:          string;
+  requestPreview?:  string;
+  responsePreview?: string;
+  [customField: string]: unknown;
+}
+
+export interface AuditStore {
+  append(entry: AuditEntry): void | Promise<void>;
+  list?(opts?: { limit?: number; since?: string | number }): Promise<AuditEntry[]>;
+  size?: number | (() => number);
+  clear?(): void;
+}
+
+export class InMemoryAuditStore implements AuditStore {
+  constructor(maxEntries?: number);
+  append(entry: AuditEntry): Promise<void>;
+  list(opts?: { limit?: number; since?: string | number }): Promise<AuditEntry[]>;
+  size(): number;
+  clear(): void;
+  latest(): AuditEntry | null;
+}
+
+export interface AuditDetectionResult {
+  categories: string[];
+  count:      number;
+}
+
+export interface SensitiveDataAuditOptions {
+  store:          AuditStore;
+  trigger?:       'pii-detected' | 'always' | ((ctx: MiddlewareContext, result: any) => boolean);
+  detector?:      ((ctx: MiddlewareContext, result: any) => AuditDetectionResult) | null;
+  activeDetectors?: Record<string, { pattern: RegExp; validate?: (m: string) => boolean }>;
+  includePayload?: boolean;
+  previewChars?:   number;
+  redactPayload?:  boolean;
+  chained?:        boolean;
+  enrich?:         ((ctx: MiddlewareContext, result: any) => Record<string, unknown> | null | undefined) | null;
+  skipMethods?:    string[];
+  onAudit?:        ((entry: AuditEntry) => void) | null;
+  onError?:        ((info: { err: Error; phase: 'build' | 'append'; entry?: AuditEntry }) => void) | null;
+}
+
+export interface SensitiveDataAuditStats {
+  totalRequests: number;
+  audited:       number;
+  skipped:       number;
+  piiDetected:   number;
+  storeErrors:   number;
+  lastSequence:  number;
+  lastHash:      string | null;
+}
+
+export interface SensitiveDataAuditMiddleware extends Middleware {
+  readonly stats: SensitiveDataAuditStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://sensitive-data-audit';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => SensitiveDataAuditStats & {
+      trigger:        string | Function;
+      includePayload: boolean;
+      chained:        boolean;
+      redactPayload:  boolean;
+      previewChars:   number;
+    };
+  };
+}
+
+/**
+ * Persists an immutable, hash-chained audit log of every LLM call
+ * containing PII (or matching a custom trigger). Compliance
+ * requirement for GDPR / SOX / HIPAA workloads. Each entry is
+ * chained to the previous — insertion / deletion / tampering are
+ * detectable via `verifyAuditChain(entries)`.
+ * @since 1.96.0
+ */
+export function sensitiveDataAudit(options: SensitiveDataAuditOptions): SensitiveDataAuditMiddleware;
+
+/**
+ * Verifies a chain of audit entries produced by sensitiveDataAudit.
+ * Returns { ok, brokenAt: index|null, reason }.
+ * @since 1.96.0
+ */
+export function verifyAuditChain(entries: AuditEntry[]): { ok: boolean; brokenAt: number | null; reason: string | null };
+
+/**
+ * Computes the canonical sha256 hash of an audit entry (excluding
+ * the `hash` field itself). Used internally to build + verify chains;
+ * exported so custom stores can recompute + validate.
+ * @since 1.96.0
+ */
+export function hashAuditEntry(entry: Omit<AuditEntry, 'hash'>): string;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

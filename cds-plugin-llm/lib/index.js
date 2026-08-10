@@ -183,6 +183,11 @@ module.exports = {
   chainSnapshot:     require('./chainSnapshot').chainSnapshot,
   URI_TO_KIND:       require('./chainSnapshot').URI_TO_KIND,
   KNOWN_STATS_FIELDS: require('./chainSnapshot').KNOWN_STATS_FIELDS,
+  // Sensitive-data audit trail — immutable hash-chained log of LLM calls containing PII (new in 1.96.0)
+  sensitiveDataAudit: require('./middleware/sensitiveDataAudit').sensitiveDataAudit,
+  InMemoryAuditStore: require('./middleware/sensitiveDataAudit').InMemoryAuditStore,
+  verifyAuditChain:   require('./middleware/sensitiveDataAudit').verifyChain,
+  hashAuditEntry:     require('./middleware/sensitiveDataAudit').hashEntry,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

@@ -4,6 +4,75 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.96.0] — 2026-08-10
+
+### Added
+
+- **`sensitiveDataAudit({ store, trigger?, includePayload?, chained?, ... })` — immutable hash-chained audit log for PII-touching LLM calls.** Compliance primitive for GDPR / SOX / HIPAA workloads. Every entry is cryptographically hashed + linked to the previous entry via `prevHash`, so insertion / deletion / tampering are detectable via `verifyAuditChain(entries)`.
+
+  ```js
+  const { sensitiveDataAudit, InMemoryAuditStore, verifyAuditChain }
+    = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(sensitiveDataAudit({
+    store: new InMemoryAuditStore(10_000),   // or CAP-entity store
+    enrich: (ctx) => ({ tenant: ctx.raw?.tenant, userId: ctx.raw?.userId }),
+    includePayload: true,                     // stores redacted preview
+  }));
+
+  // Later, an auditor queries + verifies:
+  const rows = await store.list({ since: '2026-08-01' });
+  const check = verifyAuditChain(rows);
+  if (!check.ok) throw new Error(`chain broken at index ${check.brokenAt}: ${check.reason}`);
+  ```
+
+- **Complements the shipped PII stack** — each layer with its own role:
+
+  | Layer | Behavior |
+  | --- | --- |
+  | `guardrails.filters.pii` | Drops matched PII (irreversible) |
+  | `piiRedact` (1.80) | Masks outbound + un-masks on response (round-trip) |
+  | `promptInjectionGuard` (1.31) | Blocks jailbreak / role-marker patterns |
+  | **`sensitiveDataAudit` (this)** | **Records every PII touch to an immutable log** |
+
+- **Hash-chained integrity.** Each entry stores `prevHash = <previous entry's hash>`, and its own `hash = sha256(canonical form of entry)`. `verifyAuditChain(entries)` recomputes the whole chain and reports the exact index + reason if tampering is detected. Canonical hashing sorts keys so equivalent entries hash identically regardless of property order.
+
+- **Triggers** — audit only when it matters:
+  - `'pii-detected'` (default) — audit only when the detector finds PII in the request or response
+  - `'always'` — audit every call (high-volume, but complete)
+  - custom function `(ctx, result) => boolean` — domain-specific triggers (e.g. "audit any call over 10K chars", "audit calls from tenant X")
+
+- **Default detector** scans request + response text with the shipped `BUILT_IN_PII_DETECTORS` (email, phone, ssn, creditCard, iban — same as `piiRedact`). Returns `{ categories, count }`. Swap for a custom detector to match your domain (employee IDs, PO numbers, classified markers, etc.):
+  ```js
+  sensitiveDataAudit({
+    store,
+    detector: (ctx, result) => {
+      const text = extractText(ctx);
+      return text.includes('SECRET-INTERNAL')
+        ? { categories: ['classified'], count: 1 }
+        : { categories: [], count: 0 };
+    },
+  });
+  ```
+
+- **Optional payload preview.** `includePayload: true` stores a truncated preview of the request + response text — MASKED by default (uses `piiRedact`'s tokens) so the audit log itself doesn't leak PII to auditors. `redactPayload: false` stores raw text for debugging environments.
+
+- **Enrichment.** `enrich(ctx, result) => { tenant, userId, actionName, ... }` extends the entry with domain fields. Common pattern: capture tenant + user ID + business action name for compliance reports.
+
+- **Bundled `InMemoryAuditStore`** — ring-buffered (default 10K entries), with `append` / `list({ limit?, since? })` / `size` / `latest` / `clear`. For production, wire your own store: CAP entity (auto-persisted via `usageMeteringToCap` pattern), HANA table, Kafka topic, Splunk HEC, S3 object per entry, etc. Interface: `{ append(entry) → Promise<void>, list?(opts) }`.
+
+- **Store errors don't crash the chain.** A failed `store.append()` bumps `stats.storeErrors++`, calls `onError({ err, phase: 'append', entry })`, ROLLS BACK the sequence + lastHash pointers (so the NEXT entry doesn't reference a hash we never actually persisted), and returns the original LLM result untouched. The compliance audit is a best-effort side channel; a broken audit sink should never fail a real user request.
+
+- **Non-numeric hash-chain rollback** — on store error the middleware restores `stats.lastHash = entry.prevHash` + `stats.lastSequence--` so subsequent entries chain cleanly. Guarantees: a persisted chain is always internally consistent.
+
+- **Skip filter.** `skipMethods: ['embed']` by default (no chat content to audit on pure vector calls). Streams are also skipped in v1 — streaming audit requires the 1.72 `onComplete` integration which will land in a follow-up.
+
+- **Introspection.** `stats: { totalRequests, audited, skipped, piiDetected, storeErrors, lastSequence, lastHash }` + `reset()` (clears counters — does NOT clear the store) + `asMcpResource()` → `config://sensitive-data-audit`.
+
+- **TypeScript.** `SensitiveDataAuditOptions`, `SensitiveDataAuditStats`, `SensitiveDataAuditMiddleware`, `AuditStore`, `AuditEntry`, `AuditDetectionResult`, `InMemoryAuditStore`, `verifyAuditChain`, `hashAuditEntry`.
+
+- **Recommended placement.** OUTER of `usageMetering` (a soft-failed audit shouldn't inflate billing accuracy), INNER of `piiRedact` (the audit sees the pre-redaction request but stores masked preview — matches the "we know PII was here" compliance model without leaking the values). Pair with `traceCorrelation` (1.64) so `entry.correlationId` cross-references your other logs.
+
 ## [1.95.0] — 2026-08-10
 
 ### Added
