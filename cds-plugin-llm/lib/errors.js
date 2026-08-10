@@ -141,6 +141,13 @@ const errorRegistry = {
     httpStatus: 503,     // Service Unavailable — waited too long
     severity:   'error',
   },
+  // Multi-region failover family
+  ALL_REGIONS_FAILED: {
+    primitive:  'regionFailover',
+    retriable:  false,   // every eligible region tried and failed; retrying won't help
+    httpStatus: 502,     // Bad Gateway — upstream regions all failed
+    severity:   'error',
+  },
 };
 
 // ---- Base class -------------------------------------------------------

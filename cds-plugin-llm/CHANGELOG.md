@@ -4,6 +4,58 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.99.0] — 2026-08-10
+
+### Added
+
+- **`regionFailover({ regions, allowedRegions?, unhealthyCooldownMs?, ... })` — multi-region failover with geographic awareness + health tracking.** Extends `chatWithFallback` (1.50) with region-level routing: per-provider fallback happens INSIDE each region's chain; this handles per-region fallback ACROSS regions. Together they form the full HA topology for enterprise LLM deployments.
+
+  ```js
+  const { regionFailover } = require('@saptarishi/cds-plugin-llm');
+
+  const routed = regionFailover({
+    regions: [
+      { name: 'eu-central-1', service: euCentralLlm },
+      { name: 'eu-west-1',    service: euWestLlm    },
+      { name: 'us-east-1',    service: usEastLlm    },
+    ],
+    allowedRegions:      ['eu-central-1', 'eu-west-1'],   // GDPR data residency
+    unhealthyCooldownMs: 60_000,                          // remember failed regions for 60s
+    perRegionTimeoutMs:  15_000,                          // fail over faster than provider default
+    onFailover: (info) => cds.log('llm:region').warn(info),
+  });
+
+  const result = await routed.chat({ messages: [...] });
+  //  { text, model, usage, region: 'eu-central-1', attempts: [...] }
+  ```
+
+- **Data-residency filtering** via `allowedRegions: [...]` — only regions in the whitelist are eligible. Requests filtered by residency policy count into `stats.filteredResidency`. Compliance ask for GDPR / SOC / regional data-sovereignty laws.
+
+- **Health tracking with cooldown.** After a region fails a request, it's marked unhealthy for `unhealthyCooldownMs` (default 60s). Subsequent calls skip that region entirely — no wasted round-trips to a known-down region. When the cooldown expires, the region becomes eligible again automatically. `unhealthyCooldownMs: 0` disables tracking (always try all regions).
+
+- **Per-region timeout** via `perRegionTimeoutMs` — cap how long a single region can hang before failover. Independent of the provider's own timeout — enables fast recovery even against slow providers.
+
+- **Manual health control:**
+  - `routed.markRegionUnhealthy(name, ttlMs?)` — externally mark a region down (e.g., from a probe)
+  - `routed.clearRegionHealth(name)` — force-re-eligible
+  - `routed.unhealthySnapshot()` → `{ [regionName]: { unhealthyUntilMs, msRemaining } }` — live health view
+
+- **Smart failover predicate.** Default `isFallback` (same philosophy as chatWithFallback's): fail over on transport errors (5xx / network), CircuitOpenError, RateLimitGiveUpError, DeadlineExceededError, BulkheadFullError, BulkheadTimeoutError. Does NOT fail over on 4xx (same bad request would fail everywhere). Custom `isFallback(err) => boolean` for domain-specific rules.
+
+- **Rich attempt trail.** Every response carries `attempts: [{ region, ok, error?, durationMs }]` — see exactly what was tried and how long each took. Great for `otelSpans` (1.93) attribution + ops dashboards.
+
+- **Callbacks:**
+  - `onSelected({ region, attempt, ofCandidates })` — fires per candidate BEFORE the attempt
+  - `onFailover({ from, to, error, attempt, durationMs })` — fires when we hand off
+
+- **Introspection.** `stats: { totalRequests, successful, failed, failoversPerformed, byRegionSuccess, byRegionFailure, filteredResidency }` + `reset()` + `asMcpResource()` → `config://region-failover` (includes `currentUnhealthy` list).
+
+- **New error code `ALL_REGIONS_FAILED`** in the 1.57 taxonomy: `httpStatus: 502`, `retriable: false`. Carries `attempts` list + `cause` (last error). Compatible with `llmErrorHandler` (1.58).
+
+- **TypeScript.** `Region`, `RegionFailoverOptions`, `RegionFailoverStats`, `RegionFailoverInstance`, `RegionFailoverAttempt`, `AllRegionsFailedError`.
+
+- **Composition pattern.** Wrap each region's LLM with its OWN full middleware chain (retry, breaker, bulkhead, metering, ...) — then pass to `regionFailover`. The failover layer sees the region's LLM as a black box and only cares about success/failure at the region level. Compose with `providerHealthProbe` (1.62) for proactive health signals from outside the request path.
+
 ## [1.98.0] — 2026-08-10
 
 ### Added

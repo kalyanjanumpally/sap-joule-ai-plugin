@@ -3447,6 +3447,79 @@ export function formatLintReport(
 export const KNOWN_LINT_RULES: ReadonlySet<string>;
 export const DEFAULT_INJECTION_PATTERNS: Array<{ re: RegExp; name: string }>;
 
+// ---- Multi-region failover (new in 1.99.0) ---------------------------
+
+export interface Region {
+  name:    string;
+  service: { chat: (req: any) => Promise<any> };
+}
+
+export interface RegionFailoverOptions {
+  regions:              Region[];
+  allowedRegions?:      string[] | null;
+  isFallback?:          (err: any) => boolean;
+  perRegionTimeoutMs?:  number | null;
+  unhealthyCooldownMs?: number;
+  onFailover?:          ((info: { from: string; to: string | null; error: Error; attempt: number; durationMs: number }) => void) | null;
+  onSelected?:          ((info: { region: string; attempt: number; ofCandidates: number }) => void) | null;
+  now?:                 () => number;
+}
+
+export interface RegionFailoverAttempt {
+  region:      string;
+  ok:          boolean;
+  error?:      string;
+  durationMs:  number;
+}
+
+export interface RegionFailoverStats {
+  totalRequests:      number;
+  successful:         number;
+  failed:             number;
+  failoversPerformed: number;
+  byRegionSuccess:    Record<string, number>;
+  byRegionFailure:    Record<string, number>;
+  filteredResidency:  number;
+}
+
+export interface RegionFailoverInstance {
+  chat(request: any): Promise<any & { region: string; attempts: RegionFailoverAttempt[] }>;
+  readonly stats: RegionFailoverStats;
+  reset(): void;
+  unhealthySnapshot(): Record<string, { unhealthyUntilMs: number; msRemaining: number }>;
+  markRegionUnhealthy(name: string, ttlMs?: number): void;
+  clearRegionHealth(name: string): void;
+  asMcpResource(): {
+    uri: 'config://region-failover';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => RegionFailoverStats & {
+      regionCount:         number;
+      allowedRegions:      string[] | null;
+      perRegionTimeoutMs:  number | null;
+      unhealthyCooldownMs: number;
+      currentUnhealthy:    string[];
+    };
+  };
+}
+
+export class AllRegionsFailedError extends LLMError {
+  readonly attempts: RegionFailoverAttempt[];
+  readonly cause:    Error;
+}
+
+/**
+ * Multi-region failover. Routes LLM calls to the nearest healthy
+ * region with automatic failover on breaker-open / 5xx / network
+ * errors. Extends chatWithFallback (1.50) with geographic awareness
+ * — per-provider fallback happens INSIDE each region's chain; this
+ * handles per-region fallback across regions. Data-residency
+ * configurable via allowedRegions (GDPR / SOC / etc.).
+ * @since 1.99.0
+ */
+export function regionFailover(options: RegionFailoverOptions): RegionFailoverInstance;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

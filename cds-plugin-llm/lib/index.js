@@ -196,6 +196,9 @@ module.exports = {
   formatLintReport:   require('./lintPrompt').formatLintReport,
   KNOWN_LINT_RULES:   require('./lintPrompt').KNOWN_RULES,
   DEFAULT_INJECTION_PATTERNS: require('./lintPrompt').DEFAULT_INJECTION_PATTERNS,
+  // Multi-region failover — geographic-aware routing + health tracking (new in 1.99.0)
+  regionFailover:     require('./regionFailover').regionFailover,
+  AllRegionsFailedError: require('./regionFailover').AllRegionsFailedError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,
