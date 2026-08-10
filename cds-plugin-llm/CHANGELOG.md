@@ -4,6 +4,67 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.87.0] — 2026-08-10
+
+### Added
+
+- **`saptarishi-llm export-dashboard --format <grafana|alerts|datadog|newrelic>` — pre-built observability dashboards + Prometheus alert rules.** Ships ready-to-import artifacts matching the shipped `promMetrics` output. Turns "you have metrics" into "you have a working dashboard in 30 seconds." Real deployable artifact for customer pitches. `cds-llm export-dashboard` alias also works.
+
+  ```sh
+  # Grafana:
+  saptarishi-llm export-dashboard --format grafana > dashboard.json
+  # Import in Grafana: Dashboards → New → Import → paste JSON.
+
+  # Prometheus alert rules:
+  saptarishi-llm export-dashboard --format alerts --out alerts.yml
+  # Place under /etc/prometheus/rules/ and reload.
+
+  # Datadog:
+  saptarishi-llm export-dashboard --format datadog --out dd.json
+
+  # New Relic:
+  saptarishi-llm export-dashboard --format newrelic --account 1234567 > nr.json
+  ```
+
+- **Grafana dashboard** (schemaVersion 41+, 20+ panels) organized into 5 rows:
+  - **Spend** — total 24h spend, savings from caching, spend rate by model
+  - **Budget** — utilization % vs limit, spend by scope
+  - **Cache** — hit rate gauge, hits/misses rate, cache size, semantic hits
+  - **Resilience** — circuit breaker state, bulkhead queue depth, retry wait budget, opens/rejects counters
+  - **Errors + safety** — error rate %, prompt-injection detections by action, guardrail blocks / injection blocked / deadlines expired / rate-limit give-ups
+
+- **Prometheus alert rules** — 7 alerts covering the failure modes that actually page:
+  - `LlmBudgetNearLimit` (warning, >80% of limit for 5m)
+  - `LlmBudgetExhausted` (critical, ≥100% for 2m)
+  - `LlmCircuitBreakerOpen` (critical, state>0 for 2m)
+  - `LlmHighErrorRate` (warning, >5% for 10m)
+  - `LlmBulkheadSaturation` (warning, queue>0 for 5m)
+  - `LlmRateLimitGiveUps` (warning, retries exhausted)
+  - `LlmProviderUnhealthy` (critical, health probe failed 3m)
+
+- **Datadog dashboard** — 6 widgets using DogStatsD-style metric queries (`llm.usage.cost_by_model_dollars_total{job:llm} by {model}.as_rate()`). Ordered layout, drop into any DD account.
+
+- **New Relic dashboard** — NRQL-based, requires `--account <id>`. 5 widgets on one page covering spend / cache / breaker / error rate / budget utilization.
+
+- **Configurable via flags**:
+  - `--datasource <uid>` — Grafana Prometheus datasource UID (default `Prometheus`)
+  - `--job <name>` — Prometheus `job` label to match (default `llm`) — propagates into every query so the dashboard scopes to your instance
+  - `--out <file>` — write to file instead of stdout; reports byte count on stderr
+
+- **Dep-free YAML emitter** for the alerts format — 60-ish lines of code, correctly handles nested arrays-of-objects (Prometheus rules), multi-line strings via folded-strip block scalar, and conservative quoting (only when a value could be misparsed as YAML structure).
+
+- **Programmatic exports** — the four dashboard/rules factories are exported from the top-level package for callers building custom variants:
+
+  ```js
+  const { grafanaDashboard, prometheusAlertRules } = require('@saptarishi/cds-plugin-llm');
+
+  const dash = grafanaDashboard({ datasource: 'my-prom', job: 'joule-llm' });
+  dash.panels.push(myCustomPanel);
+  fs.writeFileSync('dashboard.json', JSON.stringify(dash, null, 2));
+  ```
+
+- **TypeScript.** `GrafanaDashboardOptions`, `PrometheusAlertRulesOptions`, `DatadogDashboardOptions`, `NewRelicDashboardOptions`, all four factory function signatures.
+
 ## [1.86.0] — 2026-08-10
 
 ### Added

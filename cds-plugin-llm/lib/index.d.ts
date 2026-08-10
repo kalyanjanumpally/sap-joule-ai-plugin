@@ -2665,6 +2665,57 @@ export interface AutoContinueMiddleware extends Middleware {
  */
 export function autoContinue(options?: AutoContinueOptions): AutoContinueMiddleware;
 
+// ---- Pre-built dashboards + alert rules (new in 1.87.0) --------------
+
+export interface GrafanaDashboardOptions {
+  /** Prometheus datasource UID. Default 'Prometheus'. */
+  datasource?: string;
+  /** Prometheus `job` label to filter on. Default 'llm'. */
+  job?:        string;
+}
+
+export interface PrometheusAlertRulesOptions {
+  job?: string;
+}
+
+export interface DatadogDashboardOptions {
+  job?: string;
+}
+
+export interface NewRelicDashboardOptions {
+  accountId: number | string;
+  job?:      string;
+}
+
+/**
+ * Grafana JSON dashboard model (schemaVersion 41+) matching the
+ * shipped `promMetrics` output. Import via Dashboards → New → Import.
+ * @since 1.87.0
+ */
+export function grafanaDashboard(options?: GrafanaDashboardOptions): Record<string, unknown>;
+
+/**
+ * Prometheus alert rules covering budget exhaustion, breaker open,
+ * high error rate, bulkhead saturation, rate-limit give-ups, and
+ * provider health probes.
+ * @since 1.87.0
+ */
+export function prometheusAlertRules(options?: PrometheusAlertRulesOptions): { groups: Array<{ name: string; interval: string; rules: Array<Record<string, unknown>> }> };
+
+/**
+ * Datadog dashboard JSON matching the shipped promMetrics output
+ * (metric names converted to Datadog dot-namespaced form).
+ * @since 1.87.0
+ */
+export function datadogDashboard(options?: DatadogDashboardOptions): Record<string, unknown>;
+
+/**
+ * New Relic dashboard using NRQL queries. Requires an account id
+ * because NRQL queries are account-scoped.
+ * @since 1.87.0
+ */
+export function newrelicDashboard(options: NewRelicDashboardOptions): Record<string, unknown>;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

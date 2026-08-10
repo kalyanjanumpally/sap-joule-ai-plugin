@@ -18,6 +18,7 @@ const COMMANDS = {
   preflight:         require('./commands/preflightCmd'),
   doctor:            require('./commands/doctor'),
   batch:             require('./commands/batch'),
+  'export-dashboard': require('./commands/exportDashboard'),
   help: async () => { printHelp(); return 0; },
 };
 
@@ -58,6 +59,11 @@ const GLOBAL_OPTS = {
   'poll':          { type: 'string' },
   // Chat REPL flag (1.86.0)
   'interactive':   { type: 'boolean', short: 'i' },
+  // Dashboard exporter flags (1.87.0)
+  'format':        { type: 'string' },
+  'datasource':    { type: 'string' },
+  'job':           { type: 'string' },
+  'account':       { type: 'string' },
 };
 
 async function run(argv) {
@@ -134,6 +140,7 @@ commands:
   preflight <config.json>               Run boot-time config check (env/models/chain)
   doctor                                One-shot env diagnostic (Node/pkg/env/providers/MCP)
   batch <sub> ...                       Offline batch workflows (submit/status/wait/results/cancel)
+  export-dashboard --format <fmt>       Emit Grafana / Datadog / New Relic dashboards + Prometheus alert rules
   help        Show this help
 
 common options:
