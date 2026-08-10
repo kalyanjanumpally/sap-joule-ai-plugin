@@ -4,6 +4,64 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.91.0] — 2026-08-10
+
+### Added
+
+- **`compactHistory({ maxMessages?, keepRecent?, summarizer?, llm?, ... })` — automatic conversation-history summarization middleware.** When `messages.length > maxMessages`, summarizes the OLDEST portion via an LLM call and replaces those messages with a compact synthetic exchange — keeping the most recent `keepRecent` messages verbatim. Bounded context spend on long-running agent conversations without losing key facts from the early turns.
+
+  ```js
+  const { compactHistory } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(compactHistory({
+    maxMessages: 20,
+    keepRecent:  6,
+    llm,                              // used by the default summarizer
+    summaryModel: 'claude-haiku-4-5', // cheap+fast for the summary call
+    summaryMaxTokens: 500,
+  }));
+
+  // A 40-turn conversation → the oldest 34 messages get summarized
+  // into 1 synthetic pair (user "please summarize" + assistant
+  // "[EARLIER CONVERSATION SUMMARY] ..."), then the recent 6 messages
+  // appended verbatim → 8 total turns sent to provider. Every subsequent
+  // turn stays around 8-9 total until the recent-6 window rolls again.
+  ```
+
+- **Two-turn synthetic replacement** — the compaction produces:
+  ```json
+  [
+    { "role": "user",      "content": "Please summarize what has been discussed so far." },
+    { "role": "assistant", "content": "[EARLIER CONVERSATION SUMMARY]\n<summary text>" },
+    ...recent messages verbatim
+  ]
+  ```
+  Two turns (not one) preserves provider role-alternation invariants (Anthropic in particular requires strict user/assistant alternation) regardless of what role the first kept message has.
+
+- **Default summarizer, no config needed.** Provide `llm:` (or `chat:`) and the middleware handles the summary call itself with a well-tuned system prompt (`DEFAULT_COMPACT_SUMMARY_SYSTEM`) that instructs the summarizer to "preserve every concrete fact, decision, name, ID, number, date, outcome; drop conversational filler." Override with `summarizer: async (oldMessages, ctx) => string` for custom logic.
+
+- **Sensible defaults for the summary call:**
+  - `summaryModel` — override to a cheap+fast model (e.g. `claude-haiku-4-5`, `gpt-4o-mini`) for cost efficiency
+  - `summarySystem` — the default is optimized for procurement/enterprise agent flows; override for domain specifics
+  - `summaryMaxTokens: 500` — usually enough for a bullet-point summary; increase for verbose contexts
+  - `summaryPrefix: '[EARLIER CONVERSATION SUMMARY]'` — clearly marks the summary boundary in the resulting messages
+
+- **Multimodal-aware dumping.** When flattening old messages for the summarizer, handles both string content and array content (`[{ type: 'text', text: '...' }, { type: 'image' }]`) — image blocks pass through as `[assistant] {"type":"image"...}` rather than crashing the JSON dump.
+
+- **Non-destructive.** Mutates `ctx.request.messages` for the inner `next()` call only, restores original in a `finally` block. Outer middleware sees the pre-compaction request; inner sees the compact one. Same guarantee as `piiRedact` (1.80) and `modelRouter` (1.81).
+
+- **Soft-fail on summarizer errors.** If the summary LLM call throws (rate limit, network, etc.) OR the summarizer returns an empty string, the middleware logs `summarizerErrors++` + `onError` callback and passes the FULL uncompacted request through — never drops the call entirely. Better a bigger context than no response at all.
+
+- **Method filter.** `skipMethods: ['embed', 'stream']` by default — embed calls don't have chat history, streams complete before the middleware can rewrite them.
+
+- **Preserves system prompt.** `ctx.request.system` is never touched; only `messages[]` is rewritten. System prompts stay stable across the whole conversation.
+
+- **Introspection.** `stats: { totalRequests, compacted, skipped, summarizerErrors, totalMessagesRemoved, totalMessagesReplacedWith }` + `reset()` + `asMcpResource()` → `config://compact-history`.
+
+- **TypeScript.** `CompactHistoryOptions`, `CompactHistoryStats`, `CompactHistoryMiddleware`, `DEFAULT_COMPACT_SUMMARY_SYSTEM`.
+
+- **Recommended placement.** OUTER of `usageMetering` (summary calls should be tracked as regular billed calls), INNER of `promptInjectionGuard` + `guardrails` (still validate user input on each turn — the summary sees pre-scrubbed content since it runs after those). Pairs naturally with `autoContinue` (1.85) for long conversations that also hit `max_tokens` on long assistant responses.
+
 ## [1.90.0] — 2026-08-10
 
 ### Added

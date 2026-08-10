@@ -167,6 +167,9 @@ module.exports = {
   // RAG orchestration helper — retrieve → dedupe → rerank → truncate → answer (new in 1.90.0)
   ragChain:          require('./ragChain').ragChain,
   DEFAULT_RAG_SYSTEM: require('./ragChain').DEFAULT_RAG_SYSTEM,
+  // Compact-history — summarize old messages when conversation exceeds maxMessages (new in 1.91.0)
+  compactHistory:    require('./middleware/compactHistory').compactHistory,
+  DEFAULT_COMPACT_SUMMARY_SYSTEM: require('./middleware/compactHistory').DEFAULT_SUMMARY_SYSTEM,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

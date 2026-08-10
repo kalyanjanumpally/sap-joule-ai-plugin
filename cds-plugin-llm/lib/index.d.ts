@@ -2915,6 +2915,82 @@ export function ragChain(options: RagChainOptions): RagChainAsk;
 
 export const DEFAULT_RAG_SYSTEM: string;
 
+// ---- Compact-history middleware (new in 1.91.0) ----------------------
+
+export interface CompactHistoryOptions {
+  /** Compact when messages.length > this. Default 20. */
+  maxMessages?:      number;
+  /** How many recent messages to keep verbatim. Default 6. Must be < maxMessages. */
+  keepRecent?:       number;
+  /** Custom summarizer. Receives (oldMessages, ctx). Return non-empty string on success. */
+  summarizer?:       ((oldMessages: any[], ctx: MiddlewareContext) => Promise<string> | string) | null;
+  /** LLMService for the DEFAULT summarizer (used when no custom summarizer provided). */
+  llm?:              { chat: (req: any) => Promise<any> };
+  /** Raw chat function for the default summarizer. */
+  chat?:             (req: any) => Promise<any>;
+  /** Model override for the default summarizer's LLM call. Cheap+fast recommended. */
+  summaryModel?:     string;
+  /** System prompt for the default summarizer. */
+  summarySystem?:    string;
+  /** User prompt prefix (before dumped messages). */
+  summaryPrompt?:    string;
+  /** Prefix on the synthetic assistant summary message. Default '[EARLIER CONVERSATION SUMMARY]'. */
+  summaryPrefix?:    string;
+  /** maxTokens for the summary call. Default 500. */
+  summaryMaxTokens?: number;
+  /** Methods to skip. Default ['embed', 'stream']. */
+  skipMethods?:      string[];
+  /** Fired on every successful compaction. Errors swallowed. */
+  onCompact?:        ((info: {
+    method:         string;
+    originalCount:  number;
+    removedCount:   number;
+    keptCount:      number;
+    summaryChars:   number;
+    finalCount:     number;
+  }) => void) | null;
+  /** Fired when the summarizer throws. */
+  onError?:          ((info: { err: Error; method: string; oldMessagesCount: number }) => void) | null;
+}
+
+export interface CompactHistoryStats {
+  totalRequests:             number;
+  compacted:                 number;
+  skipped:                   number;
+  summarizerErrors:          number;
+  totalMessagesRemoved:      number;
+  totalMessagesReplacedWith: number;
+}
+
+export interface CompactHistoryMiddleware extends Middleware {
+  readonly stats: CompactHistoryStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://compact-history';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => CompactHistoryStats & {
+      maxMessages:         number;
+      keepRecent:          number;
+      summaryModel:        string | null;
+      summaryMaxTokens:    number;
+      hasCustomSummarizer: boolean;
+    };
+  };
+}
+
+/**
+ * When messages.length > maxMessages, summarizes the oldest portion
+ * via an LLM call and replaces it with a compact synthetic exchange —
+ * keeping the recent keepRecent messages verbatim. Bounded context
+ * spend for long-running agent conversations.
+ * @since 1.91.0
+ */
+export function compactHistory(options?: CompactHistoryOptions): CompactHistoryMiddleware;
+
+export const DEFAULT_COMPACT_SUMMARY_SYSTEM: string;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
