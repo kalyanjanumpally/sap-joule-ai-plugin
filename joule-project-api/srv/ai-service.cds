@@ -164,4 +164,35 @@ service AIService @(path: '/ai') {
     format      : String,
     model       : String
   ) returns PurchaseOrderDraft;
+
+  // ---- Batch supplier-risk scoring (new in 0.26.0) --------------------
+  // Bulk-score N suppliers using the provider's batch API (Anthropic
+  // Message Batches / OpenAI Batch API — 24h SLA, ~50% cost vs sync).
+  // Fits nightly-scoring pipelines: score every active supplier's risk
+  // in one submission, poll until done, receive rows. Uses runBatch()
+  // from cds-plugin-llm 1.79.0 which wraps submit → wait → results.
+
+  type BatchSupplierScore {
+    supplierId : String;
+    risk       : String enum { low; medium; high };
+    rationale  : String;
+    error      : String;    // populated if this particular row errored
+  }
+
+  type BatchScoreResult {
+    batchId :  String;
+    scored :   Integer;
+    errors :   Integer;
+    rows :     many BatchSupplierScore;
+  }
+
+  action batchScoreSuppliers(
+    suppliers : many {
+      supplierId : String not null;
+      scenario   : String not null;
+    },
+    pollSeconds  : Integer,   // polling cadence; default 30
+    timeoutHours : Integer,   // max wait; default 6
+    model        : String     // batch-eligible model override
+  ) returns BatchScoreResult;
 }

@@ -12,6 +12,7 @@ CAP backend for the **Procurement Copilot** Joule agent. Hosts LLM-backed action
 | `POST /ai/analyzeScenario` | **Multi-agent orchestration**. Supervisor coordinator + 3 specialists (contract-lookup with the `@rag` hybrid search tool, price-analyst, compliance-checker). Returns `{ answer, trace: [{ agent, question, answer, isError }], steps }`. |
 | `POST /ai/assessSupplierRisk` | **Supplier risk assessment.** Pass a supplier ID + free-text context (incidents, geopolitical situation, financial signals). Returns the shipped `schemas.SupplierRisk` shape: `{ risk: low\|medium\|high, rationale, confidence, factors: [{factor, impact, evidence}] }`. Same shape as `explainInvoiceRisk` so the UI renders both consistently. |
 | `POST /ai/transcribeVoiceNoteToPO` | **Voice memo → PurchaseOrderDraft**. Pass a base64-encoded voice recording + `format` (wav/mp3/m4a/ogg/flac/aac/opus/webm) + optional `model` override. Uses the shipped `audioFromBase64` helper + `schemas.PurchaseOrder`. Works with Gemini (`gemini-2.5-flash`) natively; also works with an OpenAI-compat `gpt-4o-audio-preview` endpoint. Providers without audio (Anthropic, Groq, Ollama) return a 400 with a diagnostic pointing at the workarounds. |
+| `POST /ai/batchScoreSuppliers` | **Bulk supplier risk scoring at ~50% cost, 24h SLA.** Uses `runBatch()` from `cds-plugin-llm@1.79.0` — submits N supplier scenarios to the provider's batch endpoint, polls until done, returns rows. Requires an Anthropic or OpenAI-compatible provider (the only two with batch impls). Body: `{ suppliers: [{supplierId, scenario}], pollSeconds, timeoutHours, model }`. Response: `{ batchId, scored, errors, rows: [{supplierId, risk, rationale, error}] }`. Fits nightly-scoring pipelines. |
 | `POST /stream/analyzeScenario` | **Multi-agent analyzeScenario over SSE** — same 3-specialist supervisor flow as `/ai/analyzeScenario` but streams `streamAgents()` events (`turn_start`, `text`, `agent_call_start`, `agent_call_result`, `done`) as they happen. Chat UIs render agent badges (`contract-lookup…`) and coordinator prose live instead of blocking on the full trace. |
 | `POST /procurement/SupplierContracts/ProcurementService.searchByMeaning` | **Semantic search over supplier contracts (auto-declared by `@rag`)** |
 | `POST /procurement/SupplierContracts/ProcurementService.askAbout` | **Q&A with cited sources over supplier contracts (auto-declared by `@rag`)** |
@@ -346,6 +347,20 @@ Configured in `package.json`:
 | `production` | `llm-genai-hub` (SAP AI Core) | BTP paid tier |
 
 Swap provider without touching handler code — `srv/ai-service.js` only talks to `cds.connect.to('llm')`.
+
+## Troubleshooting
+
+If the app boots but LLM calls fail, run the plugin's env diagnostic:
+
+```sh
+npx saptarishi-llm doctor
+# or, once installed globally:
+saptarishi-llm doctor
+# minimal / no-network variant for CI:
+saptarishi-llm doctor --skip-network
+```
+
+Runs a full sweep: Node version compatibility, package version, credentials detected in env, MCP transport modules load, and a tiny chat probe against every provider with credentials. Prints pass / warn / fail per check with remediation tips (401 → which env var to fix, 429 → rate-limited, network errors → firewall/VPN/DNS, etc.). Redacted preview of any credential (`sk-a...9dQr`) — safe to paste into a support ticket. `cds-llm doctor` also works if you prefer the alias. New in `cds-plugin-llm@1.78.0`.
 
 ## Run locally
 

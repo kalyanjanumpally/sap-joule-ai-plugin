@@ -40,6 +40,18 @@ const {
   withCapHandler,
   preflight,
   PreflightError,
+  // 1.75-1.80 primitives newly wired in this release:
+  //   replayBuffer              — live in-memory debug window for the LLM chain
+  //   structuredOutputValidator — chain-level JSON Schema enforcement
+  //   idempotency               — dedupe client-side retries on flaky networks
+  //   piiRedact                 — reversible PII masking + round-trip un-masking
+  //   runBatch / waitForBatch   — bulk workflows (~50% cost, 24h SLA)
+  replayBuffer,
+  structuredOutputValidator,
+  idempotency,
+  piiRedact,
+  runBatch,
+  waitForBatch,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -138,6 +150,11 @@ let _tuner;
 let _probe;
 let _adaptiveMaxTokens;
 let _traceCorrelation;
+// 1.75-1.80 additions (wired in ai-service init below):
+let _piiRedact;
+let _idempotency;
+let _replayBuffer;
+let _structuredOutputValidator;
 // Auto-retry-wrapped llm.chat. Instantiated after the LLM connects; used
 // by every action handler so transient failures (BulkheadFull, CircuitOpen)
 // recover automatically without hand-writing retry code per action.
@@ -282,6 +299,21 @@ function getLLM() {
         },
       });
       llm.use(_guardrails);
+      // piiRedact (cds-plugin-llm 1.80.0) — reversible PII masking with
+      // ROUND-TRIP un-masking. Complements guardrails.filters.pii above,
+      // which drops matched PII irrecoverably: this middleware masks
+      // outbound with tokens (<PII_EMAIL_1>) and un-masks the response
+      // text back to the original values before returning to the caller.
+      // The provider only ever sees tokens; the caller sees the original
+      // email / phone / SSN / IBAN / Luhn-checked credit card back.
+      // Placed AFTER guardrails so security filters still see original
+      // text for pattern detection, BEFORE the cost path so the estimator
+      // counts the (shorter) redacted content the provider will process.
+      _piiRedact = piiRedact({
+        detectors:      ['email', 'phone', 'ssn', 'creditCard', 'iban'],
+        unmaskResponse: true,
+      });
+      llm.use(_piiRedact);
       // costGuard — pre-flight per-call cost ceiling. Refuses requests
       // whose estimated cost exceeds $0.50 BEFORE spending a token.
       // Complements costBudget below (per-tenant / per-window
@@ -339,6 +371,22 @@ function getLLM() {
         ),
       });
       llm.use(_adaptiveMaxTokens);
+      // idempotency (cds-plugin-llm 1.77.0) — dedupes duplicate LLM
+      // requests over a short TTL window. Protects against client
+      // retries on flaky networks (Joule → UI → backend hops) that
+      // would otherwise cause double-billing. Different from
+      // responseCache below (long warm cache with semantic lookup) —
+      // this is a short accidental-dupe collapse based on structural
+      // hash. Placed OUTER of usageMetering (dedupes shouldn't
+      // re-bill), INNER of guardrails / cost checks (every caller's
+      // input still validated).
+      _idempotency = idempotency({
+        ttlMs:      60_000,       // 1-minute short window
+        maxSize:    500,
+        onInFlight: 'coalesce',   // concurrent dupes await the same promise
+        onDuplicate: 'return',    // completed-cache dupes get the same result
+      });
+      llm.use(_idempotency);
       // Circuit breaker — instantiated by resilience.bundle above.
       llm.use(_breaker);
       // Bulkhead — instantiated by resilience.bundle above.
@@ -375,6 +423,37 @@ function getLLM() {
         },
       });
       llm.use(_cache);
+
+      // structuredOutputValidator (cds-plugin-llm 1.76.0) — chain-level
+      // enforcement of JSON Schema on LLM responses. Complements the
+      // shipped `schemas` module (used by extractInvoiceLineItems /
+      // assessSupplierRisk / transcribeVoiceNoteToPO) by rejecting or
+      // auto-retrying malformed model output BEFORE it reaches the
+      // caller. Skips when the request has no `format:` — the vast
+      // majority of chat calls pass through untouched. Placed INNER of
+      // cache so cached responses don't get re-validated (they were
+      // valid when cached) and validation retries don't inflate cache
+      // misses.
+      _structuredOutputValidator = structuredOutputValidator({
+        onInvalid:  'retry',
+        maxRetries: 1,
+      });
+      llm.use(_structuredOutputValidator);
+
+      // replayBuffer (cds-plugin-llm 1.75.0) — rolling in-memory window
+      // of the last N request/response pairs for live debugging.
+      // Different from jsonLog above (fire-and-forget) — replayBuffer
+      // gives on-call engineers a lookback: "the LLM said something
+      // weird — pull the last 10 exchanges from memory". Placed
+      // INNERMOST so it captures what the provider actually saw AFTER
+      // all outer sanitization (redaction, injection sanitize, guardrail
+      // scrubbing) has run. Redacts messages/system/input by default
+      // as a belt-and-suspenders layer over piiRedact.
+      _replayBuffer = replayBuffer({
+        size:                   200,
+        includeRedactedPreview: true,   // shows the first 200 chars of last user message
+      });
+      llm.use(_replayBuffer);
 
       // Adaptive concurrency tuner (cds-plugin-llm 1.61.0) — AIMD on the
       // bulkhead's maxConcurrent based on rolling p95 latency. Target: 2s
@@ -487,6 +566,14 @@ function getAdaptiveMaxTokens() { return _adaptiveMaxTokens; }
 function getTraceCorrelation() { return _traceCorrelation; }
 /** Exported for the demo app so it can access the bundle's helpers. */
 function getResilience() { return _resilience; }
+/** Exported for /pii-state dashboard — round-trip PII masking counters. */
+function getPiiRedact() { return _piiRedact; }
+/** Exported for /idempotency-state dashboard — request dedup counters. */
+function getIdempotency() { return _idempotency; }
+/** Exported for /replay-buffer dashboard + debug endpoint. */
+function getReplayBuffer() { return _replayBuffer; }
+/** Exported for /schema-validator-state dashboard — retry / invalid counters. */
+function getStructuredOutputValidator() { return _structuredOutputValidator; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -1313,6 +1400,84 @@ module.exports = class AIService extends cds.ApplicationService {
       }
     }));
 
+    // ---- batchScoreSuppliers: bulk-async supplier risk (new in 0.26.0) ---
+    //
+    // Uses runBatch() from cds-plugin-llm 1.79.0 which wraps
+    // svc.batch({requests}) → waitForBatch() → svc.getBatchResults()
+    // in one call. ~50% cost vs sync at the price of a 24h SLA — right
+    // trade-off for nightly-scoring pipelines that score every active
+    // supplier once a day.
+    //
+    // NOTE: batch middleware pass-through — the batch method bypasses
+    // llm.use() entirely (per LLMService.js: "middleware does NOT wrap
+    // batch calls"), so piiRedact / idempotency / caches don't fire on
+    // these calls. The provider sees the raw requests. Per-item cost
+    // accounting must be done manually after getBatchResults() lands.
+    //
+    // Provider-dependency: this action requires an Anthropic or OpenAI-
+    // compatible provider (the only two with batch impls). Groq /
+    // Ollama will throw a helpful "does not support batch" error from
+    // LLMService.batch().
+    this.on('batchScoreSuppliers', withCapHandler(async (req) => {
+      const { suppliers, pollSeconds, timeoutHours, model } = req.data;
+      if (!Array.isArray(suppliers) || suppliers.length === 0) {
+        req.error(400, 'batchScoreSuppliers: suppliers array is required (non-empty).');
+        return;
+      }
+      const requests = suppliers.map((s) => ({
+        customId: s.supplierId,
+        model:    model || undefined,   // provider default when omitted
+        system:   INVOICE_SYSTEM.replace('invoice', 'supplier'),
+        messages: [{ role: 'user', content: `Assess supplier ${s.supplierId}: ${s.scenario}` }],
+        maxTokens: 400,
+      }));
+      const pollMs = (pollSeconds && pollSeconds > 0 ? pollSeconds : 30) * 1000;
+      const timeoutMs = (timeoutHours && timeoutHours > 0 ? timeoutHours : 6) * 60 * 60 * 1000;
+
+      let rows;
+      try {
+        rows = await runBatch(llm, requests, {
+          pollIntervalMs: pollMs,
+          timeoutMs,
+          onProgress: (s) => cds.log('llm:batch').info(
+            `[batch] ${s.status}${s.counts ? ' — ' + JSON.stringify(s.counts) : ''}`,
+          ),
+        });
+      } catch (e) {
+        if (/does not support batch/i.test(e.message)) {
+          req.error(400, `Configured LLM provider does not support batch. Switch to llm-anthropic or an OpenAI-compatible endpoint. Detail: ${e.message}`);
+          return;
+        }
+        throw e;
+      }
+
+      let scored = 0;
+      let errors = 0;
+      const outRows = rows.map((r) => {
+        if (r.error) {
+          errors++;
+          return { supplierId: r.customId, risk: 'high', rationale: '', error: String(r.error).slice(0, 300) };
+        }
+        scored++;
+        // Try to extract enum + rationale from the response text.
+        const text = r.text ?? '';
+        const risk = /high/i.test(text) ? 'high' : /medium/i.test(text) ? 'medium' : 'low';
+        return {
+          supplierId: r.customId,
+          risk,
+          rationale:  text.slice(0, 300),
+          error:      '',
+        };
+      });
+
+      return {
+        batchId: 'runBatch-inline',   // batch handle not surfaced by runBatch; expose the CLI for the id
+        scored,
+        errors,
+        rows: outRows,
+      };
+    }));
+
     return super.init();
   }
 };
@@ -1338,3 +1503,7 @@ module.exports.getAdaptiveMaxTokens = getAdaptiveMaxTokens;
 module.exports.getTraceCorrelation = getTraceCorrelation;
 module.exports.getResilience = getResilience;
 module.exports.getLLM = getLLM;
+module.exports.getPiiRedact = getPiiRedact;
+module.exports.getIdempotency = getIdempotency;
+module.exports.getReplayBuffer = getReplayBuffer;
+module.exports.getStructuredOutputValidator = getStructuredOutputValidator;
