@@ -4,6 +4,45 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.85.0] — 2026-08-10
+
+### Added
+
+- **`autoContinue({ maxContinuations?, triggers?, continuePrompt?, ... })` — auto-resume max-tokens-truncated responses.** Detects responses cut off by the provider's `maxTokens` limit (`stopReason: 'max_tokens' | 'length' | 'MAX_TOKENS'`) and automatically re-invokes the chain with a "continue where you left off" user message, stitching text + summing usage across attempts.
+
+  ```js
+  const { autoContinue } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(autoContinue({
+    maxContinuations: 2,
+    onContinue: (info) => cds.log('llm:continue').info(info),
+  }));
+
+  const res = await llm.chat({ maxTokens: 500, messages: [...] });
+  //  If model hit 500 → auto-continued transparently.
+  //  res.text contains the full stitched output.
+  //  res.usage sums input/output tokens across all attempts.
+  //  res.stopReason reflects the FINAL attempt (natural stop if resolved).
+  ```
+
+- **Provider-agnostic triggers.** Default set covers all shipped providers: `['max_tokens', 'length', 'MAX_TOKENS']` — Anthropic + Bedrock use `max_tokens`, OpenAI/Groq/DeepSeek/Fireworks use `length`, Gemini uses `MAX_TOKENS`. Custom `triggers:` array for provider extensions.
+
+- **Message rewriting.** On continuation, appends the previous assistant response + a user message ("Continue from exactly where you left off. Do not repeat any content...") to the request. The model has full context and just extends. Original `ctx.request` is restored in a `finally` block — outer middleware sees no side effects.
+
+- **Structured extractions skipped by default** (`skipStructured: true`). Concatenating two halves of a truncated JSON output produces garbage; the right fix is to bump `maxTokens` or use `adaptiveMaxTokens` (1.63). Explicit opt-in via `skipStructured: false` if you know your `format:` responses will naturally continue (e.g., stream of independent JSON objects).
+
+- **Streams passthrough by default** (`skipStreams: true`). Stream consumers see chunks live and can handle truncation themselves without middleware intervention.
+
+- **Give-up handling.** When `maxContinuations` is exhausted and the response is STILL truncated, returns the stitched partial with `stopReason` = the trigger value. Optional `onGiveUp` callback fires so ops can dashboard the pattern.
+
+- **Usage aggregation.** `input_tokens`, `output_tokens`, and any other numeric fields on `usage` are summed across attempts — `usageMetering` (1.21) sees the total. Non-numeric fields keep the first-seen value.
+
+- **Introspection.** `stats: { totalRequests, requestsContinued, totalContinuations, giveUps, byStopReason: { 'max_tokens': 42, 'length': 12 } }` + `reset()` + `asMcpResource()` → `config://auto-continue`.
+
+- **TypeScript.** `AutoContinueOptions`, `AutoContinueStats`, `AutoContinueMiddleware`.
+
+- **Recommended placement.** Any position works, but OUTER of `usageMetering` (each continuation is a real provider call and should be billed) and INNER of `responseCache` (a stitched response can be a cache entry) matches typical intent.
+
 ## [1.84.0] — 2026-08-10
 
 ### Added

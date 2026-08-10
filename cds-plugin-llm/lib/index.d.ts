@@ -2609,6 +2609,62 @@ export function judgeMany(options: JudgeManyOptions): Promise<Array<JudgeResult 
 
 export const DEFAULT_JUDGE_SYSTEM: string;
 
+// ---- Auto-continuation (new in 1.85.0) -------------------------------
+
+export interface AutoContinueOptions {
+  /** Stop reasons that trigger a continuation. Default ['max_tokens','length','MAX_TOKENS']. */
+  triggers?:         string[];
+  /** Max continuation attempts per request. Default 3. */
+  maxContinuations?: number;
+  /** User message appended on continuation. Default: 'Continue from exactly where you left off...' */
+  continuePrompt?:   string;
+  /** Fired after every continuation. Errors swallowed. */
+  onContinue?:       ((info: { attempt: number; triggeredBy: string; addedChars: number; totalChars: number; method: string }) => void) | null;
+  /** Fired when the cap is exhausted and response is still truncated. */
+  onGiveUp?:         ((info: { finalStopReason: string; attempts: number; method: string }) => void) | null;
+  /** Methods to intercept. Default ['chat']. */
+  methods?:          string[];
+  /** Skip when `format:` is set on the request (structured extraction can't safely concatenate). Default true. */
+  skipStructured?:   boolean;
+  /** Skip streams. Default true — v1 doesn't auto-continue streams. */
+  skipStreams?:      boolean;
+}
+
+export interface AutoContinueStats {
+  totalRequests:      number;
+  requestsContinued:  number;
+  totalContinuations: number;
+  giveUps:            number;
+  byStopReason:       Record<string, number>;
+}
+
+export interface AutoContinueMiddleware extends Middleware {
+  readonly stats: AutoContinueStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://auto-continue';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => AutoContinueStats & {
+      maxContinuations: number;
+      triggers:         string[];
+      methods:          string[];
+      skipStructured:   boolean;
+      skipStreams:      boolean;
+    };
+  };
+}
+
+/**
+ * Detects responses that were cut off by the provider's maxTokens
+ * limit (`stopReason: 'max_tokens' | 'length' | 'MAX_TOKENS'`) and
+ * automatically re-invokes the chain with a "continue where you
+ * left off" user message, stitching text + summing usage.
+ * @since 1.85.0
+ */
+export function autoContinue(options?: AutoContinueOptions): AutoContinueMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
