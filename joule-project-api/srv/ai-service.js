@@ -40,7 +40,7 @@ const {
   withCapHandler,
   preflight,
   PreflightError,
-  // 1.75-1.80 primitives newly wired in this release:
+  // 1.75-1.80 primitives (wired in 0.26.0):
   //   replayBuffer              — live in-memory debug window for the LLM chain
   //   structuredOutputValidator — chain-level JSON Schema enforcement
   //   idempotency               — dedupe client-side retries on flaky networks
@@ -52,6 +52,21 @@ const {
   piiRedact,
   runBatch,
   waitForBatch,
+  // 1.81-1.90 primitives newly wired in 0.27.0:
+  //   modelRouter        — task-aware routing (embed→cheap, schema→gpt-4o, tools→opus)
+  //   embeddingDedup     — content-addressable per-text embed cache (RAG re-index saver)
+  //   promptCacheStats   — surface Anthropic/OpenAI prompt-caching savings as metrics
+  //   autoContinue       — auto-resume max_tokens-truncated responses
+  //   safetyClassifier   — model-based content-safety detection (moderation + Anthropic refusal)
+  //   ragChain           — one-liner retrieve→rerank→answer helper (imported for callers
+  //                        that don't have a full vector-hana pipeline; the demo's own
+  //                        /ai/askAbout keeps the sophisticated hybrid + HyDE + RRF setup)
+  modelRouter,
+  embeddingDedup,
+  promptCacheStats,
+  autoContinue,
+  safetyClassifier,
+  ragChain,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -155,6 +170,12 @@ let _piiRedact;
 let _idempotency;
 let _replayBuffer;
 let _structuredOutputValidator;
+// 1.81-1.90 additions (0.27.0):
+let _modelRouter;
+let _embeddingDedup;
+let _promptCacheStats;
+let _autoContinue;
+let _safetyClassifier;
 // Auto-retry-wrapped llm.chat. Instantiated after the LLM connects; used
 // by every action handler so transient failures (BulkheadFull, CircuitOpen)
 // recover automatically without hand-writing retry code per action.
@@ -246,6 +267,88 @@ function getLLM() {
           ?? null,
       });
       llm.use(_jsonLog);
+      // promptCacheStats (cds-plugin-llm 1.83.0) — surfaces hidden
+      // prompt-caching savings from provider usage fields (Anthropic's
+      // cache_read_input_tokens, OpenAI's prompt_tokens_details.cached_tokens,
+      // DeepSeek + Gemini variants) as ops metrics. Turns 90% savings
+      // (Anthropic) / 50% (OpenAI) from invisible → dashboard-visible.
+      // Placed near jsonLog because both are observability layers reading
+      // the response's usage field.
+      _promptCacheStats = promptCacheStats({
+        onCache: (info) => cds.log('llm:cache-stats').info(
+          `[cache-hit] ${info.provider} ${info.model} read=${info.readTokens} saved=$${info.savingsUsd.toFixed(4)}`,
+        ),
+      });
+      llm.use(_promptCacheStats);
+      // modelRouter (cds-plugin-llm 1.81.0) — task-aware model routing.
+      // Declares policy centrally instead of every action hand-picking
+      // a model. Placed OUTER of cost/cache middleware so the estimator
+      // + cache key see the ROUTED model (higher hit rate for identical
+      // prompts across a policy family; correct cost math per-model).
+      _modelRouter = modelRouter({
+        rules: [
+          // Embeddings → cheap dedicated model
+          { match: { method: 'embed' },
+            route: { model: cds.env.requires?.['llm-embed']?.modelId ?? 'text-embedding-3-small' } },
+          // Structured extraction (uses format: schema) → JSON-mode-capable
+          { match: { hasFormat: true, hasImages: true },
+            route: { model: 'meta-llama/llama-4-scout-17b-16e-instruct' } },  // vision
+          { match: { hasFormat: true, hasPdfs: true },
+            route: { model: 'claude-opus-4-7' } },                              // PDF understanding
+          { match: { hasFormat: true, hasAudio: true },
+            route: { model: 'gemini-2.5-flash' } },                             // audio
+          { match: { hasFormat: true },
+            route: { model: cds.env.requires?.llm?.modelId } },                 // default JSON extractor
+          // Multi-turn tools (agents) → strong reasoning
+          { match: { hasTools: true },
+            route: { model: 'claude-opus-4-7' } },
+        ],
+        // No fallback: keep the configured provider default when no rule matches.
+        onRoute: (info) => cds.log('llm:router').debug(
+          `[router] rule[${info.ruleIndex}] ${info.fromModel} → ${info.toModel} (${info.method})`,
+        ),
+      });
+      llm.use(_modelRouter);
+      // embeddingDedup (cds-plugin-llm 1.82.0) — content-addressable per-
+      // text cache for embed() calls. Big saver for RAG re-index workflows
+      // where the same contract chunks get re-embedded on every schema
+      // change / prompt tweak / new column addition. Only affects embed
+      // methods; chat calls pass through untouched. Placed OUTER of
+      // usageMetering (hits are zero-token, don't re-bill).
+      _embeddingDedup = embeddingDedup({
+        maxEntries:    10_000,
+        maxTextLength: 100_000,
+      });
+      llm.use(_embeddingDedup);
+      // safetyClassifier (cds-plugin-llm 1.88.0) — model-based content
+      // safety detection. Anthropic-refusal path is free (reads
+      // stopReason:'refusal'); OpenAI moderation path requires an API
+      // key. Set OPENAI_API_KEY to enable the moderation call, else
+      // just the free refusal detection runs.
+      _safetyClassifier = safetyClassifier({
+        apiKey:    process.env.OPENAI_API_KEY ?? null,
+        threshold: 0.7,   // deliberately lax for a procurement copilot demo
+        action:    'flag',   // shadow-mode; enterprise buyers can flip to 'block'
+        onFlag: (info) => cds.log('llm:safety').warn(
+          `[safety] ${info.source} categories=${info.categories.join(',')}`,
+        ),
+      });
+      llm.use(_safetyClassifier);
+      // autoContinue (cds-plugin-llm 1.85.0) — auto-resume max_tokens-
+      // truncated responses. Skips structured (format:) requests by
+      // default — those need adaptiveMaxTokens instead. Streams pass
+      // through. Placed OUTER of usageMetering so each continuation is
+      // billed as its own call.
+      _autoContinue = autoContinue({
+        maxContinuations: 2,
+        onContinue: (info) => cds.log('llm:continue').info(
+          `[continue] attempt ${info.attempt} +${info.addedChars} chars (total=${info.totalChars})`,
+        ),
+        onGiveUp: (info) => cds.log('llm:continue').warn(
+          `[continue] gave up after ${info.attempts}, stopReason=${info.finalStopReason}`,
+        ),
+      });
+      llm.use(_autoContinue);
       // Prompt injection guard — sits OUTER of everything else so the
       // sanitized (or refused) payload is what guardrails + cache + meter +
       // provider all see. Runs BEFORE guardrails so it can spot zero-width
@@ -574,6 +677,16 @@ function getIdempotency() { return _idempotency; }
 function getReplayBuffer() { return _replayBuffer; }
 /** Exported for /schema-validator-state dashboard — retry / invalid counters. */
 function getStructuredOutputValidator() { return _structuredOutputValidator; }
+/** Exported for /router-state dashboard + MCP resource — task-aware routing hits. */
+function getModelRouter() { return _modelRouter; }
+/** Exported for /embed-dedup-state dashboard — per-text embed cache hit rate. */
+function getEmbeddingDedup() { return _embeddingDedup; }
+/** Exported for /prompt-cache-state dashboard — provider prompt-caching savings. */
+function getPromptCacheStats() { return _promptCacheStats; }
+/** Exported for /auto-continue-state dashboard — max_tokens-truncation continuations. */
+function getAutoContinue() { return _autoContinue; }
+/** Exported for /safety-state dashboard — moderation flags + Anthropic refusals. */
+function getSafetyClassifier() { return _safetyClassifier; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -1507,3 +1620,8 @@ module.exports.getPiiRedact = getPiiRedact;
 module.exports.getIdempotency = getIdempotency;
 module.exports.getReplayBuffer = getReplayBuffer;
 module.exports.getStructuredOutputValidator = getStructuredOutputValidator;
+module.exports.getModelRouter = getModelRouter;
+module.exports.getEmbeddingDedup = getEmbeddingDedup;
+module.exports.getPromptCacheStats = getPromptCacheStats;
+module.exports.getAutoContinue = getAutoContinue;
+module.exports.getSafetyClassifier = getSafetyClassifier;

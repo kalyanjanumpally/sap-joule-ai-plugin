@@ -348,6 +348,36 @@ Configured in `package.json`:
 
 Swap provider without touching handler code — `srv/ai-service.js` only talks to `cds.connect.to('llm')`.
 
+## Middleware chain (as of 0.27.0)
+
+Reading OUTER → INNER (deadline first, provider last). Every LLM call flows through all 22 layers before hitting the provider:
+
+```
+deadline
+  → traceCorrelation                   (1.64) uuidv7 correlation ID
+    → jsonLog                          (1.59) structured one-line log per call
+      → promptCacheStats               (1.83) surface Anthropic/OpenAI cache savings
+        → modelRouter                  (1.81) task-aware routing (embed→cheap, tools→opus)
+          → embeddingDedup             (1.82) content-addressable per-text embed cache
+            → safetyClassifier         (1.88) moderation + Anthropic refusal detection
+              → autoContinue           (1.85) resume max_tokens-truncated responses
+                → promptInjectionGuard (1.31) jailbreak / role-marker detector
+                  → guardrails         (1.28) regex + PII + blocklist filters
+                    → piiRedact        (1.80) reversible round-trip PII masking
+                      → costGuard      (1.56) pre-flight per-call USD ceiling
+                        → costBudget   (1.29) per-tenant / per-window ceiling
+                          → adaptiveMaxTokens (1.63) shrink maxTokens to fit remaining budget
+                            → idempotency (1.77) dedup 60s window
+                              → breaker (1.49) circuit breaker
+                                → bulkhead (1.51) concurrency + queue isolation
+                                  → retryOnRateLimit (1.47) reactive retry on 429/503
+                                    → usageMetering (1.21) per-request cost accounting
+                                      → responseCache (1.26) exact + semantic (1.32)
+                                        → structuredOutputValidator (1.76) JSON Schema check
+                                          → replayBuffer (1.75) in-memory debug window
+                                            → provider (Anthropic / GenAI Hub / ...)
+```
+
 ## Troubleshooting
 
 If the app boots but LLM calls fail, run the plugin's env diagnostic:
