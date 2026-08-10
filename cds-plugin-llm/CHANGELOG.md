@@ -4,6 +4,53 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.97.0] — 2026-08-10
+
+### Added
+
+- **`streamThrottle({ maxTokensPerSecond, ... })` — rate-limits stream chunk emission for smooth UI cursor.** Some providers (Groq, DeepSeek at peak hours) emit tokens in tight bursts of 200+ tok/sec then pause — the visible result is a stuttering cursor. Throttling to 30-50 tok/sec matches natural reading speed and produces smooth output. UX polish.
+
+  ```js
+  const { streamThrottle } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(streamThrottle({
+    maxTokensPerSecond: 40,   // natural-reading pace
+  }));
+
+  // Only affects stream() calls; chat/embed/batch pass through untouched.
+  for await (const chunk of llm.stream({ ... })) {
+    // Chunks now arrive at a steady 40 tok/sec regardless of provider bursts.
+  }
+  ```
+
+- **Cost: zero when the provider is already slower than the target.** If the provider is throttled or busy, chunks arrive after the throttler's target time — no delay is added. The throttler only kicks in when the provider is FASTER than the target rate. Real-world overhead: 20-200ms per stream for burst-heavy providers; 0ms otherwise.
+
+- **Only affects streams.** `skipMethods: ['chat', 'embed', 'batch']` by default. Only the `stream` method gets throttled; non-stream calls pass through untouched. Modify `skipMethods` to opt-in to throttling other iterables.
+
+- **Preserves the 1.72 stream completion tracker.** The wrapped iterator forwards `onComplete` / `isCompleted` / `completedInfo` from the source stream. Downstream middleware relying on `hasStreamCompletion(result)` still detects the throttled stream correctly, and completion callbacks fire on the original schedule (paced but preserved).
+
+- **Custom token counting.** Default `countTokens: (chunk) => (chunk?.text?.length ?? 0) / 4` — rough char/4 heuristic. Swap for a real tokenizer (`gpt-tokenizer`, `tiktoken`, etc.) when precision matters:
+
+  ```js
+  const { encode } = require('gpt-tokenizer');
+  streamThrottle({
+    maxTokensPerSecond: 30,
+    countTokens: (chunk) => encode(chunk?.text ?? '').length,
+  });
+  ```
+
+- **Rich stats.** `totalStreams`, `totalChunks`, `totalTokens`, `totalDelayMs`, `skippedStreams` — surfaces "how much smoothing are we doing" so ops can tune the rate.
+
+- **`onDelay(info)` callback** fires on every non-zero delay with `{ delayMs, tokensEmitted, tokensThisChunk }` — useful for real-time UX telemetry ("how bursty is this provider?").
+
+- **Test-friendly.** `now` + `sleep` overrides — deterministic testing without real timers. All 20 tests run in < 100ms.
+
+- **TypeScript.** `StreamThrottleOptions`, `StreamThrottleStats`, `StreamThrottleMiddleware`.
+
+- **`config://stream-throttle`** MCP resource exposes config + counters for live tuning.
+
+- **Recommended placement.** OUTERMOST for the stream path — the throttler wraps the iterator and preserves everything downstream. Combining with `otelSpans` (1.93) is fine: the OTel span's `llm.stream.duration_ms` will reflect the throttled duration, which is what you want to see in traces (the actual UX time).
+
 ## [1.96.0] — 2026-08-10
 
 ### Added

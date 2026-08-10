@@ -3322,6 +3322,57 @@ export function verifyAuditChain(entries: AuditEntry[]): { ok: boolean; brokenAt
  */
 export function hashAuditEntry(entry: Omit<AuditEntry, 'hash'>): string;
 
+// ---- Streaming token throttler (new in 1.97.0) -----------------------
+
+export interface StreamThrottleOptions {
+  /** Target emission rate. Default 50. */
+  maxTokensPerSecond?: number;
+  /** Count tokens per chunk. Default: chunk.text.length / 4. */
+  countTokens?:        (chunk: any) => number;
+  /** Methods to skip (bypass throttling). Default ['chat', 'embed', 'batch']. */
+  skipMethods?:        string[];
+  /** Fired on every non-zero delay. Errors swallowed. */
+  onDelay?:            ((info: { delayMs: number; tokensEmitted: number; tokensThisChunk: number }) => void) | null;
+  /** Clock override for tests. */
+  now?:                () => number;
+  /** Delay override for tests. */
+  sleep?:              (ms: number) => Promise<void>;
+}
+
+export interface StreamThrottleStats {
+  totalStreams:   number;
+  totalChunks:    number;
+  totalTokens:    number;
+  totalDelayMs:   number;
+  skippedStreams: number;
+}
+
+export interface StreamThrottleMiddleware extends Middleware {
+  readonly stats: StreamThrottleStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://stream-throttle';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => StreamThrottleStats & {
+      maxTokensPerSecond: number;
+      msPerToken:         number;
+      skipMethods:        string[];
+    };
+  };
+}
+
+/**
+ * Rate-limits stream chunk emission for smooth UI cursor. Some
+ * providers (Groq, DeepSeek) emit tokens in tight bursts of 200+
+ * tok/sec then pause — throttling to 30-50 tok/sec matches natural
+ * reading speed. Only affects `stream` method; other methods pass
+ * through. Preserves the 1.72 stream completion tracker.
+ * @since 1.97.0
+ */
+export function streamThrottle(options?: StreamThrottleOptions): StreamThrottleMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

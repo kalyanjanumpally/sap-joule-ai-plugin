@@ -188,6 +188,8 @@ module.exports = {
   InMemoryAuditStore: require('./middleware/sensitiveDataAudit').InMemoryAuditStore,
   verifyAuditChain:   require('./middleware/sensitiveDataAudit').verifyChain,
   hashAuditEntry:     require('./middleware/sensitiveDataAudit').hashEntry,
+  // Streaming token throttler — rate-limit stream chunk emission for smooth UI cursor (new in 1.97.0)
+  streamThrottle:     require('./middleware/streamThrottle').streamThrottle,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,
