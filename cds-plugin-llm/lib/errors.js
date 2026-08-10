@@ -128,6 +128,19 @@ const errorRegistry = {
     httpStatus: 400,     // Bad Request — the content itself is disallowed
     severity:   'error',
   },
+  // Distributed lock family
+  DISTRIBUTED_LOCK_HELD: {
+    primitive:  'distributedLock',
+    retriable:  true,    // safe to retry once the lock holder finishes
+    httpStatus: 423,     // Locked
+    severity:   'warning',
+  },
+  DISTRIBUTED_LOCK_TIMEOUT: {
+    primitive:  'distributedLock',
+    retriable:  true,    // safe to retry with longer patience or lower load
+    httpStatus: 503,     // Service Unavailable — waited too long
+    severity:   'error',
+  },
 };
 
 // ---- Base class -------------------------------------------------------

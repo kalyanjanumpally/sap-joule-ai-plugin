@@ -4,6 +4,66 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.92.0] — 2026-08-10
+
+### Added
+
+- **`distributedLock({ store, keyOf, ttlMs?, action?, ... })` — per-key exclusive lock across multi-instance deployments.** Ensures only ONE pod / replica executes a specific keyed operation at a time. Companion to `bulkhead` (per-instance concurrency) and `idempotency` (per-request dedup): distributedLock is per-key across ALL instances.
+
+  ```js
+  const { distributedLock, InMemoryLockStore } = require('@saptarishi/cds-plugin-llm');
+
+  // Dev / single-instance:
+  llm.use(distributedLock({
+    store:  new InMemoryLockStore(),
+    keyOf: (ctx) => `llm:${ctx.raw?.tenant ?? 'default'}`,
+    ttlMs: 60_000,
+  }));
+
+  // Production (Redis) — bring your own store:
+  const redis = require('ioredis').createClient(...);
+  const store = {
+    async acquire(key, ttlMs) {
+      const token = crypto.randomUUID();
+      const ok = await redis.set(key, token, 'PX', ttlMs, 'NX');
+      return ok ? token : null;
+    },
+    async release(key, token) {
+      // Compare-and-delete via Lua so we don't release someone else's lock.
+      const script = "if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end";
+      const n = await redis.eval(script, 1, key, token);
+      return n === 1;
+    },
+  };
+  llm.use(distributedLock({ store, keyOf: ..., ttlMs: 60_000 }));
+  ```
+
+- **Two failure modes** via `action`:
+  - `'wait'` (default) — polls `store.acquire` every `waitPollMs` (default 100ms) until acquired OR `waitTimeoutMs` (default 30s) elapses. Throws `DistributedLockTimeoutError` on timeout.
+  - `'reject'` — throws `DistributedLockHeldError` immediately if the lock is held by another instance.
+
+- **Two error classes** in the 1.57 taxonomy:
+  - `DistributedLockHeldError` — code `DISTRIBUTED_LOCK_HELD`, HTTP 423 Locked, retriable (safe to retry once holder finishes)
+  - `DistributedLockTimeoutError` — code `DISTRIBUTED_LOCK_TIMEOUT`, HTTP 503 Service Unavailable, retriable, carries `waitedMs`
+
+- **Bundled `InMemoryLockStore`** for dev / single-instance testing. Not for production — one map per process obviously can't coordinate across replicas. Production users bring their own Redis / HANA-backed store implementing the two-method interface `{ acquire(key, ttlMs) → token|null, release(key, token) → boolean }`.
+
+- **TTL-based expiration.** If a lock holder crashes without releasing, the lock expires automatically after `ttlMs`. The `InMemoryLockStore` re-acquisition path handles expired locks; production stores should use their built-in TTL support (Redis `PX` flag, HANA row expiration).
+
+- **Safe release** — `release()` verifies the token matches before deleting the lock. Prevents pod A from accidentally releasing pod B's lock after A's own TTL expired. The compare-and-delete pattern is critical for correctness under Redis; the bundled InMemoryLockStore implements it too.
+
+- **Guaranteed release** — the middleware wraps `next()` in a `try/finally` that releases the lock even on error. Release errors bump `stats.releaseErrors` but never suppress the original result.
+
+- **Method filter.** `skipMethods: ['embed']` by default — embed calls are typically read-only and don't need per-tenant serialization. Add `chat` / `stream` to the list to disable, or narrow the filter for finer control.
+
+- **Rich callbacks** — `onAcquire`, `onWait`, `onReject`, `onRelease` fire with `{ key, method, ... }` context. Errors swallowed — a broken listener never breaks the chain.
+
+- **Introspection.** `stats: { totalRequests, acquired, rejected, timedOut, waited, totalWaitMs, released, releaseErrors, skipped }` + `reset()` + `asMcpResource()` → `config://distributed-lock` (includes `storeType` + `currentHeld` count when the store exposes `.size`).
+
+- **TypeScript.** `DistributedLockStore` interface, `InMemoryLockStore`, `DistributedLockOptions`, `DistributedLockStats`, `DistributedLockMiddleware`, `DistributedLockHeldError`, `DistributedLockTimeoutError`.
+
+- **Recommended placement.** OUTER of `usageMetering` (waited requests shouldn't inflate the metering ratio), INNER of `promptInjectionGuard` + `guardrails` (validate every caller's input even while queueing for the lock). Pair with `idempotency` (1.77) for the case where the SAME request arrives via multiple pods: idempotency dedups within a pod, distributedLock serializes across pods.
+
 ## [1.91.0] — 2026-08-10
 
 ### Added

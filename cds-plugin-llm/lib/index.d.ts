@@ -2991,6 +2991,90 @@ export function compactHistory(options?: CompactHistoryOptions): CompactHistoryM
 
 export const DEFAULT_COMPACT_SUMMARY_SYSTEM: string;
 
+// ---- Distributed lock middleware (new in 1.92.0) ----------------------
+
+export interface DistributedLockStore {
+  acquire(key: string, ttlMs: number): Promise<string | null> | (string | null);
+  release(key: string, token: string): Promise<boolean> | boolean;
+  size?: number | (() => number);
+  clear?: () => void;
+}
+
+export class InMemoryLockStore implements DistributedLockStore {
+  acquire(key: string, ttlMs: number): Promise<string | null>;
+  release(key: string, token: string): Promise<boolean>;
+  size(): number;
+  clear(): void;
+}
+
+export interface DistributedLockOptions {
+  store:          DistributedLockStore;
+  keyOf:          (ctx: MiddlewareContext) => string | null | undefined;
+  ttlMs?:         number;
+  action?:        'wait' | 'reject';
+  waitTimeoutMs?: number;
+  waitPollMs?:    number;
+  skipMethods?:   string[];
+  onAcquire?:     ((info: { key: string; method: string; ttlMs: number; token: string }) => void) | null;
+  onWait?:        ((info: { key: string; method: string; waitTimeoutMs: number; waitPollMs: number }) => void) | null;
+  onReject?:      ((info: { key: string; method: string }) => void) | null;
+  onRelease?:     ((info: { key: string; method: string; released: boolean }) => void) | null;
+  now?:           () => number;
+  sleep?:         (ms: number) => Promise<void>;
+}
+
+export interface DistributedLockStats {
+  totalRequests: number;
+  acquired:      number;
+  rejected:      number;
+  timedOut:      number;
+  waited:        number;
+  totalWaitMs:   number;
+  released:      number;
+  releaseErrors: number;
+  skipped:       number;
+}
+
+export interface DistributedLockMiddleware extends Middleware {
+  readonly stats: DistributedLockStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://distributed-lock';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => DistributedLockStats & {
+      ttlMs:         number;
+      action:        'wait' | 'reject';
+      waitTimeoutMs: number;
+      waitPollMs:    number;
+      storeType:     string;
+      currentHeld:   number | null;
+    };
+  };
+}
+
+export class DistributedLockHeldError extends LLMError {
+  readonly key: string;
+}
+
+export class DistributedLockTimeoutError extends LLMError {
+  readonly key:      string;
+  readonly waitedMs: number;
+}
+
+/**
+ * Ensures only ONE instance of a multi-replica deployment executes a
+ * specific key at a time. Redis/HANA-backed exclusive lock (bring your
+ * own store implementing `{ acquire, release }`; a dev-only
+ * InMemoryLockStore is bundled). Prevents duplicate execution across
+ * pods for expensive operations (batch runs, cache warming,
+ * tenant-scoped context builds). Companion to bulkhead (per-instance
+ * concurrency) and idempotency (per-request dedup).
+ * @since 1.92.0
+ */
+export function distributedLock(options: DistributedLockOptions): DistributedLockMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

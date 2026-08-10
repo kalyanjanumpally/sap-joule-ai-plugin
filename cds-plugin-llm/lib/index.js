@@ -170,6 +170,11 @@ module.exports = {
   // Compact-history — summarize old messages when conversation exceeds maxMessages (new in 1.91.0)
   compactHistory:    require('./middleware/compactHistory').compactHistory,
   DEFAULT_COMPACT_SUMMARY_SYSTEM: require('./middleware/compactHistory').DEFAULT_SUMMARY_SYSTEM,
+  // Distributed lock — per-key exclusive lock across multi-instance deployments (new in 1.92.0)
+  distributedLock:   require('./middleware/distributedLock').distributedLock,
+  InMemoryLockStore: require('./middleware/distributedLock').InMemoryLockStore,
+  DistributedLockHeldError: require('./middleware/distributedLock').DistributedLockHeldError,
+  DistributedLockTimeoutError: require('./middleware/distributedLock').DistributedLockTimeoutError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,
