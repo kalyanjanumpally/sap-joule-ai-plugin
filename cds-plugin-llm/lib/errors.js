@@ -121,6 +121,13 @@ const errorRegistry = {
     httpStatus: 409,     // Conflict — a request with this key is already being processed
     severity:   'warning',
   },
+  // Safety-classification family
+  SAFETY_CLASSIFIER_BLOCKED: {
+    primitive:  'safetyClassifier',
+    retriable:  false,   // response tripped a category threshold; retry won't fix
+    httpStatus: 400,     // Bad Request — the content itself is disallowed
+    severity:   'error',
+  },
 };
 
 // ---- Base class -------------------------------------------------------

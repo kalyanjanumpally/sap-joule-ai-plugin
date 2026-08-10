@@ -157,6 +157,9 @@ module.exports = {
   DEFAULT_JUDGE_SYSTEM: require('./llmJudge').DEFAULT_JUDGE_SYSTEM,
   // Auto-continuation — auto-resume max_tokens-truncated responses (new in 1.85.0)
   autoContinue:      require('./middleware/autoContinue').autoContinue,
+  // Content safety classifier — model-based classification via OpenAI moderation + Anthropic refusal detection (new in 1.88.0)
+  safetyClassifier:  require('./middleware/safetyClassifier').safetyClassifier,
+  SafetyClassifierBlockedError: require('./middleware/safetyClassifier').SafetyClassifierBlockedError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

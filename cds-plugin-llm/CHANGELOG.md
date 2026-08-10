@@ -4,6 +4,54 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.88.0] — 2026-08-10
+
+### Added
+
+- **`safetyClassifier({ apiKey?, threshold?, action?, ... })` — model-based content safety classification.** Detects unsafe LLM output (violence, self-harm, sexual, hate, harassment) via two signals: OpenAI's Moderation API (free, per-category scoring) and Anthropic's built-in refusals (via `stopReason: 'refusal'`, no extra call). Complements `guardrails` (regex + PII scrubbing) and `promptInjectionGuard` (attack-pattern detection) with true model-based classification. Compliance/enterprise ask.
+
+  ```js
+  const { safetyClassifier } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(safetyClassifier({
+    apiKey:     process.env.OPENAI_API_KEY,   // for moderation calls
+    threshold:  0.5,
+    action:     'block',                       // or 'flag'
+    onFlag:     (info) => cds.log('llm:safety').warn(info),
+  }));
+
+  // Response tripping any category > 0.5 → SafetyClassifierBlockedError
+  // Anthropic refusals → same error path (no moderation call needed)
+  ```
+
+- **Two independent signals** — layer as needed:
+  - **Anthropic refusal detection** — free, zero-latency. Reads `result.stopReason === 'refusal'`. Works without any API key.
+  - **OpenAI Moderation API** — free, ~50ms extra latency. Requires `apiKey`. Returns per-category scores (violence, hate, sexual, self-harm, etc.).
+
+- **Two failure modes** — `action: 'block'` throws `SafetyClassifierBlockedError` (extends `LLMError`, code `SAFETY_CLASSIFIER_BLOCKED`, HTTP 400, non-retriable). `action: 'flag'` logs via `onFlag` + increments stats + passes through — useful for shadow-mode rollout where you gather data before enforcing.
+
+- **Configurable scope:**
+  - `checkOutput: true` (default) — moderate the response text
+  - `checkInput: true` — also moderate user messages before the provider call (belt-and-suspenders with `promptInjectionGuard` and `guardrails.filters.pii`)
+  - `categories: ['violence', 'sexual']` — restrict trip conditions to a subset (default: all categories from the moderation response)
+  - `skipMethods: ['embed']` — bypass for methods where safety doesn't apply
+
+- **Streams are always flag-only.** Content has already streamed by the time we see the done chunk — we can't unring the bell. `stats` still increments and `onFlag` fires with `streamMode: true` so ops can dashboard rate; `action: 'block'` is overridden to `flag` for streams.
+
+- **Soft-fail on moderation API errors.** If the moderation API is down / throttled / times out, the middleware logs `stats.moderationErrors++` and passes the response through unmodified — no cascading failure. Choose whether to alarm on `moderationErrors > 0` in your dashboards.
+
+- **Rich stats.** `stats: { totalChecks, moderationCalls, moderationErrors, flagged, blocked, refusals, bySource: { 'anthropic-refusal', 'openai-moderation' }, byCategory: { violence, sexual, ... } }` — feeds a compliance dashboard directly.
+
+- **New error code `SAFETY_CLASSIFIER_BLOCKED`** in the 1.57 taxonomy: `httpStatus: 400`, `retriable: false`, `severity: error`. Carries `reason`, `categories`, `scores`, `source` fields.
+
+- **TypeScript.** `SafetyClassifierOptions`, `SafetyClassifierStats`, `SafetyClassifierMiddleware`, `SafetyClassifierBlockedError`.
+
+- **`fetch` override** for tests + custom transports (proxied OpenAI-compat endpoints, Azure OpenAI, etc.).
+
+- **`config://safety-classifier`** MCP resource exposes threshold / action / category filter / `hasApiKey` + all counters.
+
+- **Recommended placement.** OUTER of `usageMetering` (a blocked call already cost tokens, but shouldn't get billed twice if the caller retries), INNER of `promptInjectionGuard` (that runs pre-flight; this runs post-response). Together with `guardrails` (regex/PII) and `promptInjectionGuard` (attack patterns), forms a defense-in-depth safety stack.
+
 ## [1.87.0] — 2026-08-10
 
 ### Added

@@ -2716,6 +2716,83 @@ export function datadogDashboard(options?: DatadogDashboardOptions): Record<stri
  */
 export function newrelicDashboard(options: NewRelicDashboardOptions): Record<string, unknown>;
 
+// ---- Content safety classifier (new in 1.88.0) -----------------------
+
+export interface SafetyClassifierOptions {
+  /** OpenAI API key. Omit to skip moderation calls (Anthropic refusal detection still works). */
+  apiKey?:              string | null;
+  /** Moderation endpoint. Default OpenAI's `/v1/moderations`. */
+  moderationEndpoint?:  string;
+  /** Moderation model. Default 'omni-moderation-latest'. */
+  moderationModel?:     string;
+  /** Score >= threshold trips. Default 0.5. */
+  threshold?:           number;
+  /** 'block' throws SafetyClassifierBlockedError; 'flag' logs + passes through. Default 'block'. */
+  action?:              'block' | 'flag';
+  /** Restrict to specific categories. Default null = all. */
+  categories?:          string[] | null;
+  /** Also scan user input before the provider call. Default false. */
+  checkInput?:          boolean;
+  /** Scan the LLM output. Default true. */
+  checkOutput?:         boolean;
+  /** Methods to skip. Default ['embed']. */
+  skipMethods?:         string[];
+  /** Fired on every flag (both block and flag modes). Errors swallowed. */
+  onFlag?:              ((info: { source: string; categories: string[]; scores: any; method: string; action: 'block' | 'flag'; streamMode: boolean }) => void) | null;
+  /** fetch override for tests / custom transports. */
+  fetch?:               typeof globalThis.fetch;
+  /** Handle streams via 1.72 onComplete. Default true. Streams are always flag-only. */
+  captureStreams?:      boolean;
+}
+
+export interface SafetyClassifierStats {
+  totalChecks:      number;
+  moderationCalls:  number;
+  moderationErrors: number;
+  flagged:          number;
+  blocked:          number;
+  refusals:         number;
+  bySource:         Record<string, number>;
+  byCategory:       Record<string, number>;
+}
+
+export interface SafetyClassifierMiddleware extends Middleware {
+  readonly stats: SafetyClassifierStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://safety-classifier';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => SafetyClassifierStats & {
+      threshold:       number;
+      action:          'block' | 'flag';
+      checkInput:      boolean;
+      checkOutput:     boolean;
+      hasApiKey:       boolean;
+      moderationModel: string;
+      categories:      string[] | '(all)';
+    };
+  };
+}
+
+export class SafetyClassifierBlockedError extends LLMError {
+  readonly reason:     string;
+  readonly categories: string[];
+  readonly scores:     Record<string, number> | null;
+  readonly source:     'anthropic-refusal' | 'openai-moderation';
+}
+
+/**
+ * Content safety classifier. Detects unsafe LLM output via OpenAI's
+ * Moderation API (free, per-category classification) + Anthropic's
+ * built-in safety refusals (via stopReason='refusal', no extra call).
+ * Complements guardrails (regex + PII) and promptInjectionGuard
+ * (attack-pattern detection) with true model-based classification.
+ * @since 1.88.0
+ */
+export function safetyClassifier(options?: SafetyClassifierOptions): SafetyClassifierMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
