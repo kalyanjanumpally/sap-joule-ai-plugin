@@ -4,6 +4,59 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.83.0] — 2026-08-10
+
+### Added
+
+- **`promptCacheStats({ onCache?, pricing?, cacheMultipliers? })` — provider prompt-caching visibility.** Turns hidden savings buried in the `usage` field of every response into visible ops metrics — hit rate, tokens saved, USD saved, per-model breakdown, MCP resource, callback. Supports four providers out of the box:
+
+  ```js
+  const { promptCacheStats } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(promptCacheStats({
+    onCache: (info) => cds.log('llm:cache').info(info),
+  }));
+
+  const status = mw.asMcpResource().handler();
+  // {
+  //   hitRate: 0.68,
+  //   callsWithCacheRatio: 0.95,
+  //   totalSavingsUsd: 143.20,
+  //   byProvider: { anthropic: 800, openai: 120 },
+  //   byModel: { 'claude-opus-4-7': { calls, readTokens, savingsUsd, ... } },
+  // }
+  ```
+
+- **Auto-detects provider from usage shape:**
+
+  | Provider | Field(s) | Default multiplier vs normal |
+  | --- | --- | --- |
+  | Anthropic | `cache_read_input_tokens`, `cache_creation_input_tokens` | read: 0.10x (90% off), creation: 1.25x |
+  | OpenAI | `prompt_tokens_details.cached_tokens` | read: 0.50x (50% off) |
+  | DeepSeek | `prompt_cache_hit_tokens`, `prompt_cache_miss_tokens` | read: 0.10x (90% off) |
+  | Google Gemini | `cachedContentTokenCount`, `promptTokenCount` | read: 0.25x (context caching) |
+
+  Detection is heuristic-only — no config needed for these four providers. Manual `provider:` override available for edge cases.
+
+- **Cost math**. Reuses the shipped `pricing.js` DEFAULT_PRICING table (per-model rates in USD/1M tokens). For each cache-active call:
+  - `actual = read_tokens × price × read_mult + creation × price × creation_mult + normal × price`
+  - `hypothetical = (read + creation + normal) × price` — what you'd pay without caching
+  - `savings = hypothetical − actual`
+
+  Custom pricing / multiplier overrides for contracts, region variance, or newly-added models.
+
+- **Streams supported** via 1.72 `onComplete` — the final done chunk's `usage` feeds stats. `captureStreams: false` opts out.
+
+- **Passthrough for non-cache calls.** Calls without cache activity (either provider doesn't support caching OR this particular call had no cache hits) just increment `totalCalls` and skip. Anthropic-shaped usage with zero cache tokens correctly registers as "no cache" rather than "no data" — so `callsWithCacheRatio` reflects actual utilization, not detection failures.
+
+- **Unpriced models still count tokens.** Custom models missing from the pricing table increment `unpricedCalls` — the tokens are recorded but `savingsUsd` stays 0 until pricing is added. Same behavior as `usageMetering`.
+
+- **Introspection.** `stats: { totalCalls, callsWithCache, totalCacheReadTokens, totalCacheCreationTokens, totalNormalInputTokens, totalSavingsUsd, totalCostUsd, unpricedCalls, byProvider, byModel }` + `reset()` + `asMcpResource()` → `config://prompt-cache-stats` (adds `hitRate` + `callsWithCacheRatio` for dashboards).
+
+- **TypeScript.** `PromptCacheStatsOptions`, `PromptCacheStats`, `PromptCacheStatsMiddleware`, `PromptCacheProvider`, `PromptCacheMultipliers`, `PromptCacheStatsModelBucket`, `DEFAULT_CACHE_MULTIPLIERS`.
+
+- **Recommended placement.** OUTER of `usageMetering` — usageMetering already reports total spend; this middleware attributes the caching-driven portion of that spend as savings-vs-nocache. Together they answer both "how much did we spend" and "how much did caching save us."
+
 ## [1.82.0] — 2026-08-10
 
 ### Added

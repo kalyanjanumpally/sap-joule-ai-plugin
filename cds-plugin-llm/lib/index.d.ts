@@ -2458,6 +2458,85 @@ export class EmbeddingLRU implements EmbeddingDedupStore {
  */
 export function embeddingDedup(options?: EmbeddingDedupOptions): EmbeddingDedupMiddleware;
 
+// ---- Prompt cache stats (new in 1.83.0) ------------------------------
+
+export type PromptCacheProvider = 'anthropic' | 'openai' | 'deepseek' | 'gemini' | string;
+
+export interface PromptCacheMultipliers {
+  creation: number;
+  read:     number;
+}
+
+export interface PromptCacheStatsOptions {
+  /** Per-model pricing (USD per 1M tokens). Defaults to DEFAULT_PRICING. */
+  pricing?:          Record<string, { input?: number; output?: number }>;
+  /** Per-provider cache multipliers vs normal input price. Default: sensible per provider. */
+  cacheMultipliers?: Partial<Record<PromptCacheProvider, Partial<PromptCacheMultipliers>>>;
+  /** Called for every cache-active call. Errors swallowed. */
+  onCache?:          ((info: {
+    provider:       PromptCacheProvider;
+    model:          string | null;
+    readTokens:     number;
+    creationTokens: number;
+    normalTokens:   number;
+    actualCostUsd:  number;
+    savingsUsd:     number;
+    method:         string | null;
+  }) => void) | null;
+  /** Track stream completions via 1.72 onComplete. Default true. */
+  captureStreams?:   boolean;
+  /** Force a provider instead of auto-detecting from usage shape. */
+  provider?:         PromptCacheProvider | null;
+}
+
+export interface PromptCacheStatsModelBucket {
+  calls:          number;
+  readTokens:     number;
+  creationTokens: number;
+  normalTokens:   number;
+  savingsUsd:     number;
+  costUsd:        number;
+}
+
+export interface PromptCacheStats {
+  totalCalls:               number;
+  callsWithCache:           number;
+  totalCacheReadTokens:     number;
+  totalCacheCreationTokens: number;
+  totalNormalInputTokens:   number;
+  totalSavingsUsd:          number;
+  totalCostUsd:             number;
+  unpricedCalls:            number;
+  byProvider:               Record<string, number>;
+  byModel:                  Record<string, PromptCacheStatsModelBucket>;
+}
+
+export interface PromptCacheStatsMiddleware extends Middleware {
+  readonly stats: PromptCacheStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://prompt-cache-stats';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => PromptCacheStats & {
+      hitRate:              number;
+      callsWithCacheRatio:  number;
+    };
+  };
+}
+
+/**
+ * Surface provider prompt-caching savings — hidden in usage.cache_read_input_tokens
+ * (Anthropic), usage.prompt_tokens_details.cached_tokens (OpenAI),
+ * usage.prompt_cache_hit_tokens (DeepSeek), usage.cachedContentTokenCount (Gemini)
+ * — as ops metrics: hit rate, tokens saved, USD saved, per-model breakdown.
+ * @since 1.83.0
+ */
+export function promptCacheStats(options?: PromptCacheStatsOptions): PromptCacheStatsMiddleware;
+
+export const DEFAULT_CACHE_MULTIPLIERS: Record<PromptCacheProvider, PromptCacheMultipliers>;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

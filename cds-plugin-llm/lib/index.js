@@ -148,6 +148,9 @@ module.exports = {
   // Embedding dedup cache — content-addressable per-text cache for embed() calls (new in 1.82.0)
   embeddingDedup:    require('./middleware/embeddingDedup').embeddingDedup,
   EmbeddingLRU:      require('./middleware/embeddingDedup').EmbeddingLRU,
+  // Prompt caching stats — surfaces provider cache savings (Anthropic/OpenAI/DeepSeek/Gemini) as ops metrics (new in 1.83.0)
+  promptCacheStats:  require('./middleware/promptCacheStats').promptCacheStats,
+  DEFAULT_CACHE_MULTIPLIERS: require('./middleware/promptCacheStats').DEFAULT_CACHE_MULTIPLIERS,
   // Static middleware-ordering validator (new in 1.48.0)
   validateMiddlewareOrder: require('./validateMiddlewareOrder').validateMiddlewareOrder,
   filterWarnings: require('./validateMiddlewareOrder').filterWarnings,
