@@ -2868,6 +2868,53 @@ export function loadFixtures(dir: string): RegressionFixture[];
  */
 export function formatRegressionReport(report: RegressionReport, options?: { colors?: boolean }): string;
 
+// ---- RAG orchestration helper (new in 1.90.0) ------------------------
+
+export interface RagChunk {
+  id?:        string | number;
+  text:       string;
+  score?:     number;
+  metadata?:  Record<string, unknown>;
+  [k: string]: unknown;
+}
+
+export interface RagResult {
+  answer:         string;
+  chunks:         RagChunk[];
+  retrievedCount: number;
+  dedupedCount:   number;
+  queriesUsed:    string[];
+  usage:          unknown | null;
+  model:          string | null;
+}
+
+export interface RagChainOptions {
+  llm?:              { chat: (req: any) => Promise<any> };
+  chat?:             (req: any) => Promise<any>;
+  retriever:         (query: string, opts: { topK?: number; filter?: unknown }) => Promise<RagChunk[]> | RagChunk[];
+  reranker?:         ((query: string, chunks: RagChunk[]) => Promise<RagChunk[]> | RagChunk[]) | null;
+  queryExpander?:    ((query: string) => Promise<string[]> | string[]) | null;
+  systemPrompt?:     string;
+  template?:         (info: { question: string; context: string; chunks: RagChunk[] }) => string;
+  defaultTopK?:      number;
+  maxChunks?:        number;
+  maxCharsPerChunk?: number;
+  defaultMaxTokens?: number;
+  onEmptyRetrieval?: 'error' | 'answer-anyway' | ((question: string) => RagResult | Promise<RagResult>);
+}
+
+export type RagChainAsk = (question: string, opts?: { topK?: number; filter?: unknown; maxTokens?: number }) => Promise<RagResult>;
+
+/**
+ * Build a retrieve → dedupe → optional-rerank → truncate → answer
+ * pipeline. Returns an `ask(question, opts?)` function. Encapsulates
+ * the boilerplate that RAG actions all reimplement.
+ * @since 1.90.0
+ */
+export function ragChain(options: RagChainOptions): RagChainAsk;
+
+export const DEFAULT_RAG_SYSTEM: string;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

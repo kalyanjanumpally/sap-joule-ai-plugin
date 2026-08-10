@@ -164,6 +164,9 @@ module.exports = {
   promptRegression:  require('./promptRegression').promptRegression,
   loadFixtures:      require('./promptRegression').loadFixtures,
   formatRegressionReport: require('./promptRegression').formatReport,
+  // RAG orchestration helper — retrieve → dedupe → rerank → truncate → answer (new in 1.90.0)
+  ragChain:          require('./ragChain').ragChain,
+  DEFAULT_RAG_SYSTEM: require('./ragChain').DEFAULT_RAG_SYSTEM,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

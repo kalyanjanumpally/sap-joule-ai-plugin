@@ -4,6 +4,60 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.90.0] — 2026-08-10
+
+### Added
+
+- **`ragChain({ retriever, reranker?, queryExpander?, llm, ... }) → ask(question, opts?)` — RAG orchestration helper.** One-liner for the retrieve → dedupe → rerank → truncate → answer pattern that every RAG action reimplements. Handles chunk numbering, per-chunk truncation, dedup by ID, empty-retrieval fallback, and the answer prompt. Removes ~40 LOC per RAG action.
+
+  ```js
+  const { ragChain } = require('@saptarishi/cds-plugin-llm');
+
+  const ask = ragChain({
+    llm,                                                         // for the final answer
+    retriever:  async (q, { topK }) => vector.search(q, { topK }),
+    reranker:   async (q, chunks) => llmRerank(q, chunks),        // optional
+    queryExpander: async (q) => queryExpander.expand(q),          // optional
+    maxChunks:        6,
+    maxCharsPerChunk: 1500,
+  });
+
+  const { answer, chunks, usage } = await ask(
+    'What are the payment terms in CTR-2026-101?',
+    { topK: 12, filter: { region: 'EMEA' } },
+  );
+  // answer: "Payment terms are Net-30 with a 2% early-pay discount [1]..."
+  // chunks: [{ id, text, score, metadata }, ...]   (post-rerank, post-truncation)
+  ```
+
+- **Pipeline stages** (skippable when a stage isn't wired):
+  1. **Query expansion** — optional. Turn one question into N variants for broader retrieval.
+  2. **Retrieval** — required. For each query, calls `retriever(query, { topK, filter })`.
+  3. **Dedup** — by `chunk.id` (fallback to text hash) — chunks retrieved for multiple expanded queries collapse.
+  4. **Rerank** — optional. `reranker(question, uniqueChunks)` returns reordered.
+  5. **Truncate** — cap chunk count (`maxChunks: 5`) + per-chunk text (`maxCharsPerChunk: 1500`).
+  6. **Prompt build** — chunks numbered `[1]`, `[2]`, ...; caller's `template` receives `{ question, context, chunks }`.
+  7. **LLM call** — with sensible RAG system prompt that instructs citation + refusal-on-empty.
+
+- **Ships a strict-refusal system prompt.** The default `DEFAULT_RAG_SYSTEM` instructs: "answer using ONLY the provided context, cite by `[chunk number]`, refuse if context doesn't cover the question." Reduces hallucination without any additional guardrails. Override via `systemPrompt: '...'`.
+
+- **Empty-retrieval branch** — three modes via `onEmptyRetrieval`:
+  - `'error'` (default) — throws with `code: 'RAG_EMPTY_RETRIEVAL'` + the failing question — caller decides how to surface
+  - `'answer-anyway'` — proceed without context (model likely refuses per system prompt, but you get an answer object back)
+  - callback `(question) => RagResult` — return a synthetic result (e.g. `"I don't have data on that yet."`)
+
+- **Full observability.** `ask()` returns `retrievedCount` (before dedup), `dedupedCount` (after dedup, before rerank), `queriesUsed` (original + expanded), `chunks` (post-truncation), `usage` (LLM tokens), `model`. Wire into `jsonLog` / `replayBuffer` for RAG-quality dashboards.
+
+- **Custom template escape hatch.** For prompt-format quirks (JSON-mode extraction, function-calling agents, non-English prompts), pass `template: ({question, context, chunks}) => userMessageString`. Chunks are pre-numbered and text-truncated; you decide the prompt shape.
+
+- **`formatChunksForPrompt(chunks)` + `defaultTemplate(...)`** exported for callers building custom variants.
+
+- **Two calling forms** — `{ llm }` (LLMService handle) OR `{ chat }` (raw async function) — same pattern as `llmJudge` (1.84) and `promptRegression` (1.89). Great for tests + custom transports.
+
+- **TypeScript.** `RagChainOptions`, `RagChunk`, `RagResult`, `RagChainAsk`, `DEFAULT_RAG_SYSTEM`.
+
+- **Not middleware — a top-level helper.** RAG orchestration is a call-site concern, not a chain concern. Wire the `llm` with your standard chain (metering, cost limits, safety, ...); those apply to the answer step. The retriever + reranker are separate concerns (vector store) and remain caller-owned.
+
 ## [1.89.0] — 2026-08-10
 
 ### Added
