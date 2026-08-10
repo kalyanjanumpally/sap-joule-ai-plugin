@@ -56,6 +56,8 @@ const GLOBAL_OPTS = {
   // Batch flags (1.79.0)
   'out':           { type: 'string' },
   'poll':          { type: 'string' },
+  // Chat REPL flag (1.86.0)
+  'interactive':   { type: 'boolean', short: 'i' },
 };
 
 async function run(argv) {

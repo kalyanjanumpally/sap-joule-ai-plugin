@@ -4,6 +4,57 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.86.0] — 2026-08-10
+
+### Added
+
+- **`saptarishi-llm chat -i` — interactive REPL mode.** Interactive multi-turn REPL for prompt tweaking, debugging, and quick experimentation without curl+JSON assembly. Preserves conversation history across turns; slash commands for common ops. `cds-llm chat -i` alias also works.
+
+  ```
+  $ saptarishi-llm chat -i --provider anthropic
+  saptarishi-llm chat REPL — provider: anthropic, model: claude-opus-4-7
+  type .help for commands, .exit to quit (Ctrl+D also works).
+
+  > .system be terse and formal
+  system prompt updated (21 chars).
+  > summarize the SAP procurement pain points
+
+  <response...>
+
+  > .model claude-haiku-4-5
+  model → claude-haiku-4-5
+  > same question, faster model
+
+  <response...>
+
+  > .save session.json
+  saved 4 message(s) to session.json
+  > .exit
+  bye.
+  ```
+
+- **Slash commands:**
+  - `.system [<text>]` — show current system prompt (no arg) or replace it (with arg)
+  - `.model <id>` — switch model for the next turn onward (no arg = show current)
+  - `.clear` — clear the conversation history (keeps system prompt + model)
+  - `.save <file>` — save `{ model, system, messages }` to JSON file
+  - `.load <file>` — replace state with a saved conversation (great for regression re-runs)
+  - `.history` — print message count + last user turn preview
+  - `.help` / `.?` — show commands
+  - `.exit` / `.quit` / `.q` — exit (Ctrl+D also works)
+
+- **State preserved across turns.** Every user + assistant message accumulates in the conversation history and is sent on every subsequent turn — matches the multi-turn semantics you'd get from a chat UI. Change model / system prompt mid-conversation and the change applies going forward; existing history stays intact.
+
+- **Concurrency-safe.** The line handler pauses input while a chat call is in flight — back-to-back input (paste-buffered lines, scripted stdin) doesn't corrupt state.messages via racing async handlers. Behavior matches interactive human typing where you naturally wait for the reply.
+
+- **`.save` / `.load` for round-trip debugging.** Save a broken conversation, tweak the JSON in an editor (fix a message, change the system prompt, add a synthetic assistant turn to test what-if scenarios), reload, continue. Useful for prompt engineering and regression fixtures.
+
+- **Errors don't kill the REPL.** Provider errors (rate limit, auth, network) print to stderr but the REPL prompts again — you can `.model <other>` and retry without restarting.
+
+- **One-shot mode unchanged.** `saptarishi-llm chat -p "..."` still works exactly as before. The `-i` / `--interactive` flag opts into REPL mode; everything else falls through to the one-shot path.
+
+- **`--json` flag** in REPL mode adds a per-turn stat line showing model + input/output token counts. Great for prompt-cost sensing during experimentation.
+
 ## [1.85.0] — 2026-08-10
 
 ### Added
