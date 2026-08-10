@@ -4,6 +4,64 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.93.0] — 2026-08-10
+
+### Added
+
+- **`otelSpans({ tracer, ... })` — 2nd-gen OpenTelemetry spans middleware.** Enhanced enrichment of the shipped 1.3 `otel` middleware with attributes that make the span actually useful for cost tracking, incident diagnosis, and cross-tool correlation — the enterprise-observability standard.
+
+  ```js
+  const { trace } = require('@opentelemetry/api');
+  const { otelSpans } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(otelSpans({
+    tracer:          trace.getTracer('cap-app', '0.1.0'),
+    costs:           true,
+    correlation:     true,
+    routing:         true,
+    errorTaxonomy:   true,
+    cacheAttribution: true,
+  }));
+  ```
+
+- **Rich attribute set.** Every span carries (subject to opt-outs):
+  - **GenAI semantic conventions (v1.29+)** — `gen_ai.system`, `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature`, `gen_ai.response.model`, `gen_ai.response.stop_reason`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
+  - **Cost** — `llm.cost.input_usd`, `llm.cost.output_usd`, `llm.cost.total_usd` computed via shipped `pricing.js` (per-model USD/M-token table). Both `input_tokens/output_tokens` (Anthropic) and `prompt_tokens/completion_tokens` (OpenAI) usage shapes are counted. Unpriced models omit cost attrs.
+  - **Correlation** — `llm.correlation_id` pulled from `ctx.meta.correlationId` (populated by `traceCorrelation` 1.64) — cross-links every log line + trace event for the same request.
+  - **Routing meta** — `llm.routing.rule_index` / `llm.routing.model.from` / `llm.routing.model.to` from `ctx.meta.routed` (populated by `modelRouter` 1.81) — makes model-routing decisions visible in traces.
+  - **Error taxonomy** — on `LLMError` failures: `llm.error.code`, `llm.error.primitive`, `llm.error.retriable` from the 1.57 registry. Non-LLM errors still get `recordException` + status but no taxonomy attrs.
+  - **Cache attribution** — `llm.cache.hit` (bool) + `llm.cache.source` distinguishing:
+    - `response-cache` — served from 1.26 responseCache (exact match)
+    - `prompt-cache-anthropic` — `usage.cache_read_input_tokens > 0`
+    - `prompt-cache-openai` — `usage.prompt_tokens_details.cached_tokens > 0`
+    - `prompt-cache-deepseek` — `usage.prompt_cache_hit_tokens > 0`
+    - `prompt-cache-gemini` — `usage.cachedContentTokenCount > 0`
+  - **Tool calls** — `llm.tool_calls.count` when the response includes `toolCalls[]`.
+  - **Embeddings** — `llm.embed.count` = number of vectors returned.
+  - **Stream stats** — `llm.stream.chunks`, `llm.stream.duration_ms` via 1.72 stream completion tracker.
+
+- **Custom enricher escape hatch.** `enrich: (ctx, result, span) => void` fires after all built-in attrs are set. Errors swallowed. Great for domain-specific attrs (tenant, user ID, feature flag, business context):
+
+  ```js
+  otelSpans({
+    tracer,
+    enrich: (ctx, result, span) => {
+      span.setAttribute('app.tenant', ctx.raw?.tenant);
+      span.setAttribute('app.action', ctx.raw?.actionName);
+    },
+  });
+  ```
+
+- **Duck-typed against `@opentelemetry/api`** — no hard dependency. Any object exposing `startSpan(name)` that returns something with `setAttribute` / `setStatus` / `recordException` / `end` works. Ship your own tracer implementation for test / custom transports.
+
+- **Backward compatible with the shipped 1.3 `otel` middleware.** Both can coexist — just use different `spanNamePrefix` values. Most users should pick one; `otelSpans` is the recommended enhanced choice. Existing `otel` users have zero pressure to migrate — the older middleware continues to work exactly as before.
+
+- **Per-feature opt-outs** — `costs: false`, `correlation: false`, `routing: false`, `errorTaxonomy: false`, `cacheAttribution: false` disable individual attribute groups. Compose to build a minimal-attribute variant if you're constrained on trace ingest volume.
+
+- **TypeScript.** `OtelSpansOptions`, `otelSpans(...)`.
+
+- **Recommended placement.** OUTERMOST (as first `llm.use()`) so the span covers the ENTIRE request lifecycle — every middleware's queue wait, retry, breaker decision, and provider call falls under one span. Pair with `traceCorrelation` (1.64) so the correlation ID is populated by the time this span reads it.
+
 ## [1.92.0] — 2026-08-10
 
 ### Added

@@ -175,6 +175,8 @@ module.exports = {
   InMemoryLockStore: require('./middleware/distributedLock').InMemoryLockStore,
   DistributedLockHeldError: require('./middleware/distributedLock').DistributedLockHeldError,
   DistributedLockTimeoutError: require('./middleware/distributedLock').DistributedLockTimeoutError,
+  // OpenTelemetry spans (enhanced 2nd-gen of 1.3 otel) — cost + correlation + routing + error taxonomy + cache attribution (new in 1.93.0)
+  otelSpans:         require('./middleware/otelSpans').otelSpans,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

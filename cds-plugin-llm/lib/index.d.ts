@@ -3075,6 +3075,47 @@ export class DistributedLockTimeoutError extends LLMError {
  */
 export function distributedLock(options: DistributedLockOptions): DistributedLockMiddleware;
 
+// ---- Enhanced OTel spans middleware (new in 1.93.0) -------------------
+
+export interface OtelSpansOptions {
+  /** OTel tracer (duck-typed against @opentelemetry/api). Required. */
+  tracer:            { startSpan: (name: string) => any };
+  /** Span name prefix. Default 'llm.'. */
+  spanNamePrefix?:   string;
+  /** Static value for `gen_ai.system` attribute (e.g. 'anthropic', 'openai'). */
+  systemAttribute?:  string | null;
+  /** Compute + emit cost attributes via pricing table. Default true. */
+  costs?:            boolean;
+  /** Pricing override. Defaults to shipped DEFAULT_PRICING. */
+  pricing?:          Record<string, { input?: number; output?: number }>;
+  /** Emit `llm.correlation_id` from ctx.meta.correlationId (1.64). Default true. */
+  correlation?:      boolean;
+  /** Emit `llm.routing.*` attrs from ctx.meta.routed (1.81). Default true. */
+  routing?:          boolean;
+  /** Emit `llm.error.code / .primitive / .retriable` on LLMError. Default true. */
+  errorTaxonomy?:    boolean;
+  /** Emit `llm.cache.hit` + `llm.cache.source` (response-cache / prompt-cache-*). Default true. */
+  cacheAttribution?: boolean;
+  /** Custom span enricher fired after response attrs are set. Errors swallowed. */
+  enrich?:           ((ctx: MiddlewareContext, result: any, span: any) => void) | null;
+}
+
+/**
+ * Enhanced OTel spans middleware — 2nd-gen enrichment of the shipped
+ * 1.3 `otel` middleware. Adds:
+ *   - Cost attributes via pricing table
+ *   - Correlation ID from ctx.meta (traceCorrelation 1.64)
+ *   - Routing meta from ctx.meta.routed (modelRouter 1.81)
+ *   - Error taxonomy on LLMError (1.57)
+ *   - Cache source attribution (response-cache vs prompt-cache-*)
+ *   - Stream completion tracking (1.72)
+ *   - Custom enrich callback
+ *
+ * Duck-typed against `@opentelemetry/api` — no hard dep.
+ * @since 1.93.0
+ */
+export function otelSpans(options: OtelSpansOptions): Middleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
