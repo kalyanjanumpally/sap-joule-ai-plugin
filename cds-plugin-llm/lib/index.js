@@ -207,6 +207,10 @@ module.exports = {
   capabilities:            require('./capabilities').capabilities,
   PROVIDER_CAPABILITY_MATRIX: require('./capabilities').PROVIDER_MATRIX,
   MODEL_CAPABILITY_OVERRIDES: require('./capabilities').MODEL_OVERRIDES,
+  // Structured response scoring — deterministic rubric evaluator without an LLM call (new in 2.4.0)
+  scoreResponse:      require('./scoreResponse').scoreResponse,
+  formatScoreReport:  require('./scoreResponse').formatScoreReport,
+  KNOWN_SCORE_CHECKS: require('./scoreResponse').KNOWN_CHECK_KINDS,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

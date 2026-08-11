@@ -4,6 +4,82 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] — 2026-08-11
+
+### Added
+
+- **`scoreResponse(response, rubric, ctx?) → ScoreReport` — structured response scoring.** Lightweight programmatic evaluator that scores an LLM output against a rubric of deterministic checks. Companion to `llmJudge` (1.84) for cheap sanity gates that don't need another LLM call. Composes with `promptRegression` (1.89): use `scoreResponse` for mechanical rubric enforcement, `llmJudge` for qualitative assessment.
+
+  ```js
+  const { scoreResponse, formatScoreReport } = require('@saptarishi/cds-plugin-llm');
+
+  const result = scoreResponse(response, [
+    { name: 'contains-invoice-number',
+      check: 'contains', value: 'INV-' },
+    { name: 'valid-invoice-shape',
+      check: 'json-schema',
+      schema: { type: 'object', required: ['vendor', 'total'] } },
+    { name: 'sentence-length',
+      check: 'sentence-count-range', min: 1, max: 5 },
+    { name: 'no-hallucinated-money',
+      check: 'no-hallucinated-numbers',
+      allowed: ['1234.56', '2026'] },
+    { name: 'has-citation',
+      check: 'regex', pattern: /\[\d+\]/ },
+    { name: 'tenant-mention',
+      check: (text, ctx) => ({ ok: text.includes(ctx.tenantId), reason: 'tenant present' }),
+      weight: 3 },
+  ], { tenantId: 'acme' });
+
+  //  {
+  //    ok: false, score: 0.83,
+  //    passed: 5, failed: 1, total: 6,
+  //    results: [
+  //      { name: 'contains-invoice-number', ok: true,  weight: 1, reason: "contains 'INV-'" },
+  //      { name: 'no-hallucinated-money',   ok: false, weight: 1, reason: 'unknown number: 9999.99' },
+  //      ...
+  //    ],
+  //  }
+
+  if (!result.ok) console.error(formatScoreReport(result, { colors: true }));
+  ```
+
+- **13 built-in check kinds**, each documented + typed:
+  - **`contains` / `not-contains`** — substring match with optional `caseInsensitive`
+  - **`regex` / `not-regex`** — RegExp match
+  - **`json`** — valid JSON parse
+  - **`json-schema`** — validates against a JSON Schema subset (type / required / properties / items / enum / additionalProperties). Extracts JSON from prose or code fences automatically — same battle-tested extractor used by `structuredOutputValidator` (1.76)
+  - **`word-count-range` / `char-count-range` / `sentence-count-range`** — length guards
+  - **`no-hallucinated-numbers`** — flags any number NOT in `allowed: [...]`. Handles thousands separators (`1,234.56` normalizes to `"1234.56"`), ignores standalone single digits (list markers, ordinals, quantities)
+  - **`starts-with` / `ends-with`** — prefix/suffix match with `caseInsensitive` support
+  - **`one-of`** — value equality against `options: [...]`
+
+- **Function checks** for domain-specific rules — pass `check: (text, ctx, response) => ({ ok, reason })`. Receives the extracted text, the caller-supplied `ctx` (tenant ID, expected values, business context), and the raw response object. Errors thrown from the function yield `ok: false` with `reason: 'check threw: ...'` — no crashes, always a report.
+
+- **Weighted scoring** — every criterion accepts `weight: number` (default 1). Final score = `Σ(passed_weights) / Σ(total_weights)`. `ok: true` requires zero failed checks; `score` is the fractional pass rate.
+
+- **`formatScoreReport(report, { colors? })` renderer** — human-readable output for CI logs. `✓`/`✗` per criterion + reason text, summary line with X/Y passed + percentage. ANSI colors optional; safe for pipes when disabled.
+
+- **`KNOWN_SCORE_CHECKS`** exports the list of built-in check kinds — useful for programmatic UI generation of rubric builders, or `saptarishi-llm lint-prompts`-style CLI helpers.
+
+- **`CHECKS` map is frozen** — safe to import + reference (deep-clone if you want to build a variant with additional kinds).
+
+- **Recommended composition with `promptRegression` (1.89) + `llmJudge` (1.84)**: layer the three evaluators. Fast filter → deterministic score → qualitative judgment:
+
+  ```js
+  // 1. Deterministic score (cheap, no LLM call)
+  const structural = scoreResponse(response, mechanicalRubric);
+  if (!structural.ok) return { verdict: 'fail', reason: structural.results };
+
+  // 2. LLM-as-judge (slower, qualitative)
+  const judged = await llmJudge({ llm: judgeLlm, criteria: qualitativeCriteria, response });
+  return { verdict: judged.verdict, score: judged.score, structural };
+  ```
+
+- **TypeScript.** `ScoreCheckKind`, `ScoreRubricCriterion`, `ScoreCriterionResult`, `ScoreReport`.
+
+- **Not middleware — a top-level helper.** Scoring is a call-site concern (post-response validation, promptRegression fixtures, action-handler assertions).
+
 ## [2.3.0] — 2026-08-11
 
 ### Added

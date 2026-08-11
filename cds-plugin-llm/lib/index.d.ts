@@ -3754,6 +3754,76 @@ export const PROVIDER_CAPABILITY_MATRIX: Readonly<Record<ProviderKind, ProviderC
 /** Model-specific overrides. Applied after the family matrix. */
 export const MODEL_CAPABILITY_OVERRIDES: Readonly<Record<string, Partial<ProviderCapabilities>>>;
 
+// ---- Structured response scoring (new in 2.4.0) ----------------------
+
+export type ScoreCheckKind =
+  | 'contains' | 'not-contains'
+  | 'regex' | 'not-regex'
+  | 'json' | 'json-schema'
+  | 'word-count-range' | 'char-count-range' | 'sentence-count-range'
+  | 'no-hallucinated-numbers'
+  | 'starts-with' | 'ends-with'
+  | 'one-of';
+
+export interface ScoreRubricCriterion {
+  /** Display name. Default: 'criterion-<i+1>'. */
+  name?:             string;
+  /** Weight for the weighted score aggregate. Default 1. */
+  weight?:           number;
+  /** Check to run. String kind (see ScoreCheckKind) or a function. */
+  check:             ScoreCheckKind | ((text: string, ctx: Record<string, unknown>, response: unknown) => { ok: boolean; reason: string });
+  /** For `contains` / `starts-with` / `ends-with` / `one-of`. */
+  value?:            string;
+  /** For `one-of`. */
+  options?:          string[];
+  /** For `contains` / `starts-with` / `ends-with` / `one-of`. */
+  caseInsensitive?:  boolean;
+  /** For `regex` / `not-regex`. */
+  pattern?:          RegExp;
+  /** For `json-schema`. Uses the shipped minimal validator. */
+  schema?:           Record<string, unknown>;
+  /** For `*-count-range`. */
+  min?:              number;
+  max?:              number;
+  /** For `no-hallucinated-numbers`. Known-good numbers that are always OK. */
+  allowed?:          Array<string | number>;
+}
+
+export interface ScoreCriterionResult {
+  name:   string;
+  ok:     boolean;
+  reason: string;
+  weight: number;
+}
+
+export interface ScoreReport {
+  ok:       boolean;
+  score:    number;
+  passed:   number;
+  failed:   number;
+  total:    number;
+  results:  ScoreCriterionResult[];
+}
+
+/**
+ * Lightweight programmatic evaluator that scores an LLM output against
+ * a rubric of deterministic checks. Companion to llmJudge (1.84) for
+ * cheap sanity gates that don't need another LLM call. Composes with
+ * promptRegression (1.89) — use scoreResponse for mechanical rubric
+ * enforcement, llmJudge for qualitative assessment.
+ * @since 2.4.0
+ */
+export function scoreResponse(
+  response: string | { text?: string; [k: string]: unknown },
+  rubric:   ScoreRubricCriterion[],
+  ctx?:     Record<string, unknown>,
+): ScoreReport;
+
+/** Render a ScoreReport as a human-readable multi-line string. */
+export function formatScoreReport(report: ScoreReport, options?: { colors?: boolean }): string;
+
+export const KNOWN_SCORE_CHECKS: ReadonlyArray<ScoreCheckKind>;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
