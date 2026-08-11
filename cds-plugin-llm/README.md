@@ -4,39 +4,90 @@
 [![npm](https://img.shields.io/npm/v/@saptarishi/cds-plugin-llm.svg)](https://www.npmjs.com/package/@saptarishi/cds-plugin-llm)
 [![license](https://img.shields.io/npm/l/@saptarishi/cds-plugin-llm.svg)](./LICENSE)
 
-LLM-agnostic AI service for SAP CAP. One unified interface — swap between Anthropic (Claude), Ollama (local), Groq, any OpenAI-compatible endpoint, or SAP Generative AI Hub without changing your handler code.
+LLM-agnostic AI platform for SAP CAP. **11 providers** behind one unified interface — Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI, Ollama, Groq, Fireworks, DeepSeek, Mistral, any OpenAI-compatible endpoint, and SAP Generative AI Hub — plus **30+ middleware primitives** spanning cost, resilience, security, observability, compliance, RAG, and CI eval.
 
-**Status:** stable (v1.0.0). All five providers implemented; 64 unit tests + wire-protocol E2E verification against a mock AI Core; CI green on Node 20 + 22. API stability commitment in force — breaking changes require a major version bump. GenAI Hub is spec-compliant and mock-verified end-to-end; live verification against a real AI Core `extended` deployment is a labeled community-help gap (see FAQ).
+**Status:** stable (**v2.0.0**). Formal API stability contract in force for the 2.x line — see [`MIGRATION.md`](./MIGRATION.md). 11 providers implemented; **2188 automated tests** on Node 20 + 22 in CI; zero known bugs, zero deprecated APIs; TypeScript definitions ship in the package.
 
 ## What it is
 
-A CAP service kind that turns `cds.connect.to('llm')` into a working LLM client — with one unified interface (`chat`, `stream`, `embed`) that speaks to any of five backends. Swapping backends is a config change, not a code change.
+A CAP service kind that turns `cds.connect.to('llm')` into a working LLM client — with one unified interface (`chat`, `stream`, `embed`, `batch`) that speaks to any of eleven backends. Swapping backends is a config change, not a code change.
+
+Beyond the provider abstraction, the package ships a comprehensive **middleware platform**: cost + budget guards, circuit breakers, bulkheads, retries, deadlines, provider fallback, region failover, prompt-injection detection, PII redaction, content-safety classifiers, structured-output validators, prompt-cache metrics, response caches (exact + semantic), embedding dedup, JSON logs, OTel spans, Prometheus metrics, tenant isolation, distributed locks, compliance audit trails, and more. See the [Middleware catalog](#middleware-catalog) below.
+
+The package also ships **first-class helpers** for RAG orchestration (`ragChain`), LLM-as-judge scoring (`llmJudge`), CI eval harnesses (`promptRegression`, `lintPrompt`), and offline batch workflows (`runBatch`, `waitForBatch`) — plus a `saptarishi-llm` CLI with subcommands for `chat`/`stream`/`embed`/`verify`/`init`/`mcp`/`chain-visualize`/`doctor`/`export-dashboard`/`lint-prompts` and more.
 
 Complementary to [`@cap-js/ai`](https://github.com/cap-js/ai), which focuses on value-help recommendations and SAP AI Core integration. This plugin fills the more general "I need a CAP-idiomatic way to call LLMs, with a local development story and multiple provider options" gap.
+
+## Middleware catalog
+
+Every primitive below is a shipping middleware (or top-level helper) with dedicated per-section documentation, tests, TypeScript types, and a `config://<primitive>` MCP resource for live introspection. All are stable in the 2.x line — see [`MIGRATION.md`](./MIGRATION.md).
+
+| Group | Primitives |
+| --- | --- |
+| **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
+| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` |
+| **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `safetyClassifier` · `sensitiveDataAudit` |
+| **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
+| **Routing** | `modelRouter` · `tenantIsolate` |
+| **Caching** | `responseCache` (exact + semantic) · `embeddingDedup` |
+| **Contract / GitOps** | `structuredOutputValidator` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` |
+| **Long-context** | `compactHistory` |
+| **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` |
+| **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` |
+| **Bulk workflows** | `runBatch` · `waitForBatch` |
+| **Multimodal helpers** | `imageFromFile` / `pdfFromUrl` / `audioFromBase64` / `uploadPdfFromUrl` / etc. |
+| **Agent orchestration** | `runTools` · `streamTools` · `Agent` · `runAgents` · `streamAgents` |
+| **Error taxonomy** | `LLMError` base + `errorRegistry` with 18 stable codes (`CIRCUIT_OPEN`, `BUDGET_EXCEEDED`, `PROMPT_INJECTION`, `SAFETY_CLASSIFIER_BLOCKED`, `ALL_REGIONS_FAILED`, ...) |
+
+Every primitive is composable via `llm.use(mw)` Koa-style — outermost first. `resilience.bundle()` wires the full resilience stack (retry → breaker → bulkhead → deadline → probes → tuner) with one call. `chainSnapshot(llm)` extracts the live config for GitOps drift detection; `chainDiff(baseline, live)` diffs; `validateMiddlewareOrder(chain)` warns on suspicious orderings.
 
 ## Architecture
 
 ```
-    Your CAP handler
+    Your CAP handler / OData action
           │
-          │  cds.connect.to('llm')  →  { chat, stream, embed }
+          │  cds.connect.to('llm')  →  { chat, stream, embed, batch }
           ↓
-    ┌─────────────────────────────────────────────┐
-    │  LLMService  (base class)                   │
-    │  - retries, structured-output parsing       │
-    │  - unified chunk shape for streaming        │
-    └────────────┬────────────────────────────────┘
+    ┌─────────────────────────────────────────────────────────────┐
+    │  Middleware chain (llm.use(...), Koa-style, outer → inner)  │
+    │                                                             │
+    │   otelSpans / traceCorrelation / jsonLog                    │
+    │     → promptCacheStats                                      │
+    │       → modelRouter                                         │
+    │         → embeddingDedup                                    │
+    │           → safetyClassifier                                │
+    │             → autoContinue                                  │
+    │               → promptInjectionGuard                        │
+    │                 → guardrails                                │
+    │                   → piiRedact                               │
+    │                     → sensitiveDataAudit                    │
+    │                       → costGuard / costBudget              │
+    │                         → adaptiveMaxTokens                 │
+    │                           → idempotency / distributedLock   │
+    │                             → circuitBreaker                │
+    │                               → bulkhead                    │
+    │                                 → retryOnRateLimit          │
+    │                                   → responseCache           │
+    │                                     → structuredOutputValidator
+    │                                       → replayBuffer        │
+    │                                         → (provider)        │
+    └─────────────────────────────────────────────────────────────┘
                  │
                  ▼
-    ┌────────────────────┬──────────────┬──────────────┐
-    │ AnthropicLLM       │ OllamaLLM    │ GroqLLM      │
-    │ OpenAICompatible   │ GenAIHubLLM  │              │
-    └────────────────────┴──────────────┴──────────────┘
-      ↓                    ↓              ↓
-    Anthropic         Local Ollama    Groq / OpenAI /
-    Messages API      HTTP            AI Core / any
-                                      OpenAI-compat
+    ┌─────────────────────────────────────────────────────────────┐
+    │  LLMService (base class): retries · structured-output       │
+    │  parsing · unified chunk shape · batch API dispatch         │
+    └───────────────────┬─────────────────────────────────────────┘
+                        │
+                        ▼
+    ┌─── AnthropicLLM ────┬─── AzureOpenAILLM ──┬─── GeminiLLM ─┐
+    │    OpenAICompatible │    GroqLLM          │    BedrockLLM │
+    │    FireworksLLM     │    DeepSeekLLM      │    MistralLLM │
+    │    OllamaLLM        │    GenAIHubLLM      │               │
+    └─────────────────────┴─────────────────────┴───────────────┘
 ```
+
+The middleware sandwich is **fully composable** — every layer is optional, layer order is validated by `validateMiddlewareOrder`, and the full snapshot is exportable for GitOps drift detection via `chainSnapshot`. Each layer exposes an `asMcpResource()` handler for live observability.
 
 - **No CDS entities or served OData surface** — this is a client library, not an OData service. `cds.connect.to('llm')` returns the provider instance directly.
 - **Provider selection at connect time** via `cds.requires.llm.kind` — profile-aware, so `[development]`, `[production]`, `[genai-hub]`, etc. can each point at a different backend.

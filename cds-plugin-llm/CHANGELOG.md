@@ -4,6 +4,96 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-08-11
+
+### The 2.0 milestone: stability + polish
+
+**No breaking changes.** Every 1.x API remains functional and unchanged in behavior. 2.0 is a formal stability declaration for the surface accumulated across 1.0–1.99, plus a documentation refresh. If you're on 1.x, upgrade with a version-bump — no code changes needed.
+
+### Formal API stability contract for the 2.x line
+
+Every export documented in `lib/index.d.ts` with a `@since` marker of **1.99.0 or earlier** is considered stable and covered by the 2.x compatibility contract. Specifically:
+
+- **Signatures will not change** — argument order, option shapes, return shapes are frozen
+- **Behavior contracts will not change** — a middleware that skips embed calls today will still skip them in 2.x; a helper that throws `LLMError` today will still throw `LLMError`
+- **Error codes are stable** — the codes registered in `errorRegistry` (CIRCUIT_OPEN, BULKHEAD_FULL, BUDGET_EXCEEDED, ALL_REGIONS_FAILED, ...) will not be renamed or repurposed
+- **MCP resource URIs are stable** — the 28 `config://*` URIs registered in `chainSnapshot`'s `URI_TO_KIND` table will not be renamed
+- **Prometheus metric names are stable** — the 84 `llm_*` metric names emitted by `promMetrics` are covered by the same contract; dashboards + alert rules built against 1.x continue working
+
+### What's in the box (at 2.0)
+
+**Providers (11 shipped):**
+- Anthropic (native + Bedrock)
+- OpenAI-compatible (base class for Groq / DeepSeek / Fireworks / Mistral / Azure OpenAI / GenAI Hub / OpenAI proper)
+- Groq, DeepSeek, Fireworks, Mistral (dedicated subclasses with tuned defaults)
+- Azure OpenAI (deployment-pinned)
+- Google Gemini
+- AWS Bedrock
+- Ollama (local dev)
+- SAP Generative AI Hub
+
+**Middleware primitives (30+ shipped) — grouped by concern:**
+
+*Cost:* `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats`
+
+*Resilience:* `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock`
+
+*Security:* `guardrails` · `promptInjectionGuard` · `piiRedact` · `safetyClassifier` · `sensitiveDataAudit`
+
+*Observability:* `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation`
+
+*Routing:* `modelRouter` · `tenantIsolate`
+
+*Caching:* `responseCache` (exact + semantic) · `embeddingDedup`
+
+*Contract:* `structuredOutputValidator` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight`
+
+*Long-context:* `compactHistory`
+
+*Streaming:* `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle`
+
+**Top-level helpers:**
+- `runTools` / `streamTools` — automatic multi-turn agent loop
+- `Agent` / `runAgents` / `streamAgents` — multi-agent orchestration
+- `ragChain` — retrieve → dedupe → rerank → truncate → answer pipeline
+- `llmJudge` / `judgeMany` — LLM-as-judge scoring
+- `promptRegression` / `loadFixtures` / `formatRegressionReport` — CI eval harness
+- `lintPrompt` / `lintPrompts` / `formatLintReport` — static analysis for prompt templates
+- `runBatch` / `waitForBatch` — bulk workflows (Anthropic/OpenAI batch APIs at ~50% cost, 24h SLA)
+- `imageFromFile` / `pdfFromUrl` / `audioFromBase64` / etc. — multimodal input helpers
+- `uploadPdfFromUrl` — OpenAI Files API integration
+- `resilience.bundle()` — one-liner wiring for the full resilience stack
+
+**Error taxonomy — stable codes** (behavior + HTTP status frozen for 2.x):
+`RATE_LIMIT_GIVE_UP` · `CIRCUIT_OPEN` · `BULKHEAD_FULL` · `BULKHEAD_TIMEOUT` · `DEADLINE_EXCEEDED` · `ALL_PROVIDERS_FAILED` · `ALL_REGIONS_FAILED` · `COST_GUARD_BLOCKED` · `BUDGET_EXCEEDED` · `BUDGET_TOO_TIGHT` · `MISSING_FIXTURE` · `PROMPT_INJECTION` · `GUARDRAIL_BLOCKED` · `STRUCTURED_OUTPUT_INVALID` · `IDEMPOTENCY_IN_FLIGHT` · `SAFETY_CLASSIFIER_BLOCKED` · `DISTRIBUTED_LOCK_HELD` · `DISTRIBUTED_LOCK_TIMEOUT`
+
+**CLI (`saptarishi-llm` + `cds-llm` alias):**
+`chat` (one-shot + `-i` REPL) · `stream` · `embed` · `verify` · `providers` · `init` · `mcp` · `cost-predict` · `chain-visualize` · `chain-diff` · `chain-validate` · `preflight` · `doctor` · `batch` · `export-dashboard` · `lint-prompts`
+
+**Dashboards + alerts** (`saptarishi-llm export-dashboard --format ...`):
+Grafana JSON · Prometheus alert rules YAML · Datadog dashboard · New Relic dashboard — matching the shipped `promMetrics` output out of the box.
+
+### Testing + verification
+
+- **2188 automated tests** on Node 20 + Node 22 in CI (up from 64 at 1.0.0)
+- **Zero known bugs, zero deprecated APIs**
+- **Full TypeScript definitions** — 4800 lines in `lib/index.d.ts`, tsc-clean
+- **Per-primitive `asMcpResource()`** — 28 `config://*` MCP resources for live observability
+- **Chain snapshot round-trip** — export → diff → validate loop covered by CI
+
+### Compatibility
+
+- **Node.js:** ≥ 18 (Node 20 + 22 in CI)
+- **`@sap/cds`:** ≥ 7 (CAP 7, 8, 9 all supported)
+- **`@aws-sdk/client-bedrock-runtime`:** ≥ 3.600.0 (optional; only when using `llm-bedrock`)
+
+### Migration
+
+- **From 1.x → 2.0.0:** upgrade the version. That's it. No code changes required for anything documented with a `@since 1.x` marker.
+- **From 0.x → 2.0.0:** upgrade in two hops for safety — 0.x → 1.0.0 first (see the 1.0.0 changelog for that migration), then 1.x → 2.0.0.
+
+See `MIGRATION.md` for the full compatibility statement.
+
 ## [1.99.0] — 2026-08-10
 
 ### Added

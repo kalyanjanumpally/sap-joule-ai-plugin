@@ -1,6 +1,28 @@
 // Type definitions for @saptarishi/cds-plugin-llm
 // Public API surface only — internal utilities (withRetry, RetryableError,
 // throwFromResponse) are not re-exported and intentionally not typed here.
+//
+// ═══════════════════════════════════════════════════════════════════════════
+// 2.x STABILITY CONTRACT
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Every export in this file with a `@since` marker of 1.99.0 or earlier is
+// considered stable and covered by the 2.x compatibility contract:
+//
+//   * Argument order + option shapes are frozen
+//   * Return shapes (stats, MCP resource payloads) are frozen
+//   * Error codes in errorRegistry will not be renamed or repurposed
+//   * HTTP status codes on LLMError subclasses will not change
+//   * MCP resource URIs (config://*) will not be renamed
+//   * Prometheus metric names (llm_*) will not be renamed
+//
+// Additive changes (new optional option fields, new methods, new middleware,
+// new error codes, new provider kinds) can land in a minor (2.x) release.
+//
+// Any change that would break the above requires a 3.0 release.
+//
+// See MIGRATION.md for the full compatibility statement.
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ---------------------------------------------------------------------------
 // JSON schema — minimal shape the plugin actually forwards to providers

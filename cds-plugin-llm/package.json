@@ -1,7 +1,7 @@
 {
   "name": "@saptarishi/cds-plugin-llm",
-  "version": "1.99.0",
-  "description": "LLM-agnostic AI service for SAP CAP. Speaks Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI, Ollama, Groq, Fireworks, DeepSeek, Mistral, any OpenAI-compatible endpoint, and SAP Generative AI Hub behind one API. Supports vision / multimodal input, streaming responses, structured outputs, tool use / function calling, and automatic retries with exponential backoff.",
+  "version": "2.0.0",
+  "description": "LLM-agnostic AI platform for SAP CAP. 11 providers behind one API (Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI, Ollama, Groq, Fireworks, DeepSeek, Mistral, OpenAI-compatible, SAP Generative AI Hub) with 30+ middleware primitives spanning cost/resilience/security/observability/compliance/RAG/CI-eval. Formal API stability contract for the 2.x line.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kalyanjanumpally/sap-joule-ai-plugin.git",
@@ -23,6 +23,7 @@
     "lib/",
     "README.md",
     "CHANGELOG.md",
+    "MIGRATION.md",
     "LICENSE"
   ],
   "scripts": {
@@ -51,7 +52,29 @@
     "vision",
     "multimodal",
     "streaming",
-    "joule"
+    "joule",
+    "middleware",
+    "resilience",
+    "circuit-breaker",
+    "bulkhead",
+    "guardrails",
+    "prompt-injection",
+    "pii",
+    "gdpr",
+    "compliance",
+    "audit-trail",
+    "cost-tracking",
+    "observability",
+    "opentelemetry",
+    "otel",
+    "prometheus",
+    "grafana",
+    "mcp",
+    "model-context-protocol",
+    "rag",
+    "retrieval-augmented-generation",
+    "eval",
+    "llm-as-judge"
   ],
   "author": "",
   "license": "Apache-2.0",

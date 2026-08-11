@@ -72,7 +72,7 @@ test('doctor.checkNodeVersion: reports ok on current node', () => {
 test('doctor.checkPackageVersion: reads package.json', () => {
   const c = checkPackageVersion();
   assert.equal(c.status, 'ok');
-  assert.match(c.message, /@saptarishi\/cds-plugin-llm v1\.\d+/);
+  assert.match(c.message, /@saptarishi\/cds-plugin-llm v\d+\.\d+/);
 });
 
 // ---- checkEnvironment --------------------------------------------------
