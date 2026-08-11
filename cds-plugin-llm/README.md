@@ -12,7 +12,7 @@ LLM-agnostic AI platform for SAP CAP. **11 providers** behind one unified interf
 
 A CAP service kind that turns `cds.connect.to('llm')` into a working LLM client — with one unified interface (`chat`, `stream`, `embed`, `batch`) that speaks to any of eleven backends. Swapping backends is a config change, not a code change.
 
-Beyond the provider abstraction, the package ships a comprehensive **middleware platform**: cost + budget guards, circuit breakers, bulkheads, retries, deadlines, provider fallback, region failover, prompt-injection detection, PII redaction, content-safety classifiers, structured-output validators, prompt-cache metrics, response caches (exact + semantic), embedding dedup, JSON logs, OTel spans, Prometheus metrics, tenant isolation, distributed locks, compliance audit trails, and more. See the [Middleware catalog](#middleware-catalog) below.
+Beyond the provider abstraction, the package ships a comprehensive **middleware platform**: cost + budget guards, cost forecasting, circuit breakers, bulkheads (with latency- and quota-driven adaptive tuners), retries, deadlines, provider fallback, region failover, prompt-injection detection, PII redaction, content-safety classifiers, structured-output validators, response scoring, multi-model consensus voting, prompt-cache metrics, response caches (exact + semantic + pluggable-vector-store), embedding dedup, JSON logs, OTel spans, Prometheus metrics, tenant isolation, distributed locks, compliance audit trails, and more. See the [Middleware catalog](#middleware-catalog) below.
 
 The package also ships **first-class helpers** for RAG orchestration (`ragChain`), LLM-as-judge scoring (`llmJudge`), CI eval harnesses (`promptRegression`, `lintPrompt`), and offline batch workflows (`runBatch`, `waitForBatch`) — plus a `saptarishi-llm` CLI with subcommands for `chat`/`stream`/`embed`/`verify`/`init`/`mcp`/`chain-visualize`/`doctor`/`export-dashboard`/`lint-prompts` and more.
 
@@ -24,16 +24,16 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 
 | Group | Primitives |
 | --- | --- |
-| **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
-| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` |
+| **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
+| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Routing** | `modelRouter` · `tenantIsolate` |
-| **Caching** | `responseCache` (exact + semantic) · `embeddingDedup` |
+| **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `embeddingDedup` |
 | **Contract / GitOps** | `structuredOutputValidator` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` |
 | **Long-context** | `compactHistory` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` |
-| **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` |
+| **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` |
 | **Bulk workflows** | `runBatch` · `waitForBatch` |
 | **Multimodal helpers** | `imageFromFile` / `pdfFromUrl` / `audioFromBase64` / `uploadPdfFromUrl` / etc. |
 | **Agent orchestration** | `runTools` · `streamTools` · `Agent` · `runAgents` · `streamAgents` |
@@ -1098,6 +1098,63 @@ Common wins:
 - **Same PO summarized twice** (approver reopens the review) — instant, zero tokens
 - **Batch classification** with duplicate inputs — deduplicates automatically
 - **Load-testing** — dev-env queries hit cache after the first pass
+
+## Semantic response cache (new in v2.7.0)
+
+`semanticCache` is a middleware-form cache keyed by **embedding similarity**, not byte-equality — useful when the same question keeps showing up in slightly different wording. It's separate from the built-in `responseCache` (which is exact-match + LRU). Bring your own embedder and vector store; an in-memory linear-scan store is provided so you can wire it up with zero infra.
+
+```js
+const { semanticCache, inMemorySemanticStore } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(semanticCache({
+  embedder: async (text) => (await llm.embed({ input: text })).embeddings[0],
+  store:    inMemorySemanticStore({ maxEntries: 1000, ttlMs: 3600_000 }),
+  threshold: 0.92,          // cosine similarity → hit
+  keyPrefix: `tenant:${tenantId}:`,
+  shouldCache: (_ctx, r) => r?.status !== 'error',
+  onHit:  (i) => cds.log('llm:sc').info('hit', i),
+}));
+```
+
+Highlights:
+- **Fail-open.** Any exception from the embedder or store falls through to `next()` — a broken cache never takes the request path down.
+- **Multi-tenant safe.** `keyPrefix` is post-filtered by the middleware even if the store ignores the hint, so hits cannot leak across tenants.
+- **Swap the store for prod.** The interface is three async methods (`get`, `put`, `findSimilar`) — implement against pgvector, Redis, Pinecone, Weaviate, etc.
+- **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
+
+Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Adaptive rate-limit tuner (new in v2.6.0)
+
+`adaptiveRateLimit` watches the rate-limit headers the provider sends back on every call (parsed by the shipped OpenAI / Anthropic / Gemini / Bedrock providers into `result._rateLimit`) and dynamically adjusts the paired `bulkhead()`'s `maxConcurrent` to stay within remaining quota. On a 429 or 503 it immediately halves concurrency; on a healthy sample it grows back toward `(remainingRatio − headroom) × maxConcurrent`.
+
+```js
+const { bulkhead, adaptiveRateLimit } = require('@saptarishi/cds-plugin-llm');
+
+const bh = bulkhead({ maxConcurrent: 20 });
+llm.use(bh);
+llm.use(adaptiveRateLimit({
+  bulkhead:      bh,
+  headroom:      0.20,       // stay 20% below remaining quota
+  minConcurrent: 2,
+  maxConcurrent: 50,
+  onAdjust: (i) => cds.log('llm:arl').info(i),
+  on429:    (i) => cds.log('llm:arl').warn('429', i),
+}));
+```
+
+Composes with `adaptiveBulkhead` (1.61) — that one is **latency-driven** (AIMD on p95), this one is **quota-driven** (headroom against remaining requests/tokens). Both can call `setMaxConcurrent` on the same bulkhead; they naturally settle on the tighter of the two signals. MCP resource: `config://adaptive-rate-limit`.
+
+## Response scoring + consensus voting (new in v2.4.0 · v2.5.0)
+
+Two composable primitives for output quality:
+
+- **`scoreResponse`** (v2.4.0) — checks-based grader with a frozen `CHECKS` catalog (`no-hallucinated-numbers`, `min-length`, `contains`, `matches`, `no-refusal`, ...). Returns a score in `[0, 1]` plus per-check details. Wire it as a soft signal for logging + dashboards, or as a hard gate via `shouldCache: (_c, r) => scoreResponse(r).score >= 0.8` in `semanticCache`.
+- **`consensusVoting`** (v2.5.0) — fan out to N models in parallel; return the majority winner with configurable quorum, comparators (`equalityIgnoreCase`, `jsonDeepEqual`, `numeric`, `firstToken`, ...), and confidence. Useful for compliance-sensitive answers where a single-model reply is not defensible.
+
+## Cost forecasting (new in v2.1.0)
+
+`costForecast` projects your rolling burn rate against a monthly budget, raising `warn` and `critical` events before you hit the wall (unlike `costBudget`, which fires when spend has already crossed a threshold). Straight-to-critical transitions correctly fire the `warn` callback first. MCP resource: `config://cost-forecast`.
 
 ## Full API
 
