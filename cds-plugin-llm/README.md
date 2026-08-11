@@ -29,8 +29,9 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Routing** | `modelRouter` · `tenantIsolate` |
-| **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `embeddingDedup` |
-| **Contract / GitOps** | `structuredOutputValidator` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` |
+| **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` |
+| **Contract / GitOps** | `structuredOutputValidator` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
+| **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
 | **Long-context** | `compactHistory` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` |
 | **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` |
@@ -883,6 +884,29 @@ Add `--watch-prompts` and the server hot-reloads templates when files change —
 saptarishi-llm mcp --prompts-dir ./prompts --watch-prompts
 ```
 
+### Git-backed prompt registry (new in v2.1.0)
+
+`gitPromptRegistry` extends `PromptRegistry` with a loader that pulls templates from a Git repository, caches them locally, and optionally polls for updates. Prompt changes go through PR review separately from code deploys — a real prompt-as-code workflow.
+
+```js
+const { gitPromptRegistry } = require('@saptarishi/cds-plugin-llm');
+
+const registry = await gitPromptRegistry({
+  url:     'https://github.com/your-org/prompts.git',
+  branch:  'main',
+  subdir:  'templates',      // optional — load only a subfolder
+  pollMs:  60_000,           // poll every 60s for new commits
+  onUpdate: (info) => cds.log('llm:prompts').info('reloaded', info),
+});
+
+// Same API as PromptRegistry:
+const req = registry.render('invoice_dispute_response', { dispute });
+```
+
+- Exposes `config://git-prompt-registry` (URL, branch, current SHA, refresh timestamp, counters) — live-visible in your MCP client.
+- Pin to a specific `ref` (SHA / tag) for immutable prompts in prod; use `branch` for rolling updates in staging.
+- Works with any prompt directory the shipped `loadFromDir` scanner accepts.
+
 ### HTTP+SSE transport (new in v1.10.0)
 
 By default `saptarishi-llm mcp` speaks stdio (for Claude Desktop / Cursor / Zed as a local subprocess). Add `--http` and it runs as a network service instead — the same MCP server, addressable over HTTP. Deploy to CF, put behind an auth proxy, share with a team.
@@ -1155,6 +1179,23 @@ Two composable primitives for output quality:
 ## Cost forecasting (new in v2.1.0)
 
 `costForecast` projects your rolling burn rate against a monthly budget, raising `warn` and `critical` events before you hit the wall (unlike `costBudget`, which fires when spend has already crossed a threshold). Straight-to-critical transitions correctly fire the `warn` callback first. MCP resource: `config://cost-forecast`.
+
+## Provider capability probe (new in v2.3.0)
+
+`capabilities(llm)` returns a live capability report for the configured provider + model — what actually works, not what a hand-maintained matrix claims. Complements the static [Provider capability matrix](#provider-capability-matrix) below with runtime evidence: what tools work, whether structured outputs land, whether the model actually streams, prompt-cache support, and vision / PDF handling.
+
+```js
+const { capabilities } = require('@saptarishi/cds-plugin-llm');
+
+const report = await capabilities(llm, { live: false });
+// {
+//   provider: 'llm-anthropic', model: 'claude-sonnet-4-6',
+//   chat: true, stream: true, tools: true, structuredOutputs: true,
+//   embed: false, promptCache: true, vision: true, pdf: true, ...
+// }
+```
+
+Pass `{ live: true }` to actually round-trip a probe request per capability (~5s) — useful for CI verification against a real endpoint. `PROVIDER_CAPABILITY_MATRIX` + `MODEL_CAPABILITY_OVERRIDES` exports let you consume the static matrix directly for gating in code.
 
 ## Full API
 
