@@ -4254,6 +4254,100 @@ export interface AdaptiveBulkheadHandle {
  */
 export function adaptiveBulkhead(options: AdaptiveBulkheadOptions): AdaptiveBulkheadHandle;
 
+// ---- Adaptive rate-limit tuner (new in 2.6.0) --------------------------
+
+export interface AdaptiveRateLimitOptions {
+  /**
+   * Bulkhead middleware instance (from `bulkhead()`) whose `setMaxConcurrent`
+   * this tuner will call as quota drifts.
+   */
+  bulkhead: BulkheadMiddleware;
+  /**
+   * Fraction of remaining quota to keep as safety headroom. Default 0.20.
+   * Range [0, 1). Higher = more conservative.
+   */
+  headroom?:      number;
+  /**
+   * EMA smoothing factor for remaining-ratio. Default 0.30. Range (0, 1].
+   * Higher = more responsive; lower = smoother.
+   */
+  alpha?:         number;
+  /** Concurrency floor. Default 1. */
+  minConcurrent?: number;
+  /**
+   * Concurrency ceiling. Default: caller-decided; if omitted, tuner uses
+   * `bulkhead.getMaxConcurrent() × 2` as the grow room upper bound.
+   */
+  maxConcurrent?: number | null;
+  /** Force a specific provider parser (skips detection). */
+  provider?:      'openai' | 'anthropic' | 'gemini' | 'bedrock' | null;
+  /**
+   * Custom parser overrides — same shape as the shipped rate-limit parsers.
+   * Any keys omitted fall back to defaults.
+   */
+  parsers?:       Record<string, (headers: unknown, status?: number) => unknown>;
+  /** Fired every time setMaxConcurrent is called. Errors are swallowed. */
+  onAdjust?:      (info: {
+    reason: 'sample' | 'low-remaining' | '429-halve';
+    providerName: string | null;
+    from: number;
+    to: number;
+    smoothedRatio: number;
+    lastRatio?: number | null;
+  }) => void;
+  /** Fired on 429 (before/after halving). Errors are swallowed. */
+  on429?:         (info: {
+    providerName: string | null;
+    before: number;
+    after: number;
+  }) => void;
+  /** Test seam. Default `() => Date.now()`. */
+  now?: () => number;
+}
+
+export interface AdaptiveRateLimitStats {
+  totalCalls:       number;
+  samples:          number;
+  adjustments:      number;
+  grows:            number;
+  shrinks:          number;
+  on429Adjustments: number;
+  lastRatio:        number | null;
+  lastTarget:       number | null;
+  lastReason:       string | null;
+  byProvider:       Record<string, number>;
+}
+
+export interface AdaptiveRateLimitMiddleware extends Middleware {
+  readonly stats: AdaptiveRateLimitStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://adaptive-rate-limit';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => AdaptiveRateLimitStats & {
+      headroom: number;
+      alpha: number;
+      minConcurrent: number;
+      maxConcurrentCap: number | null;
+      currentBulkheadMax: number;
+      smoothedRatio: number;
+      supportedProviders: string[];
+    };
+  };
+}
+
+/**
+ * Adaptive rate-limit tuner. Watches provider rate-limit headers (1.38+
+ * parsers), EMA-smooths remaining-ratio, and shrinks/grows the bulkhead's
+ * maxConcurrent to keep `headroom` fraction as buffer. Halves on 429/503.
+ * Composes with adaptiveBulkhead — this tuner is QUOTA-driven, adaptiveBulkhead
+ * is LATENCY-driven; both can run against the same bulkhead.
+ * @since 2.6.0
+ */
+export function adaptiveRateLimit(options: AdaptiveRateLimitOptions): AdaptiveRateLimitMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

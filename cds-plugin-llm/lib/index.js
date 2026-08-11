@@ -215,6 +215,8 @@ module.exports = {
   consensusVoting:    require('./consensusVoting').consensusVoting,
   CONSENSUS_COMPARATORS: require('./consensusVoting').COMPARATORS,
   KNOWN_CONSENSUS_COMPARATORS: require('./consensusVoting').KNOWN_COMPARATORS,
+  // Adaptive rate-limit tuner — quota-driven bulkhead concurrency adjustment (new in 2.6.0)
+  adaptiveRateLimit:  require('./middleware/adaptiveRateLimit').adaptiveRateLimit,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

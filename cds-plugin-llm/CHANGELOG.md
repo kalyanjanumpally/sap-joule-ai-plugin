@@ -4,6 +4,34 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] — 2026-08-11
+
+### Added
+- **`adaptiveRateLimit` middleware** — quota-driven concurrency tuner that
+  wraps around a `bulkhead()` and adjusts its `maxConcurrent` based on the
+  provider's remaining rate-limit budget. Reads either the shipped providers'
+  pre-parsed `result._rateLimit` envelope (1.38+) or raw headers (with
+  auto-detection of OpenAI/Anthropic/Gemini/Bedrock signatures via the same
+  parsers used by `retryAfterPropagation`). Each successful sample updates
+  an EMA of the tighter (requests-vs-tokens) remaining-ratio; target
+  concurrency = `(smoothed − headroom) × maxConcurrent`. A 429 or 503
+  immediately halves the current concurrency and pulls the smoothed ratio
+  down so we don't re-grow on the next successful sample.
+- Composes cleanly with `adaptiveBulkhead` (1.61) — that tuner is
+  **latency-driven** (AIMD on p95), this tuner is **quota-driven**. Both
+  can call `setMaxConcurrent()` on the same bulkhead; they naturally
+  settle on the tighter of the two signals.
+- MCP resource `config://adaptive-rate-limit` exposes headroom, alpha,
+  min/max ceilings, current bulkhead ceiling, smoothed ratio, per-provider
+  adjustment counts, and full stats.
+- TypeScript: `AdaptiveRateLimitOptions`, `AdaptiveRateLimitStats`,
+  `AdaptiveRateLimitMiddleware`.
+
+### API contract (frozen)
+- Signature: `adaptiveRateLimit({ bulkhead, headroom=0.20, alpha=0.30, minConcurrent=1, maxConcurrent=null, onAdjust, on429, provider, parsers })`
+- MCP URI: `config://adaptive-rate-limit`
+- Halve reason string: `'429-halve'` (stable — safe to match in tests)
+
 ## [2.5.0] — 2026-08-11
 
 ### Added
