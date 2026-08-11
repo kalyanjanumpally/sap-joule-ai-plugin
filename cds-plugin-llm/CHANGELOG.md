@@ -4,6 +4,69 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] — 2026-08-11
+
+### Added
+
+- **`capabilities(llm, { live?, timeoutMs?, probes? }) → Promise<CapabilityReport>` — provider capability probe.** Introspects a live LLMService and reports what features actually work against the configured provider + model. Fills the "which providers support what" matrix without hand-maintained tables.
+
+  ```js
+  const { capabilities } = require('@saptarishi/cds-plugin-llm');
+
+  const caps = await capabilities(llm);
+  // {
+  //   provider: 'anthropic',
+  //   model:    'claude-opus-4-7',
+  //   chat: true, stream: true, embed: false, batch: true,
+  //   vision: true, pdf: true, audio: false, tools: true,
+  //   structuredOutput: true, promptCache: true,
+  //   maxContextTokens: 200_000, maxOutputTokens: 8192,
+  //   live: { ran: false, probes: [] },
+  // }
+  ```
+
+- **Two modes:**
+  - **Static** (default) — reads only class shape, the provider's `kind` on the CDS options, and the configured `modelId`. Fast, no network calls, safe to call at boot.
+  - **Live** (`live: true`) — additionally issues small verification calls: 1-token chat, single-embedding call, JSON-schema-mode chat, tool-use probe. Each has its own timeout + soft-fail (reports the probe result, doesn't throw).
+
+- **Shipped `PROVIDER_CAPABILITY_MATRIX`** covering all 11 providers with:
+  - Feature flags: `chat`, `stream`, `embed`, `batch`, `vision`, `pdf`, `audio`, `tools`, `structuredOutput`, `promptCache`
+  - Numeric limits: `maxContextTokens` (200k for Anthropic; **1M for Gemini**; 128k for OpenAI; ...), `maxOutputTokens`
+
+- **`MODEL_CAPABILITY_OVERRIDES`** for known model-specific quirks:
+  - Embedding models (`text-embedding-3-*`, `nomic-embed-text`, ...) → chat/stream/tools/structuredOutput all false, `maxOutputTokens: 0`
+  - Claude Haiku output cap (4096 not 8192)
+  - Legacy gpt-3.5-turbo context cap (16k not 128k)
+  - `gpt-4o-audio-preview` native audio
+
+- **Custom matrix override.** Pass `matrix: { my-custom-kind: {...} }` for endpoints you added via `llm-openai-compatible` with unusual capability profiles. Same for `modelOverrides` — supplement the shipped table without forking.
+
+- **Composes with `modelRouter` (1.81).** Common pattern: route each request to the FIRST configured service whose `capabilities` say it supports the feature the request needs:
+
+  ```js
+  const caps = await Promise.all(services.map((s) => capabilities(s)));
+  llm.use(modelRouter({
+    rules: [
+      { match: { hasImages: true },
+        route: { model: caps.find((c) => c.vision)?.model ?? 'default' } },
+      { match: { hasFormat: true, hasTools: true },
+        route: { model: caps.find((c) => c.structuredOutput && c.tools)?.model ?? 'default' } },
+    ],
+  }));
+  ```
+
+- **Provider detection** — inspects `llm.options.kind` (from CDS profile config), `constructor.name` (falls back to the shipped `AnthropicLLMService` / `MistralLLMService` / etc. name), OR a manual override. Robust to CDS's `llm-` prefix (`llm-anthropic` → `anthropic`).
+
+- **Batch detection is dynamic** — walks the prototype chain looking for a `_batchSubmit` override. Requires BOTH the matrix entry AND the prototype override to report `batch: true`. Correctly reports Groq as `batch: false` even if a subclass overrode `_batchSubmit`, because Groq doesn't actually have a batch endpoint.
+
+- **Live probe per-check timeout + soft-fail.** A hanging probe times out (default 8s) and reports `{ ok: false, error: 'timed out after 8000ms' }` — it doesn't hang the whole introspection. Failed live probes automatically flip the corresponding capability flag to `false`.
+
+- **Introspection helpers** — `detectFamily(llm)`, `detectModel(llm)`, `detectBatchOverride(llm)` also exported for callers that just want one piece.
+
+- **TypeScript.** `ProviderCapabilities`, `CapabilityReport`, `CapabilityOptions`, `CapabilityLiveProbeResult`, `ProviderKind`.
+
+- **Not middleware — a top-level helper.** Capability probing is a call-site or boot-time concern; wrap it in `llm.use(...)` only if you want to defer probing to first-call.
+
 ## [2.2.0] — 2026-08-11
 
 ### Added

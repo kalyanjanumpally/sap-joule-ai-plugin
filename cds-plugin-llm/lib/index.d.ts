@@ -3685,6 +3685,75 @@ export interface CostForecastMiddleware extends Middleware {
  */
 export function costForecast(options: CostForecastOptions): CostForecastMiddleware;
 
+// ---- Provider capability probe (new in 2.3.0) ------------------------
+
+export type ProviderKind =
+  | 'anthropic' | 'openai-compatible' | 'azure-openai'
+  | 'groq' | 'deepseek' | 'fireworks' | 'mistral'
+  | 'gemini' | 'bedrock' | 'ollama' | 'genai-hub'
+  | string;
+
+export interface ProviderCapabilities {
+  chat:              boolean;
+  stream:            boolean;
+  embed:             boolean;
+  batch:             boolean;
+  vision:            boolean;
+  pdf:               boolean;
+  audio:             boolean;
+  tools:             boolean;
+  structuredOutput:  boolean;
+  promptCache:       boolean;
+  maxContextTokens:  number | null;
+  maxOutputTokens:   number | null;
+}
+
+export interface CapabilityLiveProbeResult {
+  name:  string;
+  ok:    boolean;
+  error: string | null;
+}
+
+export interface CapabilityReport extends ProviderCapabilities {
+  provider: ProviderKind | null;
+  model:    string | null;
+  live: {
+    ran:    boolean;
+    probes: CapabilityLiveProbeResult[];
+  };
+}
+
+export interface CapabilityOptions {
+  /** When true, issue small verification calls to confirm static assumptions. Default false. */
+  live?:           boolean;
+  /** Per-probe timeout in ms. Default 8000. */
+  timeoutMs?:      number;
+  /** Which live checks to run. Default ['chat', 'embed', 'structuredOutput']. */
+  probes?:         Array<'chat' | 'embed' | 'structuredOutput' | 'tools'>;
+  /** Override the provider matrix (advanced). Default: shipped PROVIDER_CAPABILITY_MATRIX. */
+  matrix?:         Record<string, ProviderCapabilities>;
+  /** Additional model-specific overrides. Default: shipped MODEL_CAPABILITY_OVERRIDES. */
+  modelOverrides?: Record<string, Partial<ProviderCapabilities>>;
+}
+
+/**
+ * Probe a live LLMService for its capabilities. Static mode (default)
+ * reads only class shape + configured kind + modelId. Live mode
+ * (`live: true`) additionally issues small verification calls to
+ * confirm each assumption. Fills the "which providers support what"
+ * matrix without hand-maintained tables. Composes with modelRouter
+ * (1.81) — route requests to the FIRST service whose capabilities
+ * say it supports the feature.
+ * @since 2.3.0
+ */
+export function capabilities(llm: unknown, opts?: CapabilityOptions): Promise<CapabilityReport>;
+
+/** Provider-family capability matrix. Frozen. Deep-clone before mutating. */
+export const PROVIDER_CAPABILITY_MATRIX: Readonly<Record<ProviderKind, ProviderCapabilities>>;
+
+/** Model-specific overrides. Applied after the family matrix. */
+export const MODEL_CAPABILITY_OVERRIDES: Readonly<Record<string, Partial<ProviderCapabilities>>>;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {

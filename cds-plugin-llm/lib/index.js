@@ -203,6 +203,10 @@ module.exports = {
   gitPromptRegistry:  require('./gitPromptRegistry').gitPromptRegistry,
   // Cost forecast — rolling-window spend + projected end-of-window total (new in 2.2.0)
   costForecast:       require('./middleware/costForecast').costForecast,
+  // Provider capability probe — introspect what features work against the configured provider+model (new in 2.3.0)
+  capabilities:            require('./capabilities').capabilities,
+  PROVIDER_CAPABILITY_MATRIX: require('./capabilities').PROVIDER_MATRIX,
+  MODEL_CAPABILITY_OVERRIDES: require('./capabilities').MODEL_OVERRIDES,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,
