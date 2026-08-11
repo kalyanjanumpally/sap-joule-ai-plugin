@@ -217,6 +217,10 @@ module.exports = {
   KNOWN_CONSENSUS_COMPARATORS: require('./consensusVoting').KNOWN_COMPARATORS,
   // Adaptive rate-limit tuner — quota-driven bulkhead concurrency adjustment (new in 2.6.0)
   adaptiveRateLimit:  require('./middleware/adaptiveRateLimit').adaptiveRateLimit,
+  // Semantic response cache — reuse answers for similar prompts (new in 2.7.0)
+  semanticCache:          require('./middleware/semanticCache').semanticCache,
+  inMemorySemanticStore:  require('./middleware/semanticCache').inMemorySemanticStore,
+  cosineSimilarity:       require('./middleware/semanticCache').cosineSimilarity,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

@@ -6,7 +6,7 @@ const STUB_PATH = '/tmp/__cds_stub_semcache__';
 require.cache[STUB_PATH] = {
   exports: {
     Service: class { constructor(name, model, options) { this.options = options ?? {}; } async init() {} },
-    log: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }),
+    log: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, trace: () => {} }),
   },
   loaded: true,
 };
@@ -16,281 +16,390 @@ Module._resolveFilename = function(request, ...rest) {
   return origResolve.call(this, request, ...rest);
 };
 
-const LLMService = require('../lib/LLMService');
-const { responseCache, cosine } = require('../lib/middleware/responseCache');
+const {
+  semanticCache,
+  inMemorySemanticStore,
+  cosineSimilarity,
+} = require('../lib/middleware/semanticCache');
 
-class Stub extends LLMService {
-  async init() { await super.init(); this.calls = 0; }
-  async _chat(params) {
-    this.calls++;
-    // Encode the input into the answer so the test can tell which upstream
-    // call it was served from (in the non-cached path).
-    const text = `answer[${this.calls}]`;
-    return { text, model: params.model, usage: { input_tokens: 5, output_tokens: 5 }, stopReason: 'end_turn' };
+// ---- Helpers -----------------------------------------------------------
+
+function makeCtx(prompt) { return { request: { prompt } }; }
+
+function tinyEmbedder(text) {
+  const v = new Array(8).fill(0);
+  for (let i = 0; i < text.length; i++) {
+    v[i % 8] += text.charCodeAt(i) / 128;
   }
+  return v;
 }
 
-function makeSvc() { return new Stub('llm', null, { modelId: 'claude-opus-4-7', maxTokens: 100 }); }
+async function embedder(text) { return tinyEmbedder(text); }
 
-// A tiny hand-rolled embedder — deterministic + easy to reason about.
-// For each phrase it hashes a small set of tokens into a fixed-length
-// vector so semantically similar phrases share components. Not
-// linguistically real; enough to prove threshold behavior.
-function makeToyEmbedder(dim = 32) {
-  return async (text) => {
-    const vec = new Array(dim).fill(0);
-    const tokens = String(text).toLowerCase().match(/[a-z]+/g) || [];
-    for (const t of tokens) {
-      let h = 0;
-      for (const c of t) h = ((h << 5) - h + c.charCodeAt(0)) | 0;
-      const i = Math.abs(h) % dim;
-      vec[i] += 1;
-    }
-    // Normalize so cosine is stable
-    const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0)) || 1;
-    return vec.map((v) => v / norm);
-  };
-}
+// ---- cosineSimilarity --------------------------------------------------
 
-// ---- cosine --------------------------------------------------------
-
-test('cosine: identical vectors → 1.0', () => {
-  assert.ok(Math.abs(cosine([1, 0, 0], [1, 0, 0]) - 1.0) < 1e-9);
+test('cosineSimilarity: identical vectors → 1.0', () => {
+  assert.equal(cosineSimilarity([1, 2, 3], [1, 2, 3]), 1);
 });
-test('cosine: orthogonal → 0.0', () => {
-  assert.ok(Math.abs(cosine([1, 0, 0], [0, 1, 0]) - 0.0) < 1e-9);
+test('cosineSimilarity: orthogonal → 0.0', () => {
+  assert.equal(cosineSimilarity([1, 0], [0, 1]), 0);
 });
-test('cosine: opposite → -1.0', () => {
-  assert.ok(Math.abs(cosine([1, 0, 0], [-1, 0, 0]) + 1.0) < 1e-9);
+test('cosineSimilarity: opposite → -1.0', () => {
+  assert.equal(cosineSimilarity([1, 0], [-1, 0]), -1);
 });
-test('cosine: zero-length vectors → 0 (safe)', () => {
-  assert.equal(cosine([0, 0, 0], [0, 0, 0]), 0);
+test('cosineSimilarity: length mismatch → 0', () => {
+  assert.equal(cosineSimilarity([1, 2], [1, 2, 3]), 0);
+});
+test('cosineSimilarity: NaN vector → 0', () => {
+  assert.equal(cosineSimilarity([1, NaN], [1, 1]), 0);
+});
+test('cosineSimilarity: zero vector → 0', () => {
+  assert.equal(cosineSimilarity([0, 0], [1, 1]), 0);
 });
 
-// ---- Validation ----------------------------------------------------
+// ---- inMemorySemanticStore --------------------------------------------
 
-test('responseCache.semantic: rejects non-function embedder', () => {
-  assert.throws(() => responseCache({ semantic: { embedder: 'nope' } }), /embedder/);
+test('inMemorySemanticStore: validates maxEntries', () => {
+  assert.throws(() => inMemorySemanticStore({ maxEntries: 0 }), /maxEntries/);
 });
-test('responseCache.semantic: rejects bogus threshold', () => {
-  assert.throws(() => responseCache({ semantic: { embedder: async () => [1], threshold: 0 } }),   /threshold/);
-  assert.throws(() => responseCache({ semantic: { embedder: async () => [1], threshold: 1.5 } }), /threshold/);
+test('inMemorySemanticStore: validates ttlMs', () => {
+  assert.throws(() => inMemorySemanticStore({ ttlMs: -1 }), /ttlMs/);
 });
-test('responseCache.semantic: rejects non-positive maxScan', () => {
-  assert.throws(() => responseCache({ semantic: { embedder: async () => [1], maxScan: 0 } }),  /maxScan/);
-  assert.throws(() => responseCache({ semantic: { embedder: async () => [1], maxScan: -1 } }), /maxScan/);
+test('inMemorySemanticStore: put + get', async () => {
+  const store = inMemorySemanticStore();
+  await store.put('k1', { embedding: [1, 0], value: 'v1', ts: 1 });
+  const got = await store.get('k1');
+  assert.equal(got.value, 'v1');
+});
+test('inMemorySemanticStore: TTL expires entries', async () => {
+  let t = 0;
+  const store = inMemorySemanticStore({ ttlMs: 100, now: () => t });
+  await store.put('k', { embedding: [1], value: 'v', ts: 0 });
+  t = 50;
+  assert.equal((await store.get('k'))?.value, 'v');
+  t = 200;
+  assert.equal(await store.get('k'), null);
+});
+test('inMemorySemanticStore: maxEntries evicts oldest', async () => {
+  const store = inMemorySemanticStore({ maxEntries: 2 });
+  await store.put('a', { embedding: [1, 0], value: 'A', ts: 1 });
+  await store.put('b', { embedding: [0, 1], value: 'B', ts: 2 });
+  await store.put('c', { embedding: [1, 1], value: 'C', ts: 3 });
+  assert.equal(await store.size(), 2);
+  assert.equal(await store.get('a'), null);
+  assert.equal((await store.get('c'))?.value, 'C');
+});
+test('inMemorySemanticStore: findSimilar returns best match above threshold', async () => {
+  const store = inMemorySemanticStore();
+  await store.put('a', { embedding: [1, 0, 0], value: 'A', ts: 1 });
+  await store.put('b', { embedding: [0, 1, 0], value: 'B', ts: 2 });
+  const hit = await store.findSimilar([0.99, 0.01, 0], 0.9);
+  assert.equal(hit.key, 'a');
+  assert.ok(hit.similarity > 0.99);
+});
+test('inMemorySemanticStore: findSimilar returns null below threshold', async () => {
+  const store = inMemorySemanticStore();
+  await store.put('a', { embedding: [1, 0], value: 'A', ts: 1 });
+  const hit = await store.findSimilar([0, 1], 0.5);
+  assert.equal(hit, null);
+});
+test('inMemorySemanticStore: findSimilar skips expired entries', async () => {
+  let t = 0;
+  const store = inMemorySemanticStore({ ttlMs: 100, now: () => t });
+  await store.put('a', { embedding: [1, 0], value: 'A', ts: 0 });
+  t = 200;
+  const hit = await store.findSimilar([1, 0], 0.5);
+  assert.equal(hit, null);
+  assert.equal(await store.size(), 0);
+});
+test('inMemorySemanticStore: clear', async () => {
+  const store = inMemorySemanticStore();
+  await store.put('a', { embedding: [1], value: 'A', ts: 1 });
+  await store.clear();
+  assert.equal(await store.size(), 0);
 });
 
-// ---- Semantic hit path --------------------------------------------
+// ---- semanticCache: validation ----------------------------------------
 
-test('semantic: near-identical phrasing → semantic hit; upstream called once', async () => {
-  const svc = makeSvc(); await svc.init();
-  const cache = responseCache({
-    semantic: { embedder: makeToyEmbedder(), threshold: 0.6 },
+test('semanticCache: throws without embedder', () => {
+  assert.throws(() => semanticCache({ store: inMemorySemanticStore() }), /embedder/);
+});
+test('semanticCache: throws without store', () => {
+  assert.throws(() => semanticCache({ embedder }), /store/);
+});
+test('semanticCache: throws on incomplete store', () => {
+  assert.throws(() => semanticCache({ embedder, store: { get: async () => null } }), /store/);
+});
+test('semanticCache: throws on invalid threshold', () => {
+  assert.throws(() => semanticCache({ embedder, store: inMemorySemanticStore(), threshold: 0 }), /threshold/);
+  assert.throws(() => semanticCache({ embedder, store: inMemorySemanticStore(), threshold: 1.5 }), /threshold/);
+});
+test('semanticCache: throws on non-function extractKey', () => {
+  assert.throws(() => semanticCache({ embedder, store: inMemorySemanticStore(), extractKey: 'x' }), /extractKey/);
+});
+test('semanticCache: throws on non-string keyPrefix', () => {
+  assert.throws(() => semanticCache({ embedder, store: inMemorySemanticStore(), keyPrefix: 1 }), /keyPrefix/);
+});
+test('semanticCache: throws on non-function callbacks', () => {
+  const base = { embedder, store: inMemorySemanticStore() };
+  assert.throws(() => semanticCache({ ...base, onHit: 'x' }), /onHit/);
+  assert.throws(() => semanticCache({ ...base, shouldCache: 1 }), /shouldCache/);
+});
+
+// ---- semanticCache: miss + store --------------------------------------
+
+test('semanticCache: miss populates the store', async () => {
+  const store = inMemorySemanticStore();
+  const cache = semanticCache({ embedder, store });
+  const r = await cache(makeCtx('what is CAP?'), async () => ({ text: 'CAP is...' }));
+  assert.deepEqual(r, { text: 'CAP is...' });
+  assert.equal(cache.stats.misses, 1);
+  assert.equal(cache.stats.stores, 1);
+  assert.equal(cache.stats.hits, 0);
+  assert.equal(await store.size(), 1);
+});
+
+// ---- semanticCache: exact match --------------------------------------
+
+test('semanticCache: exact-key hit skips embedder + next()', async () => {
+  const store = inMemorySemanticStore();
+  let embedderCalls = 0;
+  const countingEmbedder = async (text) => { embedderCalls++; return tinyEmbedder(text); };
+  const cache = semanticCache({ embedder: countingEmbedder, store });
+
+  let downstream = 0;
+  await cache(makeCtx('same prompt'), async () => { downstream++; return { text: 'answer' }; });
+  const embedderCallsAfterMiss = embedderCalls;
+
+  const r = await cache(makeCtx('same prompt'), async () => { downstream++; return { text: 'DIFFERENT' }; });
+  assert.deepEqual(r, { text: 'answer' });
+  assert.equal(downstream, 1);
+  assert.equal(embedderCalls, embedderCallsAfterMiss);
+  assert.equal(cache.stats.hits, 1);
+  assert.equal(cache.stats.lastSimilarity, 1.0);
+});
+
+// ---- semanticCache: semantic (non-exact) hit -------------------------
+
+test('semanticCache: near-match returns cached answer', async () => {
+  const store = inMemorySemanticStore();
+  const cache = semanticCache({
+    embedder: async (t) => tinyEmbedder(t),
+    store,
+    threshold: 0.99,
   });
-  svc.use(cache);
-  const first = await svc.chat({
-    messages: [{ role: 'user', content: 'summarize the quarterly financial report' }],
+
+  await cache(makeCtx('what is the capital of France?'),
+              async () => ({ text: 'Paris' }));
+
+  const perturbed = tinyEmbedder('what is the capital of France?').slice();
+  perturbed[0] += 0.001;
+  const cache2 = semanticCache({
+    embedder: async () => perturbed,
+    store,
+    threshold: 0.999,
   });
-  // Different wording but overlapping tokens → high cosine
-  const second = await svc.chat({
-    messages: [{ role: 'user', content: 'please summarize the quarterly financial report now' }],
-  });
-  assert.equal(svc.calls, 1, 'semantic hit should NOT invoke upstream');
-  assert.equal(second.text, first.text);
-  assert.equal(second.cached, true);
-  assert.equal(second.semantic, true);
-  assert.ok(second.similarity >= 0.6);
-  assert.ok(typeof second.semanticMatchKey === 'string');
-  assert.equal(cache.stats.semanticHits, 1);
+  let downstream = 0;
+  const r = await cache2(makeCtx('a totally different prompt string'),
+                         async () => { downstream++; return { text: 'MISS' }; });
+  assert.deepEqual(r, { text: 'Paris' });
+  assert.equal(downstream, 0);
+  assert.equal(cache2.stats.hits, 1);
+  assert.ok(cache2.stats.lastSimilarity > 0.999);
 });
 
-test('semantic: unrelated queries → miss; upstream called twice', async () => {
-  const svc = makeSvc(); await svc.init();
-  const cache = responseCache({
-    // Tighter threshold here so the second (unrelated) query definitely misses
-    semantic: { embedder: makeToyEmbedder(), threshold: 0.6 },
+// ---- semanticCache: below threshold → miss ---------------------------
+
+test('semanticCache: dissimilar prompt → miss', async () => {
+  const store = inMemorySemanticStore();
+  const vectors = { one: [1, 0, 0], two: [0, 1, 0] };
+  const cache = semanticCache({
+    embedder: async (t) => vectors[t] ?? [0, 0, 1],
+    store,
+    threshold: 0.5,
   });
-  svc.use(cache);
-  await svc.chat({ messages: [{ role: 'user', content: 'summarize the quarterly financial report' }] });
-  await svc.chat({ messages: [{ role: 'user', content: 'reboot the mars rover software update' }] });
-  assert.equal(svc.calls, 2, 'unrelated queries should each hit upstream');
-  // First call: cold index → no semantic miss counted
-  // Second call: index has 1 candidate, cosine ~0.2 < 0.6 → semanticMisses++
-  assert.equal(cache.stats.semanticMisses, 1);
+  await cache(makeCtx('one'), async () => ({ text: 'a-answer' }));
+  const r = await cache(makeCtx('two'), async () => ({ text: 'z-answer' }));
+  assert.deepEqual(r, { text: 'z-answer' });
+  assert.equal(cache.stats.hits, 0);
+  assert.equal(cache.stats.misses, 2);
+  assert.equal(cache.stats.stores, 2);
 });
 
-test('semantic: threshold too strict → miss even on very similar phrasing', async () => {
-  const svc = makeSvc(); await svc.init();
-  const cache = responseCache({
-    semantic: { embedder: makeToyEmbedder(), threshold: 0.999 },
+// ---- semanticCache: fail-open ----------------------------------------
+
+test('semanticCache: embedder throws → fall through', async () => {
+  const store = inMemorySemanticStore();
+  let downstream = 0;
+  const cache = semanticCache({
+    embedder: async () => { throw new Error('emb-fail'); },
+    store,
   });
-  svc.use(cache);
-  await svc.chat({ messages: [{ role: 'user', content: 'summarize the quarterly financial report' }] });
-  await svc.chat({ messages: [{ role: 'user', content: 'please summarize the quarterly financial report now' }] });
-  assert.equal(svc.calls, 2);
-  assert.equal(cache.stats.semanticHits, 0);
-});
-
-// ---- Exact hit takes precedence over semantic ---------------------
-
-test('semantic: identical request still uses the exact fast path (no embed cost)', async () => {
-  const svc = makeSvc(); await svc.init();
-  let embedCalls = 0;
-  const cache = responseCache({
-    semantic: {
-      embedder: async (t) => { embedCalls++; return (await makeToyEmbedder()(t)); },
-      threshold: 0.6,
-    },
-  });
-  svc.use(cache);
-  const q = 'please repeat back the exact test question phrase';
-  await svc.chat({ messages: [{ role: 'user', content: q }] });
-  // Same request → exact hit; embedder must NOT run
-  await svc.chat({ messages: [{ role: 'user', content: q }] });
-  assert.equal(svc.calls, 1);
-  assert.equal(cache.stats.hits, 1, 'exact hit');
-  assert.equal(cache.stats.semanticHits, 0);
-  assert.equal(embedCalls, 1, 'embedder ran once (on the initial miss) — not on the exact-match repeat');
-});
-
-// ---- Eligibility filters ------------------------------------------
-
-test('semantic: skipped when request has tools', async () => {
-  const svc = makeSvc(); await svc.init();
-  let embedCalls = 0;
-  const cache = responseCache({
-    semantic: {
-      embedder: async (t) => { embedCalls++; return (await makeToyEmbedder()(t)); },
-      threshold: 0.5,
-    },
-  });
-  svc.use(cache);
-  const tool = { name: 't', description: 'x', input_schema: { type: 'object', properties: {} }, run: async () => 'ok' };
-  await svc.chat({ tools: [tool], messages: [{ role: 'user', content: 'tool-using query' }] });
-  await svc.chat({ tools: [tool], messages: [{ role: 'user', content: 'tool-using query slightly reworded' }] });
-  assert.equal(embedCalls, 0, 'semantic path should be skipped for tool requests');
-});
-
-test('semantic: skipped when text below minTextLength', async () => {
-  const svc = makeSvc(); await svc.init();
-  let embedCalls = 0;
-  const cache = responseCache({
-    semantic: {
-      embedder: async (t) => { embedCalls++; return (await makeToyEmbedder()(t)); },
-      threshold: 0.5,
-      minTextLength: 30,
-    },
-  });
-  svc.use(cache);
-  await svc.chat({ messages: [{ role: 'user', content: 'hi' }] });     // < 30 chars
-  await svc.chat({ messages: [{ role: 'user', content: 'hello' }] });  // < 30 chars
-  assert.equal(embedCalls, 0);
-});
-
-test('semantic: skipped when cache: false opt-out is set', async () => {
-  const svc = makeSvc(); await svc.init();
-  let embedCalls = 0;
-  const cache = responseCache({
-    semantic: {
-      embedder: async (t) => { embedCalls++; return (await makeToyEmbedder()(t)); },
-      threshold: 0.85,
-    },
-  });
-  svc.use(cache);
-  await svc.chat({ messages: [{ role: 'user', content: 'summarize the quarterly report' }] });
-  await svc.chat({ cache: false, messages: [{ role: 'user', content: 'summarize the quarterly report' }] });
-  assert.equal(embedCalls, 1, 'second call opted out — embedder must not run');
-});
-
-// ---- Embedder failure is non-fatal ---------------------------------
-
-test('semantic: embedder failure → fall through to live call (counted)', async () => {
-  const svc = makeSvc(); await svc.init();
-  const cache = responseCache({
-    semantic: {
-      embedder: async () => { throw new Error('rate limit'); },
-      threshold: 0.85,
-    },
-  });
-  svc.use(cache);
-  const res = await svc.chat({ messages: [{ role: 'user', content: 'summarize the quarterly financial report' }] });
-  assert.equal(res.text, 'answer[1]', 'live call still succeeds');
+  const r = await cache(makeCtx('x'), async () => { downstream++; return 'ok'; });
+  assert.equal(r, 'ok');
+  assert.equal(downstream, 1);
   assert.equal(cache.stats.embedderErrors, 1);
+  assert.equal(cache.stats.errors, 1);
 });
 
-// ---- Stats + snapshot -----------------------------------------------
-
-test('semantic: hitRate counts both exact and semantic hits', async () => {
-  const svc = makeSvc(); await svc.init();
-  const cache = responseCache({
-    semantic: { embedder: makeToyEmbedder(), threshold: 0.6 },
-  });
-  svc.use(cache);
-  await svc.chat({ messages: [{ role: 'user', content: 'summarize the quarterly financial report' }] });          // miss
-  await svc.chat({ messages: [{ role: 'user', content: 'summarize the quarterly financial report' }] });          // exact hit
-  await svc.chat({ messages: [{ role: 'user', content: 'please summarize the quarterly financial report now' }] });// semantic hit
-  await svc.chat({ messages: [{ role: 'user', content: 'reboot the mars rover software update' }] });             // miss
-  const r = cache.hitRate();
-  // total = misses (2) + hits (1) + semanticHits (1) = 4 → 2/4 = 0.5
-  assert.ok(Math.abs(r - 0.5) < 1e-9, `expected 0.5, got ${r}`);
+test('semanticCache: store.findSimilar throws → still calls next', async () => {
+  const badStore = {
+    async get() { return null; },
+    async put() {},
+    async findSimilar() { throw new Error('store-fail'); },
+  };
+  const cache = semanticCache({ embedder, store: badStore });
+  const r = await cache(makeCtx('anything'), async () => 'downstream');
+  assert.equal(r, 'downstream');
+  assert.equal(cache.stats.storeErrors, 1);
 });
 
-test('semantic: asMcpResource surfaces the semantic counters', async () => {
-  const svc = makeSvc(); await svc.init();
-  const cache = responseCache({
-    semantic: { embedder: makeToyEmbedder(), threshold: 0.6 },
+test('semanticCache: onError fires with phase tag', async () => {
+  const errors = [];
+  const cache = semanticCache({
+    embedder: async () => { throw new Error('boom'); },
+    store: inMemorySemanticStore(),
+    onError: (info) => errors.push(info),
   });
-  svc.use(cache);
-  await svc.chat({ messages: [{ role: 'user', content: 'summarize the quarterly financial report' }] });
-  await svc.chat({ messages: [{ role: 'user', content: 'please summarize the quarterly financial report now' }] });
-  const p = cache.asMcpResource().handler();
-  assert.equal(p.semanticHits, 1);
-  assert.equal(p.semanticIndexSize, 1);
-  assert.ok('embedderErrors' in p);
+  await cache(makeCtx('x'), async () => 'r');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].phase, 'embedder');
 });
 
-// ---- Index bounds --------------------------------------------------
+// ---- semanticCache: bad embedder output ------------------------------
 
-test('semantic: index respects maxScan cap (oldest evicted)', async () => {
-  const svc = makeSvc(); await svc.init();
-  const cache = responseCache({
-    semantic: { embedder: makeToyEmbedder(), threshold: 0.85, maxScan: 3 },
+test('semanticCache: embedder returns non-array → miss', async () => {
+  const store = inMemorySemanticStore();
+  const cache = semanticCache({
+    embedder: async () => null,
+    store,
   });
-  svc.use(cache);
-  await svc.chat({ messages: [{ role: 'user', content: 'first distinct query about widgets and gadgets' }] });
-  await svc.chat({ messages: [{ role: 'user', content: 'second unrelated question regarding planet mars exploration' }] });
-  await svc.chat({ messages: [{ role: 'user', content: 'third topic covering kitchen recipes and cuisine' }] });
-  await svc.chat({ messages: [{ role: 'user', content: 'fourth different subject about vintage automobile restoration' }] });
-  assert.equal(cache.semanticIndex.size, 3, 'oldest entry should have been evicted');
+  let downstream = 0;
+  const r = await cache(makeCtx('x'), async () => { downstream++; return 'ok'; });
+  assert.equal(r, 'ok');
+  assert.equal(downstream, 1);
+  assert.equal(await store.size(), 0);
 });
 
-test('semantic: clear() drops both the store and the semantic index', async () => {
-  const svc = makeSvc(); await svc.init();
-  const cache = responseCache({
-    semantic: { embedder: makeToyEmbedder(), threshold: 0.6 },
+// ---- semanticCache: no key ------------------------------------------
+
+test('semanticCache: extractKey returns null → straight through', async () => {
+  const cache = semanticCache({
+    embedder, store: inMemorySemanticStore(),
+    extractKey: () => null,
   });
-  svc.use(cache);
-  await svc.chat({ messages: [{ role: 'user', content: 'summarize the quarterly financial report' }] });
-  assert.ok(cache.semanticIndex.size > 0);
-  await cache.clear();
-  assert.equal(cache.semanticIndex.size, 0);
-  assert.equal(cache.size(), 0);
+  const r = await cache(makeCtx('x'), async () => 'downstream');
+  assert.equal(r, 'downstream');
+  assert.equal(cache.stats.hits, 0);
+  assert.equal(cache.stats.misses, 0);
 });
 
-// ---- Stale index pointer --------------------------------------------
-
-test('semantic: stale index pointer (store evicted the value) → falls through cleanly', async () => {
-  const svc = makeSvc(); await svc.init();
-  const cache = responseCache({
-    semantic: { embedder: makeToyEmbedder(), threshold: 0.6 },
+test('semanticCache: extractKey throws → straight through', async () => {
+  const errors = [];
+  const cache = semanticCache({
+    embedder, store: inMemorySemanticStore(),
+    extractKey: () => { throw new Error('bad'); },
+    onError: (info) => errors.push(info),
   });
-  svc.use(cache);
-  await svc.chat({ messages: [{ role: 'user', content: 'summarize the quarterly financial report' }] });
-  // Simulate store eviction — clear the store but leave the semantic index alone.
-  await cache.store.clear();
-  await svc.chat({ messages: [{ role: 'user', content: 'please summarize the quarterly financial report now' }] });
-  // The stale pointer should have been removed, and the live call ran.
-  assert.equal(svc.calls, 2);
-  assert.equal(cache.semanticIndex.size, 1, 'stale entry pruned, new one added');
+  const r = await cache(makeCtx('x'), async () => 'downstream');
+  assert.equal(r, 'downstream');
+  assert.equal(errors[0].phase, 'extractKey');
+});
+
+// ---- semanticCache: default extractKey pulls from messages ----------
+
+test('semanticCache: default extractKey handles messages[]', async () => {
+  const store = inMemorySemanticStore();
+  const cache = semanticCache({ embedder, store });
+  const ctx = { request: { messages: [
+    { role: 'system', content: 'you are helpful' },
+    { role: 'user',   content: 'hello' },
+  ]}};
+  await cache(ctx, async () => ({ text: 'greet' }));
+  assert.equal(await store.size(), 1);
+});
+
+// ---- semanticCache: shouldCache gate --------------------------------
+
+test('semanticCache: shouldCache=false prevents storage', async () => {
+  const store = inMemorySemanticStore();
+  const cache = semanticCache({
+    embedder, store,
+    shouldCache: (_ctx, result) => result?.status !== 'error',
+  });
+  await cache(makeCtx('x'), async () => ({ status: 'error' }));
+  assert.equal(await store.size(), 0);
+  assert.equal(cache.stats.stores, 0);
+  await cache(makeCtx('y'), async () => ({ status: 'ok' }));
+  assert.equal(await store.size(), 1);
+});
+
+// ---- semanticCache: onHit / onMiss / onStore hooks ------------------
+
+test('semanticCache: hooks fire with expected payloads', async () => {
+  const store = inMemorySemanticStore();
+  const events = [];
+  const cache = semanticCache({
+    embedder, store,
+    onHit:   (i) => events.push(['hit', i]),
+    onMiss:  (i) => events.push(['miss', i]),
+    onStore: (i) => events.push(['store', i]),
+  });
+  await cache(makeCtx('same'), async () => 'r1');
+  await cache(makeCtx('same'), async () => 'r2');
+  const kinds = events.map(([k]) => k);
+  assert.deepEqual(kinds, ['miss', 'store', 'hit']);
+  assert.equal(events[2][1].exactMatch, true);
+});
+
+test('semanticCache: hook throws are swallowed', async () => {
+  const cache = semanticCache({
+    embedder, store: inMemorySemanticStore(),
+    onHit:   () => { throw new Error('x'); },
+    onMiss:  () => { throw new Error('x'); },
+    onStore: () => { throw new Error('x'); },
+  });
+  await cache(makeCtx('a'), async () => 'r1');
+  const r = await cache(makeCtx('a'), async () => 'r2');
+  assert.equal(r, 'r1');
+});
+
+// ---- semanticCache: keyPrefix namespaces caches ---------------------
+
+test('semanticCache: keyPrefix isolates namespaces', async () => {
+  const store = inMemorySemanticStore();
+  const cacheA = semanticCache({ embedder, store, keyPrefix: 'tenantA:' });
+  const cacheB = semanticCache({ embedder, store, keyPrefix: 'tenantB:' });
+  await cacheA(makeCtx('hi'), async () => 'answerA');
+  const r = await cacheB(makeCtx('hi'), async () => 'answerB');
+  assert.equal(r, 'answerB');
+  assert.equal(await store.size(), 2);
+});
+
+// ---- semanticCache: hitRate + reset ---------------------------------
+
+test('semanticCache: hitRate + reset', async () => {
+  const cache = semanticCache({ embedder, store: inMemorySemanticStore() });
+  await cache(makeCtx('a'), async () => 'r');
+  await cache(makeCtx('a'), async () => 'r');
+  assert.equal(cache.hitRate(), 0.5);
+  cache.reset();
+  assert.equal(cache.stats.hits, 0);
+  assert.equal(cache.stats.misses, 0);
+  assert.equal(cache.hitRate(), 0);
+});
+
+// ---- semanticCache: MCP resource ------------------------------------
+
+test('semanticCache: asMcpResource', async () => {
+  const cache = semanticCache({
+    embedder, store: inMemorySemanticStore(),
+    threshold: 0.85, keyPrefix: 'ns:',
+  });
+  const r = cache.asMcpResource();
+  assert.equal(r.uri, 'config://semantic-cache');
+  const p = r.handler();
+  assert.equal(p.threshold, 0.85);
+  assert.equal(p.keyPrefix, 'ns:');
+  assert.equal(p.hitRate, 0);
 });

@@ -4348,6 +4348,97 @@ export interface AdaptiveRateLimitMiddleware extends Middleware {
  */
 export function adaptiveRateLimit(options: AdaptiveRateLimitOptions): AdaptiveRateLimitMiddleware;
 
+// ---- Semantic response cache (new in 2.7.0) --------------------------
+
+export interface SemanticStoreEntry {
+  embedding: number[];
+  value:     unknown;
+  ts:        number;
+}
+
+export interface SemanticStore {
+  get(key: string): Promise<SemanticStoreEntry | null>;
+  put(key: string, entry: SemanticStoreEntry): Promise<void>;
+  findSimilar(
+    embedding: number[],
+    threshold: number,
+    options?: { keyPrefix?: string },
+  ): Promise<{ key: string; similarity: number; entry: SemanticStoreEntry } | null>;
+  size?():  Promise<number>;
+  clear?(): Promise<void>;
+}
+
+export interface InMemorySemanticStoreOptions {
+  /** Cap on entries; oldest evicted. Default 1000. */
+  maxEntries?: number;
+  /** Entry TTL in ms; null = never expire. Default null. */
+  ttlMs?:      number | null;
+  /** Test seam. */
+  now?:        () => number;
+}
+
+/** In-memory linear-scan semantic store. Drop-in default; swap for pgvector/Redis in prod. @since 2.7.0 */
+export function inMemorySemanticStore(options?: InMemorySemanticStoreOptions): SemanticStore & { _entries: Map<string, SemanticStoreEntry> };
+
+/** Cosine similarity of two numeric vectors. Returns 0 on invalid input. @since 2.7.0 */
+export function cosineSimilarity(a: number[], b: number[]): number;
+
+export interface SemanticCacheOptions {
+  /** Async embedder. Should return a numeric vector. */
+  embedder: (text: string) => Promise<number[]> | number[];
+  /** Vector store implementing get/put/findSimilar. */
+  store:    SemanticStore;
+  /** Cosine similarity threshold for a cache hit. Default 0.92. Range (0, 1]. */
+  threshold?:  number;
+  /** Extract cache key from ctx. Default: reads ctx.request.prompt or messages. */
+  extractKey?: (ctx: unknown) => string | null;
+  /** Namespace prefix — isolates hit lookups across tenants. Default ''. */
+  keyPrefix?:  string;
+  /** Predicate — return false to skip storing this response. */
+  shouldCache?: (ctx: unknown, result: unknown) => boolean;
+  onHit?:   (info: { key: string; similarity: number; exactMatch: boolean; value: unknown }) => void;
+  onMiss?:  (info: { key: string }) => void;
+  onStore?: (info: { key: string; value: unknown }) => void;
+  onError?: (info: { phase: 'embedder' | 'store' | 'extractKey' | 'shouldCache'; error: unknown }) => void;
+}
+
+export interface SemanticCacheStats {
+  totalCalls:     number;
+  hits:           number;
+  misses:         number;
+  stores:         number;
+  errors:         number;
+  embedderErrors: number;
+  storeErrors:    number;
+  lastSimilarity: number | null;
+  lastKey:        string | null;
+}
+
+export interface SemanticCacheMiddleware extends Middleware {
+  readonly stats: SemanticCacheStats;
+  reset(): void;
+  hitRate(): number;
+  asMcpResource(): {
+    uri: 'config://semantic-cache';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => SemanticCacheStats & {
+      threshold: number;
+      keyPrefix: string;
+      hitRate:   number;
+    };
+  };
+}
+
+/**
+ * Semantic response cache. Reuses previous answers for prompts that are
+ * semantically similar (not just byte-identical). Fails open on embedder
+ * or store errors — a broken cache must never take the request path down.
+ * @since 2.7.0
+ */
+export function semanticCache(options: SemanticCacheOptions): SemanticCacheMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

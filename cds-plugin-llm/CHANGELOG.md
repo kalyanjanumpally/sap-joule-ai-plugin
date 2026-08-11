@@ -4,6 +4,42 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] — 2026-08-11
+
+### Added
+- **`semanticCache` middleware** — response cache keyed by prompt-embedding
+  similarity (cosine), not just byte-identical prompt match. Pluggable
+  `embedder` + `store`; ships with `inMemorySemanticStore` (linear scan,
+  LRU eviction, optional TTL) so you can try it with zero infra. Swap the
+  store for pgvector/Redis/Pinecone in prod — the interface is three async
+  methods: `get`, `put`, `findSimilar`.
+- **Fail-open policy** — any exception from the embedder or store is
+  captured (via `onError`) and the middleware falls through to `next()`.
+  A broken cache must never take the request path down.
+- **`keyPrefix` for multi-tenant isolation** — pass `keyPrefix: 'tenantA:'`
+  and the middleware post-filters `findSimilar` results, guaranteeing hits
+  don't leak across tenants even if the underlying store is shared.
+  Stores may honor the `keyPrefix` hint natively (in-memory does) for
+  efficiency; correctness is enforced by the middleware regardless.
+- **`shouldCache(ctx, result)`** predicate — skip storing certain results
+  (e.g. errors, streamed responses, low-quality outputs from `scoreResponse`).
+- **`cosineSimilarity(a, b)`** helper exported for downstream users.
+- MCP resource `config://semantic-cache` exposes hit/miss/store counts,
+  hit rate, threshold, key prefix, and last similarity.
+- TypeScript: `SemanticStore`, `SemanticStoreEntry`, `SemanticCacheOptions`,
+  `SemanticCacheStats`, `SemanticCacheMiddleware`, `InMemorySemanticStoreOptions`.
+
+### API contract (frozen)
+- Signature: `semanticCache({ embedder, store, threshold=0.92, extractKey, keyPrefix='', shouldCache, onHit, onMiss, onStore, onError })`
+- MCP URI: `config://semantic-cache`
+- Store interface: `{ get(key), put(key, entry), findSimilar(embedding, threshold, { keyPrefix? }) }`
+
+### Composition
+- Wrap `semanticCache` OUTSIDE `bulkhead`/`retry` — cache hits should not
+  consume upstream concurrency slots or retry budget.
+- Wrap INSIDE `guardrails`/`promptInjectionGuard` — avoid caching answers
+  whose inputs were rejected.
+
 ## [2.6.0] — 2026-08-11
 
 ### Added
