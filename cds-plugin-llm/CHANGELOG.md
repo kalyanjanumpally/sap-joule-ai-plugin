@@ -4,6 +4,51 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-08-11
+
+### Added
+
+- **`costForecast({ windowMs, targetUsd, warnAtRatio?, criticalAtRatio?, ... })` — rolling-window spend tracker with end-of-window projection.** Emits `onWarn` / `onCritical` events when the projected spend crosses threshold ratios. The "you'll hit the limit at 2:47pm" companion to `costBudget` (hard ceiling) and `costGuard` (per-call limit).
+
+  ```js
+  const { costForecast } = require('@saptarishi/cds-plugin-llm');
+
+  llm.use(costForecast({
+    windowMs:        60 * 60_000,       // 1-hour rolling window
+    targetUsd:       50.00,              // hourly budget
+    warnAtRatio:     0.80,               // warn at 80% projected
+    criticalAtRatio: 1.00,               // critical at 100%+
+    minSampleSize:   20,                 // don't project until 20 samples
+    onWarn:     (info) => cds.log('llm:cost').warn(
+      `on track for $${info.projection.projectedUsd.toFixed(2)} (${(info.projection.utilizationRatio*100).toFixed(0)}% of $${info.projection.targetUsd})`,
+    ),
+    onCritical: (info) => alerts.page('LLM spend projected to exceed hourly budget', info),
+  }));
+  ```
+
+- **Projection formula** — sliding window of samples:
+  ```
+  projectedUsd = (spentInWindowUsd / windowSpanMs) × windowMs
+  utilizationRatio = projectedUsd / targetUsd
+  ```
+  Rewrites `sampleCount` after pruning stale samples so `stats.sampleCount` is always accurate. Uses the shipped `pricing.js` `DEFAULT_PRICING` table by default; override via `pricing:` for negotiated rates.
+
+- **Rising-edge callbacks.** `onWarn` fires ONCE when the level transitions ok → warn (or ok → critical, since critical implies warn semantics). `onCritical` fires when the level enters critical. Consumers aren't spammed by every call once we cross a threshold — you get one page, not one per LLM call.
+
+- **`minSampleSize` gate.** Callbacks stay silent until N samples land in the window — protects against noise projections at cold start (one huge $50 call in the first second projects to $50k for the hour).
+
+- **`onSpend(info)` per-call callback.** Fires with `{ costUsd, model, method, tenant, projection, level }` on every priced call. Great for streaming to a real-time cost dashboard.
+
+- **`mw.projection()` on-demand introspection.** Returns the current `{ spentInWindowUsd, projectedUsd, utilizationRatio, ... }` — great for `/cost-forecast` HTTP endpoints and MCP resource handlers.
+
+- **Streams supported** via 1.72 `wrapStreamCompletion` — usage from the `done` chunk gets counted after the stream completes.
+
+- **Unpriced models tracked separately** — `stats.unpricedCalls` counter surfaces "you have models we don't have pricing for", so ops can add them to the pricing table.
+
+- **TypeScript.** `CostForecastOptions`, `CostForecastStats`, `CostForecastMiddleware`, `CostForecastProjection`.
+
+- **`config://cost-forecast` MCP resource** exposes windowMs, targetUsd, warn/critical thresholds, current level, current projection, and all counters — live-visible in your MCP client.
+
 ## [2.1.0] — 2026-08-11
 
 ### Added

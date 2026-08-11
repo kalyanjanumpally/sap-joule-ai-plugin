@@ -201,6 +201,8 @@ module.exports = {
   AllRegionsFailedError: require('./regionFailover').AllRegionsFailedError,
   // Git-backed prompt registry — pull templates from a repo with polling (new in 2.1.0)
   gitPromptRegistry:  require('./gitPromptRegistry').gitPromptRegistry,
+  // Cost forecast — rolling-window spend + projected end-of-window total (new in 2.2.0)
+  costForecast:       require('./middleware/costForecast').costForecast,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

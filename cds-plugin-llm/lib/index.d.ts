@@ -3615,6 +3615,76 @@ export interface GitPromptRegistryInstance extends PromptRegistry {
  */
 export function gitPromptRegistry(options: GitPromptRegistryOptions): Promise<GitPromptRegistryInstance>;
 
+// ---- Cost forecasting (new in 2.2.0) ---------------------------------
+
+export interface CostForecastProjection {
+  spentInWindowUsd:  number;
+  windowSpanMs:      number;
+  windowMs:          number;
+  projectedUsd:      number;
+  targetUsd:         number;
+  utilizationRatio:  number;
+  sampleCount:       number;
+  currency:          string;
+}
+
+export interface CostForecastOptions {
+  windowMs?:         number;
+  targetUsd:         number;
+  warnAtRatio?:      number;
+  criticalAtRatio?:  number;
+  minSampleSize?:    number;
+  pricing?:          Record<string, { input?: number; output?: number }>;
+  currency?:         string;
+  onWarn?:           ((info: { projection: CostForecastProjection; model?: string; method?: string; tenant?: string | null }) => void) | null;
+  onCritical?:       ((info: { projection: CostForecastProjection; model?: string; method?: string; tenant?: string | null }) => void) | null;
+  onSpend?:          ((info: { costUsd: number; model?: string; method?: string; tenant?: string | null; projection: CostForecastProjection | null; level: 'ok' | 'warn' | 'critical' }) => void) | null;
+  now?:              () => number;
+  skipMethods?:      string[];
+}
+
+export interface CostForecastStats {
+  totalCalls:      number;
+  totalUsd:        number;
+  sampleCount:     number;
+  lastProjection:  CostForecastProjection | null;
+  lastLevel:       'ok' | 'warn' | 'critical';
+  warnFires:       number;
+  criticalFires:   number;
+  unpricedCalls:   number;
+}
+
+export interface CostForecastMiddleware extends Middleware {
+  readonly stats: CostForecastStats;
+  reset(): void;
+  projection(): CostForecastProjection | null;
+  asMcpResource(): {
+    uri: 'config://cost-forecast';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => CostForecastStats & {
+      windowMs:        number;
+      targetUsd:       number;
+      currency:        string;
+      warnAtRatio:     number;
+      criticalAtRatio: number;
+      minSampleSize:   number;
+      currentLevel:    'ok' | 'warn' | 'critical';
+      projection:      CostForecastProjection | null;
+    };
+  };
+}
+
+/**
+ * Rolling-window spend tracker with end-of-window projection. Emits
+ * onWarn / onCritical events when projected spend crosses threshold
+ * ratios — the "you'll hit the limit at 2:47pm" companion to
+ * costBudget (hard ceiling) and costGuard (per-call limit).
+ * @since 2.2.0
+ */
+export function costForecast(options: CostForecastOptions): CostForecastMiddleware;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
