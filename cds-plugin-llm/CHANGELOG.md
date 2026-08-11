@@ -4,6 +4,62 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-08-11
+
+### Added
+
+- **`gitPromptRegistry({ url, branch?, ref?, pollMs?, ... })` — Git-backed prompt registry with polling.** Extends the shipped 1.8 `PromptRegistry` with a loader that pulls templates from a Git repository, caches them locally, and optionally polls for updates. Enables prompt-as-code workflows: prompt changes go through PR review, separately from code deploys.
+
+  ```js
+  const { gitPromptRegistry } = require('@saptarishi/cds-plugin-llm');
+
+  const registry = await gitPromptRegistry({
+    url:    'https://github.com/my-org/prompts.git',
+    branch: 'main',
+    ref:    'v1.2.3',                    // optional pin
+    subdir: 'templates',                 // subdirectory within the repo
+    pollMs: 5 * 60_000,                  // check for updates every 5 min
+    onChange: (info) => cds.log('prompts').info(`prompts refreshed: ${info.from} → ${info.to}`),
+    onError:  (err)  => cds.log('prompts').warn(`git pull failed: ${err.message}`),
+  });
+
+  // Use exactly like a normal PromptRegistry:
+  const req = registry.render('summarize', { text: 'hello world' });
+  const res = await llm.chat(req);
+  ```
+
+- **Reuses the shipped 1.9 loader** (`registry.loadFromDir`) — same `.js` / `.mjs` prompt file format. Every template file exports a `{ name, description, arguments, render }` object as default (or named). No new file format to learn.
+
+- **Composes with the shipped prompt CI arc:**
+  - **`gitPromptRegistry`** (2.1) — pulls prompts from Git
+  - **`lintPrompt`** (1.98) — static-analyzes them before deploy
+  - **`promptRegression`** (1.89) — scores their responses in CI
+  - **`llmJudge`** (1.84) — is the primitive `promptRegression` calls
+
+  Wire all four together in your CI: pull → lint → regression → verdict. `saptarishi-llm lint-prompts <cache-dir>` runs against the cache directory that `gitPromptRegistry` populates.
+
+- **Automatic cache invalidation** — every pull that surfaces a new SHA reloads all templates from disk with a cache-busted ESM import, so file changes on subsequent pulls actually take effect (Node's module cache would normally hold the old bodies).
+
+- **Change detection stats.** `stats: { loads, pullSuccesses, pullErrors, changesDetected, lastError, lastSha, lastPullAt }` — for dashboards showing "how fresh are our prompts."
+
+- **Ref pinning for production.** Pass `ref: 'v1.2.3'` (or any SHA / tag / branch) to lock production to a specific prompt version. Great for staged rollouts: prod on `v1.2.3`, staging on `main`.
+
+- **Test-friendly runner.** Default runner shells out to the `git` command. Custom `runner: (args, cwd, timeoutMs) => stdout` lets you drop in a mock or a library-based git client. All 19 tests run against a mock runner — zero real network calls.
+
+- **Soft-fail polling.** Pull failures don't crash the polling timer — errors go to `onError` (if provided) + `stats.pullErrors++`, and the timer keeps ticking. Transient network issues heal automatically on the next tick.
+
+- **`config://git-prompt-registry` MCP resource** exposes URL, branch, ref, current SHA, refresh timestamp, and all counters — see it live in your MCP client.
+
+- **TypeScript.** `GitPromptRegistryOptions`, `GitPromptRegistryStats`, `GitPromptRegistryInstance` (extends `PromptRegistry`).
+
+- **Registry augmentation.** The returned instance is a `PromptRegistry` (so `render`, `list`, `has`, `get`, `unregister`, `clear` all work identically) with these extras attached:
+  - `registry.sha` — current HEAD SHA
+  - `registry.refreshedAt` — ISO timestamp of last successful load
+  - `registry.refresh()` — reload from disk without pulling (test-friendly)
+  - `registry.pull()` — force a re-fetch + reload
+  - `registry.stop()` — stop the polling timer
+  - `registry.stats` — counters
+
 ## [2.0.0] — 2026-08-11
 
 ### The 2.0 milestone: stability + polish

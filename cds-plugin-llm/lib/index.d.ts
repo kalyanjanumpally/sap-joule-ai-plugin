@@ -3542,6 +3542,79 @@ export class AllRegionsFailedError extends LLMError {
  */
 export function regionFailover(options: RegionFailoverOptions): RegionFailoverInstance;
 
+// ---- Git-backed prompt registry (new in 2.1.0) ------------------------
+
+export interface GitPromptRegistryOptions {
+  /** Repository URL (https, ssh, or local path). Required. */
+  url:        string;
+  /** Branch to track. Default 'main'. Overridden by ref when both set. */
+  branch?:    string;
+  /** Explicit git ref (tag, branch, sha). Overrides branch when non-null. */
+  ref?:       string | null;
+  /** Local cache directory. Default: /tmp/saptarishi-git-prompts-<hash>. */
+  dir?:       string | null;
+  /** Subdirectory within the repo. Default '.'. */
+  subdir?:    string;
+  /** Poll interval ms (>=1000). null disables. */
+  pollMs?:    number | null;
+  /** Timeout per git command in ms. Default 30_000. */
+  timeoutMs?: number;
+  /** Git runner (dependency-injected for tests). Default: shell out to `git`. */
+  runner?:    (args: string[], cwd?: string, timeoutMs?: number) => string;
+  /** Fires when a pull surfaces a new SHA. Errors swallowed. */
+  onChange?:  ((info: { from: string | null; to: string; refreshedAt: string }) => void) | null;
+  /** Fires on pull failures. Errors swallowed. */
+  onError?:   ((err: Error) => void) | null;
+}
+
+export interface GitPromptRegistryStats {
+  loads:            number;
+  pullSuccesses:    number;
+  pullErrors:       number;
+  changesDetected:  number;
+  lastError:        string | null;
+  lastSha:          string | null;
+  lastPullAt:       string | null;
+}
+
+export interface GitPromptRegistryInstance extends PromptRegistry {
+  readonly sha:         string | null;
+  readonly refreshedAt: string | null;
+  readonly cacheDir:    string;
+  readonly templateDir: string | null;
+  readonly stats:       GitPromptRegistryStats;
+  refresh(): Promise<void>;
+  pull():    Promise<string>;
+  stop():    void;
+  asMcpResource(): {
+    uri: 'config://git-prompt-registry';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => GitPromptRegistryStats & {
+      url:        string;
+      branch:     string;
+      ref:        string;
+      subdir:     string;
+      pollMs:     number | null;
+      cacheDir:   string;
+      currentSha: string | null;
+      refreshedAt: string | null;
+    };
+  };
+}
+
+/**
+ * Build a PromptRegistry backed by a Git repository. Clones (if needed),
+ * checks out the requested ref, loads every prompt file in `subdir`
+ * (default: root), and optionally polls the remote for updates.
+ * Enables prompt-as-code workflows where prompt changes go through PR
+ * review, separately from code deploys. Composes with lintPrompt (1.98)
+ * + promptRegression (1.89) for the full prompt CI loop.
+ * @since 2.1.0
+ */
+export function gitPromptRegistry(options: GitPromptRegistryOptions): Promise<GitPromptRegistryInstance>;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
