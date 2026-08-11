@@ -52,7 +52,7 @@ const {
   piiRedact,
   runBatch,
   waitForBatch,
-  // 1.81-1.90 primitives newly wired in 0.27.0:
+  // 1.81-1.90 primitives (wired in 0.27.0):
   //   modelRouter        — task-aware routing (embed→cheap, schema→gpt-4o, tools→opus)
   //   embeddingDedup     — content-addressable per-text embed cache (RAG re-index saver)
   //   promptCacheStats   — surface Anthropic/OpenAI prompt-caching savings as metrics
@@ -67,6 +67,25 @@ const {
   autoContinue,
   safetyClassifier,
   ragChain,
+  // 1.91-2.2 primitives newly wired in 0.28.0:
+  //   compactHistory        — auto-summarize old conversation history at N-turn threshold
+  //   distributedLock       — per-tenant Redis-style lock across multi-instance deployments
+  //   otelSpans             — 2nd-gen OTel spans with cost + correlation + routing + errors
+  //   retryAfterPropagation — surface upstream Retry-After hints so callers can smart-backoff
+  //   costForecast          — rolling-window spend + end-of-window projection with rising-edge alerts
+  //   regionFailover        — imported for HA topology (demo uses one region so it's imported but not activated;
+  //                           production deployments would wrap the llm handle with regionFailover across
+  //                           eu-central-1 / eu-west-1 / us-east-1)
+  //   gitPromptRegistry     — imported for prompt-as-code workflows (demo uses inline prompts;
+  //                           production would pull from https://github.com/joule-org/prompts.git)
+  compactHistory,
+  distributedLock,
+  InMemoryLockStore,
+  otelSpans,
+  retryAfterPropagation,
+  costForecast,
+  regionFailover,
+  gitPromptRegistry,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -176,6 +195,12 @@ let _embeddingDedup;
 let _promptCacheStats;
 let _autoContinue;
 let _safetyClassifier;
+// 1.91-2.2 additions (0.28.0):
+let _compactHistory;
+let _distributedLock;
+let _otelSpans;
+let _retryAfterPropagation;
+let _costForecast;
 // Auto-retry-wrapped llm.chat. Instantiated after the LLM connects; used
 // by every action handler so transient failures (BulkheadFull, CircuitOpen)
 // recover automatically without hand-writing retry code per action.
@@ -188,6 +213,24 @@ let _resilience;
 // FinanceService can mutate it live from LlmBudget rows without a
 // restart. costBudget reads from this via limitFor() on every call.
 const _budgetLimits = { total: undefined, perTenant: {}, perModel: {} };
+
+// Noop OTel tracer used by otelSpans (1.93) in dev/test contexts where
+// we don't want a hard @opentelemetry/api dep. Production wire this to
+// trace.getTracer('joule-procurement', '0.28.0') so the shipped
+// otelSpans middleware emits real cost + correlation + routing attrs
+// to your OTel collector (Jaeger / Tempo / Datadog APM / etc.).
+function makeNoopTracer() {
+  return {
+    startSpan: () => ({
+      setAttribute()     {},
+      setStatus()        {},
+      recordException()  {},
+      addEvent()         {},
+      end()              {},
+    }),
+  };
+}
+
 function getLLM() {
   if (!_llmPromise) {
     _llmPromise = cds.connect.to('llm').then((llm) => {
@@ -233,6 +276,30 @@ function getLLM() {
       _bulkhead = _resilience.bh;
       _retry    = _resilience.retry;
 
+      // otelSpans (cds-plugin-llm 1.93.0) — OUTERMOST so the OTel span
+      // covers the ENTIRE request lifecycle: every middleware queue
+      // wait, retry, breaker decision, and provider call falls under
+      // one span with cost + correlation + routing meta + error
+      // taxonomy attributes. Duck-typed against @opentelemetry/api —
+      // in production wire trace.getTracer('joule-procurement'); the
+      // demo uses a no-op stub so no OTel dep at dev time.
+      _otelSpans = otelSpans({
+        tracer: makeNoopTracer(),
+        systemAttribute: cds.env.requires?.llm?.kind ?? 'llm',
+      });
+      llm.use(_otelSpans);
+      // retryAfterPropagation (cds-plugin-llm 1.94.0) — near-outer so
+      // provider rate-limit headers get parsed into err.retryAfterMs
+      // + err.resetAtMs on ANY error that bubbles out. HTTP handlers
+      // in the /ai/* actions can then set Retry-After on 429/503
+      // responses without hand-parsing SDK-specific headers.
+      _retryAfterPropagation = retryAfterPropagation({
+        fallbackRetryMs: 30_000,   // 30s when no provider hint available
+        onCapture: (info) => cds.log('llm:retry-after').info(
+          `[retry-after] provider=${info.provider} retryAfter=${info.retryAfterMs}ms code=${info.errorCode}`,
+        ),
+      });
+      llm.use(_retryAfterPropagation);
       // Deadline — OUTERMOST middleware so the entire request pipeline
       // (retries + bulkhead queue + circuit-breaker decisions + provider
       // call) shares ONE time budget.
@@ -417,6 +484,28 @@ function getLLM() {
         unmaskResponse: true,
       });
       llm.use(_piiRedact);
+      // compactHistory (cds-plugin-llm 1.91.0) — auto-summarize old
+      // conversation history when it exceeds N turns. Prevents runaway
+      // context spend on long-running agent conversations (analyzeScenario
+      // multi-turn flows sometimes accumulate 30+ turns during a single
+      // procurement analysis). Placed INNER of piiRedact so the
+      // summarizer sees the redacted view — synthetic summary won't
+      // contain any raw PII either. Uses claude-haiku-4-5 for the
+      // summary call (cheap+fast).
+      _compactHistory = compactHistory({
+        maxMessages:      20,
+        keepRecent:       6,
+        summaryModel:     'claude-haiku-4-5',
+        summaryMaxTokens: 400,
+        llm,
+        onCompact: (info) => cds.log('llm:compact').info(
+          `[compact] ${info.originalCount} → ${info.finalCount} messages (${info.summaryChars} chars of summary)`,
+        ),
+        onError: (info) => cds.log('llm:compact').warn(
+          `[compact] summarizer failed at ${info.oldMessagesCount} messages: ${info.err.message}`,
+        ),
+      });
+      llm.use(_compactHistory);
       // costGuard — pre-flight per-call cost ceiling. Refuses requests
       // whose estimated cost exceeds $0.50 BEFORE spending a token.
       // Complements costBudget below (per-tenant / per-window
@@ -490,6 +579,27 @@ function getLLM() {
         onDuplicate: 'return',    // completed-cache dupes get the same result
       });
       llm.use(_idempotency);
+      // distributedLock (cds-plugin-llm 1.92.0) — per-tenant serialization
+      // for expensive operations. Complements idempotency (dedup within
+      // a pod) with cross-pod ordering: only ONE pod at a time processes
+      // a given tenant's requests. In this demo we use InMemoryLockStore
+      // (dev-safe, single-instance only); production BTP deployments
+      // should wire a Redis-backed store implementing { acquire, release }
+      // via the Managed Redis Service on Cloud Foundry.
+      // action:'wait' with 5s cap so contention shows up as latency, not
+      // as user-visible 423 Locked responses.
+      _distributedLock = distributedLock({
+        store:               new InMemoryLockStore(),
+        keyOf:               (ctx) => `tenant:${ctx.raw?.tenant ?? cds.context?.tenant ?? 'default'}`,
+        ttlMs:               60_000,
+        action:              'wait',
+        waitTimeoutMs:       5_000,
+        skipMethods:         ['embed'],    // embed is read-only, no need to serialize
+        onFailover: (info) => cds.log('llm:lock').info(
+          `[lock] tenant='${info.key}' waited ${info.durationMs}ms before acquiring`,
+        ),
+      });
+      llm.use(_distributedLock);
       // Circuit breaker — instantiated by resilience.bundle above.
       llm.use(_breaker);
       // Bulkhead — instantiated by resilience.bundle above.
@@ -501,6 +611,27 @@ function getLLM() {
         providerOf: (ctx) => ctx.raw?.providerAlias ?? cds.env.requires?.llm?.kind ?? null,
       });
       llm.use(_metering);
+      // costForecast (cds-plugin-llm 2.2.0) — rolling-window spend + end-
+      // of-window projection with rising-edge alerts. Complements
+      // costGuard (per-call ceiling) + costBudget (per-window ceiling)
+      // with 'you'll hit the limit at 2:47pm' PREDICTIONS. onWarn at
+      // 80% of hourly target, onCritical at 100%. Placed adjacent to
+      // usageMetering so spend samples come from the same source
+      // truth.
+      _costForecast = costForecast({
+        windowMs:        60 * 60_000,       // 1-hour rolling window
+        targetUsd:       50.00,              // hourly demo target
+        warnAtRatio:     0.80,
+        criticalAtRatio: 1.00,
+        minSampleSize:   10,                 // suppress cold-start noise
+        onWarn: (info) => cds.log('llm:cost-forecast').warn(
+          `[forecast] projected $${info.projection.projectedUsd.toFixed(2)} in window (${(info.projection.utilizationRatio * 100).toFixed(0)}% of $${info.projection.targetUsd})`,
+        ),
+        onCritical: (info) => cds.log('llm:cost-forecast').error(
+          `[forecast] CRITICAL: projected $${info.projection.projectedUsd.toFixed(2)} exceeds hourly target of $${info.projection.targetUsd}`,
+        ),
+      });
+      llm.use(_costForecast);
       // Semantic cache — reuses the `llm-embed` alias (Ollama nomic-embed-text
       // by default, or genai-hub embed deployment in prod). Cache hits now
       // fire not only on exact prompt matches but on semantically-similar
@@ -687,6 +818,16 @@ function getPromptCacheStats() { return _promptCacheStats; }
 function getAutoContinue() { return _autoContinue; }
 /** Exported for /safety-state dashboard — moderation flags + Anthropic refusals. */
 function getSafetyClassifier() { return _safetyClassifier; }
+/** Exported for /compact-state dashboard — history compaction counters. */
+function getCompactHistory() { return _compactHistory; }
+/** Exported for /lock-state dashboard — distributed-lock acquisitions + waits. */
+function getDistributedLock() { return _distributedLock; }
+/** Exported for /otel-state dashboard — currently no counters (spans go to tracer). */
+function getOtelSpans() { return _otelSpans; }
+/** Exported for /retry-after-state dashboard — retry-hint propagation counters. */
+function getRetryAfterPropagation() { return _retryAfterPropagation; }
+/** Exported for /forecast-state dashboard + MCP resource — rolling spend projection. */
+function getCostForecast() { return _costForecast; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -1625,3 +1766,8 @@ module.exports.getEmbeddingDedup = getEmbeddingDedup;
 module.exports.getPromptCacheStats = getPromptCacheStats;
 module.exports.getAutoContinue = getAutoContinue;
 module.exports.getSafetyClassifier = getSafetyClassifier;
+module.exports.getCompactHistory = getCompactHistory;
+module.exports.getDistributedLock = getDistributedLock;
+module.exports.getOtelSpans = getOtelSpans;
+module.exports.getRetryAfterPropagation = getRetryAfterPropagation;
+module.exports.getCostForecast = getCostForecast;
