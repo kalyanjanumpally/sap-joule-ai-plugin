@@ -211,6 +211,10 @@ module.exports = {
   scoreResponse:      require('./scoreResponse').scoreResponse,
   formatScoreReport:  require('./scoreResponse').formatScoreReport,
   KNOWN_SCORE_CHECKS: require('./scoreResponse').KNOWN_CHECK_KINDS,
+  // Multi-model consensus voting — parallel N-model vote with quorum + confidence (new in 2.5.0)
+  consensusVoting:    require('./consensusVoting').consensusVoting,
+  CONSENSUS_COMPARATORS: require('./consensusVoting').COMPARATORS,
+  KNOWN_CONSENSUS_COMPARATORS: require('./consensusVoting').KNOWN_COMPARATORS,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

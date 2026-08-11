@@ -4,6 +4,76 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] — 2026-08-11
+
+### Added
+
+- **`consensusVoting({ models, request, quorum?, comparator? }) → ConsensusResult` — multi-model consensus voting.** Sends the same request to N models in parallel, tallies responses under a caller-supplied comparator (default: normalized-text equality), returns the majority response with a confidence score + full ballot trail. Cost multiplier (roughly Nx per call) — use for high-stakes calls where hallucination cost outweighs the extra spend: compliance-critical extractions, financial risk assessments, structured-output where deviations are bugs.
+
+  ```js
+  const { consensusVoting } = require('@saptarishi/cds-plugin-llm');
+
+  const result = await consensusVoting({
+    models: [
+      { service: anthropicLlm, model: 'claude-opus-4-7' },
+      { service: openaiLlm,    model: 'gpt-4o' },
+      { service: geminiLlm,    model: 'gemini-1.5-pro' },
+    ],
+    request: { messages: [{ role: 'user', content: 'What is the invoice total?' }] },
+    quorum: 2,                              // 2 of 3 must agree
+    comparator: 'normalized-text',
+    onBallot: (info) => cds.log('llm:consensus').debug(info),
+  });
+
+  //  {
+  //    verdict: 'consensus',                 // 'consensus' | 'plurality' | 'no-consensus' | 'all-failed'
+  //    response: { text: 'Total: $1234.56.', model: 'claude-opus-4-7', usage: {...} },
+  //    confidence: 0.667,                     // matching_ballots / total_ballots
+  //    quorum: 2,
+  //    modelCount: 3,
+  //    ballots: [
+  //      { model: 'claude-opus-4-7', ok: true,  response: {...}, key: '...', matched: true,  durationMs: 412 },
+  //      { model: 'gpt-4o',           ok: true,  response: {...}, key: '...', matched: true,  durationMs: 528 },
+  //      { model: 'gemini-1.5-pro',   ok: true,  response: {...}, key: '...', matched: false, durationMs: 391 },
+  //    ],
+  //    tallies: [
+  //      { key: 'total: $1234.56.', count: 2, sampleModel: 'claude-opus-4-7' },
+  //      { key: 'the total is 1234.56 usd', count: 1, sampleModel: 'gemini-1.5-pro' },
+  //    ],
+  //  }
+  ```
+
+- **Four verdict types:**
+  - **`consensus`** — the top tally reached the quorum threshold
+  - **`plurality`** — a single clear leader below quorum (below the required threshold but strictly ahead)
+  - **`no-consensus`** — top vote tied with the runner-up (or no clear leader)
+  - **`all-failed`** — every model errored / timed out
+
+- **Three shipped comparators** (choose the right one for your response shape):
+  - **`normalized-text`** (default) — trim + collapse whitespace + lowercase. Right for prose where minor formatting differences don't matter.
+  - **`exact`** — verbatim text equality including whitespace + case. Right when models MUST produce identical output (deterministic-output experiments).
+  - **`json-deep`** — parse response as JSON (extracts from prose or code fences), canonical-stringify with sorted keys. Two responses `{"a":1,"b":2}` and `{"b":2,"a":1}` register as the same vote.
+
+- **Custom comparator function** — `comparator: (response) => string` for domain-specific bucketing. Returns any string; equal strings count as the same vote. Common patterns: extract just the invoice total, normalize to enum bucket (`'low'|'medium'|'high'`), map by prefix (first 100 chars), etc.
+
+- **Default quorum** — `floor(N/2) + 1` (simple majority). Override with `quorum: N` for unanimity, `quorum: 1` to accept any successful response.
+
+- **Per-model timeout + soft-fail.** `timeoutMs: 30_000` per model. A hanging model doesn't hang the whole vote — it becomes a failed ballot (`ok: false, error: 'timed out'`) and the tally proceeds without it. `all-failed` is a valid verdict when every model times out or errors.
+
+- **`onBallot(info)` callback** fires per model as their ballot resolves (both success + failure paths). Errors from the callback are swallowed. Great for streaming per-model progress to a live UI + collecting rate-limit telemetry across providers.
+
+- **Response includes full ballot trail.** Every ballot has `{ model, ok, response, key, error, matched, durationMs }` — you can inspect exactly what each model said, how long it took, and whether it agreed with the winner. Perfect for post-hoc "why did we get plurality instead of consensus?" investigation.
+
+- **Per-model model override.** Every `models[i]` entry can carry a `model:` override that gets merged into the shared `request` (per-model `model` field wins). Same service can vote with multiple models: `[{ service: openaiLlm, model: 'gpt-4o' }, { service: openaiLlm, model: 'gpt-4o-mini' }]`.
+
+- **Composes with responseCache (1.26 semantic mode)** for hybrid cheap+consensus workflows: cache warm queries; consensus-vote only on cache misses. Set the consensus-voting layer OUTSIDE `responseCache` and cost drops close to zero for repeat traffic.
+
+- **`CONSENSUS_COMPARATORS` map** exported for advanced composition. Frozen — safe to import + reference (deep-clone if you want to build a variant with additional comparators).
+
+- **TypeScript.** `ConsensusOptions`, `ConsensusResult`, `ConsensusBallot`, `ConsensusTally`, `ConsensusComparator`, `ConsensusModelEntry`.
+
+- **Not middleware — a top-level helper.** Consensus voting is a call-site decision (high-stakes calls opt in explicitly); wrap it around specific action handlers, not the whole chain.
+
 ## [2.4.0] — 2026-08-11
 
 ### Added

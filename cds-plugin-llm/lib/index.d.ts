@@ -3824,6 +3824,74 @@ export function formatScoreReport(report: ScoreReport, options?: { colors?: bool
 
 export const KNOWN_SCORE_CHECKS: ReadonlyArray<ScoreCheckKind>;
 
+// ---- Multi-model consensus voting (new in 2.5.0) ---------------------
+
+export type ConsensusComparator =
+  | 'exact' | 'normalized-text' | 'json-deep'
+  | ((response: any) => string);
+
+export interface ConsensusModelEntry {
+  service: { chat: (req: any) => Promise<any> };
+  model?:  string;
+}
+
+export interface ConsensusOptions {
+  models:      ConsensusModelEntry[];
+  request:     Record<string, unknown>;
+  quorum?:     number;
+  comparator?: ConsensusComparator;
+  timeoutMs?:  number;
+  onBallot?:   ((info: {
+    model:      string;
+    ok:         boolean;
+    response:   any | null;
+    key:        string | null;
+    error:      string | null;
+    durationMs: number;
+  }) => void) | null;
+}
+
+export interface ConsensusBallot {
+  model:      string;
+  ok:         boolean;
+  response:   any | null;
+  key:        string | null;
+  error:      string | null;
+  durationMs: number;
+  matched:    boolean;
+}
+
+export interface ConsensusTally {
+  key:         string;
+  count:       number;
+  sampleModel: string;
+}
+
+export interface ConsensusResult {
+  verdict:    'consensus' | 'plurality' | 'no-consensus' | 'all-failed';
+  response:   any | null;
+  confidence: number;
+  quorum:     number;
+  modelCount: number;
+  ballots:    ConsensusBallot[];
+  tallies:    ConsensusTally[];
+}
+
+/**
+ * Multi-model consensus voting. Sends the same request to N models
+ * in parallel, tallies responses under a caller-supplied comparator
+ * (default: normalized-text equality), returns the majority response
+ * with a confidence score + full ballot trail. Cost multiplier
+ * (roughly Nx per call) — use for high-stakes calls where
+ * hallucination cost > extra spend.
+ * @since 2.5.0
+ */
+export function consensusVoting(options: ConsensusOptions): Promise<ConsensusResult>;
+
+export const CONSENSUS_COMPARATORS: Readonly<Record<'exact' | 'normalized-text' | 'json-deep', (response: any) => string>>;
+
+export const KNOWN_CONSENSUS_COMPARATORS: ReadonlyArray<'exact' | 'normalized-text' | 'json-deep'>;
+
 // ---- Tenant isolation wrapper (new in 1.71.0) ------------------------
 
 export interface TenantIsolateOptions {
