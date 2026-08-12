@@ -25,7 +25,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | Group | Primitives |
 | --- | --- |
 | **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
-| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) |
+| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
@@ -1148,6 +1148,36 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Retry budget (new in v2.15.0)
+
+`retryBudget` is a Google-SRE-style global cap on the retries-to-requests ratio in a rolling window. It prevents **retry storms** during partial outages: with `retryOnRateLimit` + `regionFailover` + `speculativeHedge` + `costAwareRouter`'s escalate-on-error combined, one call can trigger up to N×M×K upstream attempts. If 10k concurrent requests each retry 5x, you fire 50k requests at an already-failing upstream — a self-inflicted DoS. The retry budget refuses further retries when the ratio breach is real.
+
+```js
+const { retryBudget, retryOnRateLimit } = require('@saptarishi/cds-plugin-llm');
+
+const budget = retryBudget({
+  retryRatio:    0.10,     // SRE-canonical: max 10% retries
+  windowMs:      60_000,
+  minSampleSize: 100,      // don't trip on cold-start noise
+  onExhausted: (i) => cds.log('llm:budget').warn('exhausted', i),
+  onLowBudget: (i) => cds.log('llm:budget').info('near-cap', i),
+});
+
+llm.use(retryOnRateLimit());   // outer — retries re-enter budget
+llm.use(budget);               // inner — sees each retry
+```
+
+How retries are detected: a `WeakMap` tracks per-ctx call counts. The first pass for a given ctx is a request; every subsequent pass with the **same ctx reference** is a retry. Works because retry primitives (`retryOnRateLimit`, `autoRetry`, `regionFailover`, `costAwareRouter`'s escalation) re-invoke `next()` with the same ctx. Middlewares that create fresh ctx per attempt (`speculativeHedge`) look like separate requests — correct, because each hedge IS a separate upstream call.
+
+Highlights:
+- **SRE-canonical default** of 10% retries matches the Google SRE book.
+- **`minSampleSize` gate** (default 100) prevents tripping on cold-start noise. Ratio check is skipped until enough requests accumulate.
+- **Rising-edge callbacks** at 50% and 80% of the retry budget (configurable). Level is only re-fired after ratio drops below the lowest threshold — no spam.
+- **`RetryBudgetExhaustedError`** (code `RETRY_BUDGET_EXHAUSTED`) with `.currentRatio`, `.retryRatio`, `.requests`, `.retries`, `.windowMs`.
+- MCP resource `config://retry-budget` exposes live counts, current ratio, budget fraction, per-threshold fire counts.
+
+Composition rule: place `retryBudget` **inside** the retry primitives (outer: retry; inner: budget) so retries re-enter the budget — that's how it observes them. Test-drive the whole stack with `chaosInjector` (v2.11.0) to verify budget behavior under simulated outages before hitting prod.
 
 ## Multi-tenant fair-share scheduler (new in v2.14.0)
 

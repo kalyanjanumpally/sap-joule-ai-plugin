@@ -4,6 +4,64 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.0] — 2026-08-12
+
+### Added
+- **`retryBudget` middleware** — Google-SRE-style global cap on the
+  retries-to-requests ratio across all in-flight requests. Prevents
+  retry storms during partial outages: with `retryOnRateLimit` +
+  `regionFailover` + `speculativeHedge` + `costAwareRouter`'s
+  escalate-on-error combined, one call can trigger up to N×M×K
+  upstream attempts. If 10k concurrent requests each retry 5x,
+  you fire 50k requests at an already-failing upstream — a
+  self-inflicted DoS. The retry budget refuses further retries
+  when the ratio breach is real (with `minSampleSize` guarding
+  against cold-start noise).
+- **SRE-canonical default** of `retryRatio: 0.10` (max 10% retries)
+  matches the ratio recommended in the Google SRE book.
+- **WeakMap-based retry detection** — the first pass for a given ctx
+  is a request; every subsequent pass with the SAME ctx reference
+  is a retry. Works because retry primitives
+  (`retryOnRateLimit`, `autoRetry`, `regionFailover`,
+  `costAwareRouter`'s escalation) re-invoke `next()` with the same
+  ctx. Middlewares that create fresh ctx per attempt
+  (`speculativeHedge`) look like separate requests — correct,
+  because each hedge IS a separate upstream call.
+- **`minSampleSize` gate** (default 100) — the ratio check is skipped
+  until enough requests accumulate. Prevents tripping during cold
+  start when 1 retry / 2 requests looks like 50% but is really
+  statistical noise.
+- **Rising-edge low-budget callbacks** — `onLowBudget` fires at 50%
+  and 80% of the retry budget (configurable via `lowBudgetLevels`).
+  Level is only re-fired after the ratio drops below the lowest
+  threshold, so callbacks don't spam.
+- **Rolling sliding window** — no scheduled cleanup; timestamps are
+  pruned lazily on each check. No memory leak — retries and requests
+  older than `windowMs` are discarded before every ratio computation.
+- **`RetryBudgetExhaustedError`** (code: `RETRY_BUDGET_EXHAUSTED`) —
+  thrown when a retry would breach the ratio. Carries `.currentRatio`,
+  `.retryRatio`, `.requests`, `.retries`, `.windowMs`.
+- MCP resource `config://retry-budget` exposes the full budget state
+  including live counts, current ratio, budget fraction, and per-
+  threshold fire counts.
+- TypeScript: `RetryBudgetOptions`, `RetryBudgetStats`,
+  `RetryBudgetMiddleware`, `RetryBudgetExhaustedError` class.
+
+### API contract (frozen)
+- Signature: `retryBudget({ retryRatio=0.10, windowMs=60_000, minSampleSize=100, lowBudgetLevels=[0.5, 0.8], onExhausted, onLowBudget })`
+- MCP URI: `config://retry-budget`
+- Error code: `RETRY_BUDGET_EXHAUSTED`
+- Retry detection: repeat calls with the same ctx reference
+
+### Composition
+- Place `retryBudget` INSIDE the retry primitives so retries re-enter
+  this middleware — that's how the budget observes them.
+  Concretely: `llm.use(retryOnRateLimit(...))` FIRST, then
+  `llm.use(retryBudget(...))` — the retry primitive is outer, budget
+  is inner.
+- Compose with `chaosInjector` (2.11) to verify budget behavior under
+  simulated outages before hitting prod.
+
 ## [2.14.0] — 2026-08-12
 
 ### Added

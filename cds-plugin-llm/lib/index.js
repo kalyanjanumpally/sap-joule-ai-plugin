@@ -241,6 +241,9 @@ module.exports = {
   // Fair-share scheduler — per-tenant WRR admission control (new in 2.14.0)
   fairShareScheduler:     require('./middleware/fairShareScheduler').fairShareScheduler,
   FairShareRejectedError: require('./middleware/fairShareScheduler').FairShareRejectedError,
+  // Retry budget — SRE-style cap on retries-to-requests ratio (new in 2.15.0)
+  retryBudget:            require('./middleware/retryBudget').retryBudget,
+  RetryBudgetExhaustedError: require('./middleware/retryBudget').RetryBudgetExhaustedError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

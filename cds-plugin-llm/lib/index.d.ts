@@ -5056,6 +5056,95 @@ export class FairShareRejectedError extends LLMError {
  */
 export function fairShareScheduler(options: FairShareSchedulerOptions): FairShareSchedulerMiddleware;
 
+// ---- Retry budget (new in 2.15.0) -----------------------------------
+
+export interface RetryBudgetOptions {
+  /**
+   * Maximum retries-to-requests ratio in the rolling window.
+   * Default 0.10 (10%, SRE-canonical). Range (0, 1).
+   */
+  retryRatio?:     number;
+  /** Rolling window size in ms. Default 60000 (1 minute). Min 100. */
+  windowMs?:       number;
+  /**
+   * Minimum sample size — the ratio check is skipped until this many
+   * requests have accumulated in the window (prevents tripping on
+   * cold start). Default 100.
+   */
+  minSampleSize?:  number;
+  /**
+   * Fractions of `retryRatio` at which onLowBudget fires (rising edge).
+   * Default `[0.5, 0.8]` — warns at 50% and 80% of the retry budget.
+   */
+  lowBudgetLevels?: number[];
+  onExhausted?: (info: {
+    currentRatio: number; retryRatio: number;
+    requests: number; retries: number; windowMs: number;
+  }) => void;
+  onLowBudget?: (info: {
+    level: number; currentRatio: number; retryRatio: number;
+    requests: number; retries: number;
+  }) => void;
+  now?: () => number;
+}
+
+export interface RetryBudgetStats {
+  totalCalls:      number;
+  firstAttempts:   number;
+  retryAttempts:   number;
+  rejectedRetries: number;
+  lowBudgetFires:  number;
+  lastRatio:       number | null;
+  lastRejectedAt:  number | null;
+}
+
+export interface RetryBudgetMiddleware extends Middleware {
+  readonly stats: RetryBudgetStats;
+  reset(): void;
+  currentRatio(): number;
+  currentCounts(): { requests: number; retries: number };
+  asMcpResource(): {
+    uri: 'config://retry-budget';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => RetryBudgetStats & {
+      retryRatio:      number;
+      windowMs:        number;
+      minSampleSize:   number;
+      lowBudgetLevels: number[];
+      currentRequests: number;
+      currentRetries:  number;
+      currentRatio:    number;
+      budgetFraction:  number;
+    };
+  };
+}
+
+/**
+ * Thrown by `retryBudget` when the retry-to-request ratio in the rolling
+ * window exceeds `retryRatio`. `.code === 'RETRY_BUDGET_EXHAUSTED'`.
+ * @since 2.15.0
+ */
+export class RetryBudgetExhaustedError extends LLMError {
+  readonly retryRatio:    number;
+  readonly currentRatio:  number;
+  readonly requests:      number;
+  readonly retries:       number;
+  readonly windowMs:      number;
+}
+
+/**
+ * SRE-style retry budget. Caps the retries-to-requests ratio in a
+ * rolling window to prevent retry storms during partial outages.
+ * Distinguishes first attempts from retries by ctx identity: any
+ * repeat pass with the same ctx counts as a retry. Composes with
+ * retry primitives (retryOnRateLimit, autoRetry, regionFailover);
+ * place INSIDE them so retries re-enter this middleware.
+ * @since 2.15.0
+ */
+export function retryBudget(options?: RetryBudgetOptions): RetryBudgetMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {
