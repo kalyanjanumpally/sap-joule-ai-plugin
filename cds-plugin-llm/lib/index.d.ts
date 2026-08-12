@@ -5442,6 +5442,94 @@ export function normalizeToolShape(tool: unknown): Tool | Tool[] | null;
 /** Normalize an array of tool declarations. Non-array pass-through. @since 2.18.0 */
 export function normalizeToolList(tools: unknown): Tool[] | unknown;
 
+// ---- Session context store (new in 2.19.0) --------------------------
+
+export type SessionMessage = UserMessage | AssistantMessage | SystemMessage | ToolMessage;
+
+export interface SessionStore {
+  get(sessionId: string): Promise<SessionMessage[] | null>;
+  put(sessionId: string, messages: SessionMessage[]): Promise<void>;
+  append(sessionId: string, ...newMessages: SessionMessage[]): Promise<void>;
+  delete?(sessionId: string): Promise<void>;
+  size?():   Promise<number>;
+}
+
+export interface InMemorySessionStoreOptions {
+  /** Cap on distinct sessions; oldest evicted. Default 10000. */
+  maxSessions?: number;
+  /** Session TTL in ms. Null = never expire. Default null. */
+  ttlMs?:       number | null;
+  now?:         () => number;
+}
+
+/** In-memory LRU-ish session store with optional TTL. Drop-in for the middleware; swap for Redis/DB in prod. @since 2.19.0 */
+export function inMemorySessionStore(options?: InMemorySessionStoreOptions): SessionStore & { _sessions: Map<string, unknown> };
+
+export type SessionPruneStrategy = 'oldest' | 'summarize';
+
+export interface SessionContextStoreOptions {
+  /** Extract session ID from ctx. Return null / empty string to opt out. */
+  sessionOf:      (ctx: unknown) => string | null | undefined;
+  /** Any object implementing the SessionStore interface. */
+  store:          SessionStore;
+  /** Sliding-window cap on messages per session. Default 20. */
+  maxMessages?:   number;
+  /** How to prune when over budget. Default 'oldest'. */
+  pruneStrategy?: SessionPruneStrategy;
+  /** Async summarizer of the dropped messages. Required if pruneStrategy='summarize'. */
+  summarizer?:    (droppedMessages: SessionMessage[]) => Promise<string> | string;
+  /** Tag prepended to the synthetic assistant summary message. Default 'Summary of earlier conversation'. */
+  summaryTag?:    string;
+  /** Skip streaming methods. Default true. */
+  skipStreaming?: boolean;
+  onSessionHit?:  (info: { sessionId: string; priorTurnCount: number }) => void;
+  onSessionMiss?: (info: { sessionId: string }) => void;
+  onPrune?:       (info: { sessionId: string; droppedCount: number; keptCount: number; strategy: SessionPruneStrategy }) => void;
+  onError?:       (info: { phase: string; error: unknown }) => void;
+}
+
+export interface SessionContextStoreStats {
+  totalCalls:          number;
+  sessionHits:         number;
+  sessionMisses:       number;
+  passthroughs:        number;
+  skippedStreaming:    number;
+  turnsAppended:       number;
+  prunes:              number;
+  summarizations:      number;
+  storeErrors:         number;
+  lastSession:         string | null;
+  lastPriorTurnCount:  number | null;
+}
+
+export interface SessionContextStoreMiddleware extends Middleware {
+  readonly stats: SessionContextStoreStats;
+  reset(): void;
+  hitRate(): number;
+  asMcpResource(): {
+    uri: 'config://session-context-store';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => SessionContextStoreStats & {
+      maxMessages:   number;
+      pruneStrategy: SessionPruneStrategy;
+      hasSummarizer: boolean;
+      skipStreaming: boolean;
+      hitRate:       number;
+    };
+  };
+}
+
+/**
+ * Multi-turn session context store. Prepends per-session message
+ * history to each request, appends the new user + assistant turns
+ * after the response, and prunes to `maxMessages` (oldest-first drop
+ * or synthetic-summary replacement). Streaming skipped by default.
+ * @since 2.19.0
+ */
+export function sessionContextStore(options: SessionContextStoreOptions): SessionContextStoreMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

@@ -255,6 +255,9 @@ module.exports = {
   InvalidToolCallError:   require('./middleware/functionCallArbitrator').InvalidToolCallError,
   normalizeToolShape:     require('./middleware/functionCallArbitrator').normalizeToolShape,
   normalizeToolList:      require('./middleware/functionCallArbitrator').normalizeToolList,
+  // Session context store — multi-turn memory management (new in 2.19.0)
+  sessionContextStore:    require('./middleware/sessionContextStore').sessionContextStore,
+  inMemorySessionStore:   require('./middleware/sessionContextStore').inMemorySessionStore,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

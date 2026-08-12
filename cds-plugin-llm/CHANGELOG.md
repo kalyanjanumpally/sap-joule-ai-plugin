@@ -4,6 +4,69 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.0] — 2026-08-12
+
+### Added
+- **`sessionContextStore` middleware** — multi-turn memory management
+  for chat apps. Prepends per-session message history to each request,
+  appends the new user + assistant turns to the store after the
+  response, and prunes to a sliding window with either oldest-drop
+  or synthetic-summary replacement. Solves the "how do I remember what
+  the user said 3 turns ago without blowing the context budget"
+  problem without hand-rolling per-app state.
+- **Pluggable store interface** — three async methods (`get`, `put`,
+  `append`) + optional `delete` + `size`. Ships with
+  `inMemorySessionStore` (LRU-ish eviction, optional TTL) as a
+  zero-infra default; swap for Redis/DB in prod using the same
+  interface.
+- **Two prune strategies**:
+  - `'oldest'` (default) — drop the oldest messages when
+    `maxMessages` is exceeded. Preserves a leading system message
+    at the front (never dropped).
+  - `'summarize'` — invoke caller-supplied `summarizer(dropped)` to
+    condense the dropped block into a synthetic assistant message
+    prepended below any system prompt. Composes with the shipped
+    `compactHistory` (v1.91.0) pattern: use its LLM-based summarizer
+    as this middleware's `summarizer` function.
+- **System-prompt preservation** — if the caller's request has a
+  leading system message, it stays at position 0. Prior turns are
+  spliced in AFTER the system prompt so history doesn't override
+  session instructions.
+- **Tool-call turns persisted** — an assistant response with
+  `toolCalls[]` is stored with those toolCalls attached, so the next
+  turn's context includes the tool-call trace.
+- **Fail-open store** — a broken store never takes the request path
+  down. Store errors are captured via `onError` and the middleware
+  falls through to `next()` without prepending history.
+- **Streaming skipped** by default (`skipStreaming: true`) since
+  appending after the stream finishes requires stream-completion
+  tracking that's out of scope for this iteration.
+- MCP resource `config://session-context-store` exposes `hitRate`,
+  turns-appended / prunes / summarizations / store-errors, and
+  `lastPriorTurnCount` for real-time observability.
+- Standalone helper `pruneOldest(messages, maxMessages)` exported
+  for use in custom store implementations.
+- TypeScript: `SessionStore`, `SessionContextStoreOptions`,
+  `SessionContextStoreStats`, `SessionContextStoreMiddleware`,
+  `InMemorySessionStoreOptions`, `SessionPruneStrategy`.
+
+### API contract (frozen)
+- Signature: `sessionContextStore({ sessionOf, store, maxMessages=20, pruneStrategy='oldest', summarizer, summaryTag, skipStreaming=true, onSessionHit, onSessionMiss, onPrune, onError })`
+- MCP URI: `config://session-context-store`
+- Store interface: `{ get(sessionId), put(sessionId, messages), append(sessionId, ...msgs) }`
+- Prune strategies: `'oldest'`, `'summarize'` — stable
+
+### Composition
+- Place `sessionContextStore` OUTSIDE
+  `guardrails` / `promptInjectionGuard` so those guard the merged
+  history (prior turns can contain injected content too).
+- Place OUTSIDE `semanticCache` / `responseCache` — a stateful
+  chat is context-dependent and shouldn't share cache entries with
+  other sessions.
+- Compose with `compactHistory` (v1.91.0) as the `summarizer`
+  implementation when using `pruneStrategy: 'summarize'` — that gives
+  you LLM-summarized context compression instead of hand-rolled logic.
+
 ## [2.18.0] — 2026-08-12
 
 ### Added

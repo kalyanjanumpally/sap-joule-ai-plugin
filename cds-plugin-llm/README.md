@@ -33,7 +33,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
 | **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `functionCallArbitrator` (v2.18.0 — tool-call allowlist + validation) · `normalizeToolShape` · `normalizeToolList` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
-| **Long-context** | `compactHistory` |
+| **Long-context** | `compactHistory` · `sessionContextStore` (v2.19.0 — per-session history with prune / summarize) · `inMemorySessionStore` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` |
 | **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` |
 | **Bulk workflows** | `runBatch` · `waitForBatch` |
@@ -1148,6 +1148,37 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Session context store (new in v2.19.0)
+
+`sessionContextStore` is multi-turn memory management for chat apps. On each call it prepends per-session message history to the request, appends the new user + assistant turns to the store after the response, and prunes to a sliding window (oldest-drop or synthetic-summary replacement). Solves the "how do I remember what the user said 3 turns ago without blowing the context budget" problem without hand-rolling per-app state.
+
+```js
+const { sessionContextStore, inMemorySessionStore } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(sessionContextStore({
+  sessionOf:   (ctx) => ctx.request.sessionId,
+  store:       inMemorySessionStore({ maxSessions: 10_000, ttlMs: 3600_000 }),
+  maxMessages: 20,
+  // Optional: summarize dropped messages instead of just dropping them.
+  pruneStrategy: 'summarize',
+  summarizer: async (dropped) => (await llm.chat({
+    messages: [{ role: 'user', content: 'Summarize briefly:\n' + JSON.stringify(dropped) }],
+  })).text,
+  onSessionHit:  (i) => cds.log('llm:session').debug('hit',  i),
+  onSessionMiss: (i) => cds.log('llm:session').debug('miss', i),
+}));
+```
+
+Highlights:
+- **Pluggable store** — three async methods (`get`, `put`, `append`) + optional `delete` + `size`. Ships with `inMemorySessionStore` (LRU eviction, optional TTL) as a zero-infra default; swap for pgvector/Redis/DynamoDB in prod using the same interface.
+- **System-prompt preservation** — a leading system message on the caller's request stays at position 0; prior turns are spliced in AFTER, so history doesn't override session instructions.
+- **Tool-call turns persisted** — an assistant response with `toolCalls[]` is stored with those toolCalls attached, so the next turn's context includes the tool-call trace.
+- **Fail-open** — a broken store never takes the request path down. Store errors are captured via `onError` and the middleware falls through without prepending history.
+- **Compose with `compactHistory`** (v1.91.0) as the summarizer when using `pruneStrategy: 'summarize'` — LLM-summarized context compression without hand-rolled logic.
+- MCP resource: `config://session-context-store` (`hitRate`, turns-appended / prunes / summarizations / store-errors).
+
+Composition rule: put `sessionContextStore` **outside** `guardrails` / `promptInjectionGuard` (those need to see the merged history — prior turns can contain injected content too) and **outside** `semanticCache` / `responseCache` (a stateful chat is context-dependent and shouldn't share cache entries with other sessions).
 
 ## Function-call arbitrator (new in v2.18.0)
 
