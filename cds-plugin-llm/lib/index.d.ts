@@ -5530,6 +5530,104 @@ export interface SessionContextStoreMiddleware extends Middleware {
  */
 export function sessionContextStore(options: SessionContextStoreOptions): SessionContextStoreMiddleware;
 
+// ---- Prompt A/B experiment (new in 2.20.0) --------------------------
+
+export interface PromptExperimentVariant {
+  name:    string;
+  weight?: number;
+  apply?:  (request: unknown) => unknown;
+  [key: string]: unknown;
+}
+
+export interface PromptExperimentOptions {
+  /** Unique experiment identifier. Used for MCP URI + hash namespace. */
+  name:            string;
+  /** Variants (2+). Weights bias traffic (positive integers). */
+  variants:        PromptExperimentVariant[];
+  /**
+   * Extract split key from ctx (e.g., userId, sessionId). Return
+   * null/empty to opt this call out of the experiment.
+   */
+  splitKeyOf:      (ctx: unknown) => string | null | undefined;
+  /** Score the result. Return number for Welford accumulation; non-number → skipped. */
+  scorer:          (result: unknown, ctx: unknown) => number | Promise<number> | null | undefined;
+  /** USD cost per call. Optional — enables per-variant cost aggregation. */
+  costEstimator?:  (result: unknown) => number | null | undefined;
+  /** Per-variant minimum before getWinner() will declare a winner. Default 30. */
+  minSampleSize?:  number;
+  onSample?:  (info: { variant: string; score: number | null; latencyMs: number; splitKey: string }) => void;
+  onWinner?:  (info: { winner: string; topScore: number; runnerUp: string; runnerUpScore: number }) => void;
+  onError?:   (info: { phase: string; error: unknown }) => void;
+  now?:       () => number;
+}
+
+export interface PromptExperimentVariantSnapshot {
+  name:            string;
+  weight:          number;
+  sampleCount:     number;
+  scoreMean:       number;
+  scoreStddev:     number;
+  scoreCI95:       [number, number];
+  latencyMean:     number;
+  latencyStddev:   number;
+  costMean:        number;
+  totalCostUsd:    number;
+  errors:          number;
+}
+
+export interface PromptExperimentWinner {
+  winner: string | null;
+  status: 'insufficient-samples' | 'inconclusive-overlap' | 'confident';
+  top?:           string;
+  topScore?:      number;
+  topCI?:         [number, number];
+  runnerUp?:      string;
+  runnerUpScore?: number;
+  runnerUpCI?:    [number, number];
+  variants:       PromptExperimentVariantSnapshot[];
+}
+
+export interface PromptExperimentStats {
+  totalCalls:     number;
+  passthroughs:   number;
+  scorerErrors:   number;
+  sampledCalls:   number;
+  lastVariant:    string | null;
+  lastScore:      number | null;
+}
+
+export interface PromptExperimentMiddleware extends Middleware {
+  readonly stats: PromptExperimentStats;
+  reset(): void;
+  snapshotVariants(): PromptExperimentVariantSnapshot[];
+  /** Returns the current winner (or `null` if insufficient / inconclusive) with 95% CI check. */
+  getWinner(): PromptExperimentWinner;
+  asMcpResource(): {
+    uri: string;   // `config://prompt-experiment/${name}`
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => PromptExperimentStats & {
+      experimentName:  string;
+      variants:        PromptExperimentVariantSnapshot[];
+      totalWeight:     number;
+      minSampleSize:   number;
+      winner:          PromptExperimentWinner;
+    };
+  };
+}
+
+/**
+ * Live A/B testing framework for prompt variants. Weighted consistent-
+ * hash traffic split (same splitKey always maps to the same variant),
+ * Welford's online mean/variance for score / latency / cost, 95% CI
+ * winner detection. Complements offline eval primitives (`llmJudge`,
+ * `promptRegression`, `scoreResponse`, `consensusVoting`) with the
+ * production-traffic half of the eval story.
+ * @since 2.20.0
+ */
+export function promptExperiment(options: PromptExperimentOptions): PromptExperimentMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

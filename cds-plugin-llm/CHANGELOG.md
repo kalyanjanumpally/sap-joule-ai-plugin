@@ -4,6 +4,65 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.20.0] — 2026-08-12
+
+### Added
+- **`promptExperiment` middleware** — live A/B testing framework for
+  prompt variants. Runs N variants of a prompt against each other in
+  **production traffic**, captures per-variant score + latency + cost
+  distributions, and declares a statistically-defensible winner via
+  95% confidence-interval overlap check.
+- Complements the shipped offline eval primitives (`llmJudge`,
+  `promptRegression`, `scoreResponse`, `consensusVoting`) with the
+  **online production-traffic** half of the eval story that offline
+  primitives can't do alone.
+- **Weighted consistent-hash assignment** — same `splitKey` always
+  maps to the same variant (via `hash32(experimentName + '::' + splitKey)`).
+  Users experience the same variant across restarts, in-flight
+  requests, session reloads. Distinct experiments assign independently
+  (a user in "control" of Experiment A may be in "v2" of Experiment B).
+- **Welford's online algorithm** for score / latency / cost mean +
+  variance. O(1) memory regardless of sample count — safe to run
+  indefinitely without accumulating storage.
+- **95% CI winner detection** — `getWinner()` returns
+  `{ winner, status, top, topCI, runnerUp, runnerUpCI, variants }`.
+  Status:
+  - `'insufficient-samples'` — fewer than `minSampleSize` (default 30)
+    per variant; not enough data
+  - `'inconclusive-overlap'` — CIs of the top two variants overlap;
+    difference is within noise
+  - `'confident'` — top variant's CI does NOT overlap with runner-up's;
+    statistically defensible winner
+- **`onWinner` callback** fires only when we transition to `'confident'`
+  — hook it up to alerting when an experiment concludes.
+- **Multiple experiments compose** — just declare each with a
+  different `name` and stack them in the middleware chain. Each has
+  its own MCP resource (`config://prompt-experiment/${name}`) and
+  independent variant assignment.
+- **Standalone helpers exported** — `hash32(str)`, `welfordUpdate`,
+  `welfordStats`, `ciAroundMean` — usable outside the middleware for
+  custom analytics.
+- MCP resource per experiment: `config://prompt-experiment/${name}`
+  exposes variants + full stats + live winner + total weight.
+- TypeScript: `PromptExperimentOptions`, `PromptExperimentVariant`,
+  `PromptExperimentVariantSnapshot`, `PromptExperimentWinner`,
+  `PromptExperimentStats`, `PromptExperimentMiddleware`.
+
+### API contract (frozen)
+- Signature: `promptExperiment({ name, variants, splitKeyOf, scorer, costEstimator, minSampleSize=30, onSample, onWinner, onError })`
+- MCP URI pattern: `config://prompt-experiment/${name}`
+- Winner status values: `'insufficient-samples'`, `'inconclusive-overlap'`, `'confident'` — stable
+
+### Composition
+- Place `promptExperiment` OUTSIDE the shipped
+  `semanticCache`/`responseCache` — variants must not share cache
+  entries; otherwise treatment leaks across arms.
+- Compose with `costAwareRouter` (2.10) — the router decides tier;
+  the experiment decides which prompt inside the tier. Different axes.
+- Compose with `sessionContextStore` (2.19) using the session ID as
+  `splitKeyOf` so the same session always sees the same variant
+  across turns (avoids mixed-treatment noise within a conversation).
+
 ## [2.19.0] — 2026-08-12
 
 ### Added

@@ -35,7 +35,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
 | **Long-context** | `compactHistory` · `sessionContextStore` (v2.19.0 — per-session history with prune / summarize) · `inMemorySessionStore` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` |
-| **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` |
+| **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` · `promptExperiment` (v2.20.0 — live A/B testing with 95% CI winner detection) |
 | **Bulk workflows** | `runBatch` · `waitForBatch` |
 | **Multimodal helpers** | `imageFromFile` / `pdfFromUrl` / `audioFromBase64` / `uploadPdfFromUrl` / etc. |
 | **Agent orchestration** | `runTools` · `streamTools` · `Agent` · `runAgents` · `streamAgents` |
@@ -1148,6 +1148,46 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Prompt A/B experiment framework (new in v2.20.0)
+
+`promptExperiment` runs N variants of a prompt against each other in **production traffic**, captures per-variant score + latency + cost distributions, and declares a statistically-defensible winner via 95% CI overlap check. Complements the shipped offline eval primitives (`llmJudge`, `promptRegression`, `scoreResponse`, `consensusVoting`) with the online production-traffic half of the eval story.
+
+```js
+const { promptExperiment, scoreResponse } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(promptExperiment({
+  name: 'invoice-summarization-2026Q3',
+  variants: [
+    { name: 'control', weight: 5 },
+    { name: 'terse',   weight: 3, apply: (req) => ({ ...req, system: 'Be terse. Bullets only.' }) },
+    { name: 'chatty',  weight: 2, apply: (req) => ({ ...req, system: 'Be friendly + detailed.' }) },
+  ],
+  splitKeyOf:    (ctx) => ctx.request.userId ?? ctx.request.sessionId,
+  scorer:        (result) => scoreResponse(result, { rubric: myRubric }).score,
+  costEstimator: (result) => (result.usage?.output_tokens ?? 0) * 0.00001,
+  onWinner: (i) => cds.log('llm:exp').warn('winner!', i),
+}));
+
+// Later, check the current winner:
+const w = experiment.getWinner();
+// { winner: 'terse', status: 'confident',
+//   top: 'terse',   topScore: 0.87, topCI: [0.82, 0.92],
+//   runnerUp: 'control', runnerUpScore: 0.71, runnerUpCI: [0.66, 0.76],
+//   variants: [...] }
+```
+
+Highlights:
+- **Weighted consistent-hash assignment** — same `splitKey` always maps to the same variant, so users experience the same variant across restarts, in-flight requests, and session reloads. Distinct experiments assign independently (a user in "control" of Experiment A may be in "v2" of Experiment B).
+- **Welford's online algorithm** for score / latency / cost mean + variance. O(1) memory regardless of sample count — safe to run indefinitely without accumulating storage.
+- **95% CI winner detection** with three status values:
+  - `'insufficient-samples'` — fewer than `minSampleSize` (default 30) per variant
+  - `'inconclusive-overlap'` — CIs of top two variants overlap; difference is within noise
+  - `'confident'` — top CI doesn't overlap runner-up; statistically defensible
+- **Multiple experiments compose** — just declare each with a different `name` and stack them in the chain. Each has its own MCP resource (`config://prompt-experiment/${name}`).
+- Standalone helpers `hash32(str)`, `welfordUpdate`, `welfordStats`, `ciAroundMean` exported for custom analytics outside the middleware.
+
+Composition rule: put `promptExperiment` **outside** `semanticCache`/`responseCache` (variants must not share cache entries; otherwise treatment leaks across arms). Use the session ID as `splitKeyOf` when composed with `sessionContextStore` so the same session always sees the same variant across turns (avoids mixed-treatment noise within a conversation).
 
 ## Session context store (new in v2.19.0)
 
