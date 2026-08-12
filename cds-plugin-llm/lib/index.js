@@ -221,6 +221,8 @@ module.exports = {
   semanticCache:          require('./middleware/semanticCache').semanticCache,
   inMemorySemanticStore:  require('./middleware/semanticCache').inMemorySemanticStore,
   cosineSimilarity:       require('./middleware/semanticCache').cosineSimilarity,
+  // Request coalescer — in-flight dedup of identical concurrent LLM calls (new in 2.8.0)
+  requestCoalescer:       require('./middleware/requestCoalescer').requestCoalescer,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

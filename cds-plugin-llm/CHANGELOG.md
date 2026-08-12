@@ -4,6 +4,46 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] — 2026-08-12
+
+### Added
+- **`requestCoalescer` middleware** — in-flight deduplicator for identical
+  concurrent LLM calls. N callers with the same key await a single shared
+  upstream Promise and receive the same result. Fixes classic cache-stampede
+  on cold `semanticCache` (2.7) / `responseCache` (0.9) — the first miss no
+  longer triggers N parallel misses racing to populate the cache.
+- Default `keyOf` hashes the fields that meaningfully alter a response
+  (model, system, prompt, messages, format, tool names, temperature,
+  maxTokens); override via `keyOf(ctx)` for tenant-scoped or intentionally
+  coarser grouping. Return `null` to opt a call out of coalescing.
+- **`ttlMs > 0`** enables a post-settle window: briefly-following identical
+  requests are served from the leader's result (or error). 0 = strictly-
+  concurrent coalescing only.
+- **Streaming methods skipped by default** — you can't fan out a consumed
+  stream. Configurable via `skipMethods`.
+- **`cloneResult`** deep-clones the shared result per caller so downstream
+  mutations don't leak across coalesced requests. Default false (share
+  reference).
+- **`keyPrefix`** namespaces coalescing across tenants; `maxInFlightKeys`
+  is a safety cap after which additional distinct keys pass straight
+  through.
+- MCP resource `config://request-coalescer` exposes leads / coalesced /
+  ttlHits counts, `savingsRatio`, in-flight + recently-settled sizes,
+  `peakInFlight`, and config.
+- TypeScript: `RequestCoalescerOptions`, `RequestCoalescerStats`,
+  `RequestCoalescerMiddleware`.
+
+### API contract (frozen)
+- Signature: `requestCoalescer({ keyOf, ttlMs=0, maxInFlightKeys=null, skipMethods, cloneResult=false, keyPrefix='', onCoalesce, onLead, onSettle, onError })`
+- MCP URI: `config://request-coalescer`
+- Skip-method defaults: `['stream', 'streamCompletion']` — stable
+
+### Composition
+- Wrap `requestCoalescer` OUTSIDE `semanticCache`/`responseCache` to absorb
+  the burst on a cold key before it hits the cache.
+- Wrap `requestCoalescer` OUTSIDE `bulkhead`/`retry` — one shared upstream
+  call should only consume one slot and one retry budget, not N.
+
 ## [2.7.0] — 2026-08-11
 
 ### Added

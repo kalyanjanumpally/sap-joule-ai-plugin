@@ -4439,6 +4439,90 @@ export interface SemanticCacheMiddleware extends Middleware {
  */
 export function semanticCache(options: SemanticCacheOptions): SemanticCacheMiddleware;
 
+// ---- Request coalescer (new in 2.8.0) --------------------------------
+
+export interface RequestCoalescerOptions {
+  /**
+   * Compute a coalescing key from ctx. Return `null` to opt this call
+   * out of coalescing. Default: hash of `request.model`, `system`,
+   * `prompt`, `messages`, `format`, `tools[].name`, `temperature`,
+   * `maxTokens`.
+   */
+  keyOf?: (ctx: unknown) => string | null;
+  /**
+   * Post-settle window in ms during which briefly-following identical
+   * requests are served from the leader's result. 0 = strictly-concurrent
+   * coalescing only. Default 0.
+   */
+  ttlMs?:            number;
+  /**
+   * Safety cap on distinct in-flight keys. Additional distinct keys are
+   * passed straight through (still counted as `dropped`). Default null.
+   */
+  maxInFlightKeys?:  number | null;
+  /** Methods that skip coalescing entirely. Default `['stream', 'streamCompletion']`. */
+  skipMethods?:      string[];
+  /**
+   * Deep-clone the shared result before returning to each caller.
+   * Default false (share reference — faster, but callers must not mutate).
+   */
+  cloneResult?:      boolean;
+  /** Namespace prefix — isolates coalescing across tenants. Default ''. */
+  keyPrefix?:        string;
+  onCoalesce?: (info: { key: string; source: 'inflight' | 'ttl'; waiters: number | null }) => void;
+  onLead?:     (info: { key: string; startedAt: number }) => void;
+  onSettle?:   (info: { key: string; durationMs: number; waiters: number; outcome: 'ok' | 'error' }) => void;
+  onError?:    (info: { phase: 'keyOf' | 'next'; error: unknown }) => void;
+  now?:        () => number;
+}
+
+export interface RequestCoalescerStats {
+  totalCalls:      number;
+  leads:           number;
+  coalesced:       number;
+  ttlHits:         number;
+  errors:          number;
+  keyErrors:       number;
+  skippedByMethod: number;
+  dropped:         number;
+  peakInFlight:    number;
+  lastKey:         string | null;
+}
+
+export interface RequestCoalescerMiddleware extends Middleware {
+  readonly stats: RequestCoalescerStats;
+  inFlightCount(): number;
+  recentlySettledCount(): number;
+  savingsRatio(): number;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://request-coalescer';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => RequestCoalescerStats & {
+      ttlMs: number;
+      keyPrefix: string;
+      maxInFlightKeys: number | null;
+      skipMethods: string[];
+      cloneResult: boolean;
+      inFlightCount: number;
+      recentlySettledCount: number;
+      savingsRatio: number;
+    };
+  };
+}
+
+/**
+ * Request coalescer / in-flight deduplicator. When N concurrent identical
+ * requests are in flight, only one upstream call is made — all N callers
+ * await the shared Promise. Fixes cache-stampede on cold caches; complements
+ * `semanticCache` and `responseCache`. Streaming methods skipped by default
+ * (consumed streams cannot be fanned out).
+ * @since 2.8.0
+ */
+export function requestCoalescer(options?: RequestCoalescerOptions): RequestCoalescerMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

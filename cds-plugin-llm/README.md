@@ -29,7 +29,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Routing** | `modelRouter` · `tenantIsolate` |
-| **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` |
+| **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
 | **Contract / GitOps** | `structuredOutputValidator` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
 | **Long-context** | `compactHistory` |
@@ -1147,6 +1147,27 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Request coalescer (new in v2.8.0)
+
+`requestCoalescer` is the in-flight sibling of `semanticCache`. When N concurrent requests arrive with the same key (same prompt + model + system by default), only ONE upstream call fires — all N callers await the same shared Promise and receive the same result. Fixes the classic **cache-stampede** on cold caches: the first miss no longer triggers N parallel misses racing to populate.
+
+```js
+const { requestCoalescer, semanticCache } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(requestCoalescer({
+  ttlMs: 500,               // also coalesce briefly-following requests
+  onCoalesce: (i) => cds.log('llm:coalesce').info(i),
+}));
+llm.use(semanticCache({ embedder, store }));
+```
+
+- **Streaming methods are skipped** by default (a consumed stream can't be fanned out). Overridable via `skipMethods`.
+- **`cloneResult: true`** deep-clones the shared result per caller if downstream code mutates it.
+- **`keyPrefix`** namespaces coalescing across tenants; **`maxInFlightKeys`** caps the map size as a safety valve during pathological fan-out.
+- MCP resource `config://request-coalescer` exposes `savingsRatio`, in-flight + recently-settled counts, `peakInFlight`, and lead/coalesce/ttl-hit counters.
+
+Composition rule: wrap `requestCoalescer` **outside** `semanticCache`/`responseCache` to absorb the burst before it hits the cache, and **outside** `bulkhead`/`retry` — one shared upstream call should only consume one slot and one retry budget, not N.
 
 ## Adaptive rate-limit tuner (new in v2.6.0)
 
