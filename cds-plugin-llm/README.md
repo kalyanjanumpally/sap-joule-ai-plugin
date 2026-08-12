@@ -30,7 +30,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Routing** | `modelRouter` · `tenantIsolate` |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
-| **Contract / GitOps** | `structuredOutputValidator` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
+| **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
 | **Long-context** | `compactHistory` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` |
@@ -1147,6 +1147,29 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Structured-output auto-repair (new in v2.9.0)
+
+`structuredOutputRepair` upgrades the "response failed schema validation" story from **fail** (v1.x `structuredOutputValidator` in `throw` mode) or **fail-then-re-ask** (validator with `onInvalid: 'retry'`) to a **strategy chain**: cheap deterministic local fixes are tried first, and the LLM is only re-asked when local repair fails. Most fixable outputs cost zero extra tokens.
+
+```js
+const { structuredOutputRepair, schemas } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(structuredOutputRepair({
+  schemaFrom: (ctx) => ctx.request.format,
+  strategies: ['json-fix', 're-ask'],   // order matters
+  maxLlmRetries: 1,
+  onRepair: (info) => cds.log('llm:repair').info(info),
+}));
+```
+
+Built-in strategies:
+- **`json-fix`** — strips ```json fences, narrows to the outer `{...}` block, removes `//` and `/* */` comments (respecting quoted regions), removes trailing commas, quotes unquoted keys, converts single-quoted strings to double-quoted. Deterministic, idempotent for already-valid JSON.
+- **`re-ask`** — sends a corrective user message with the schema violations inline, bounded by `maxLlmRetries`. Retry-result is propagated so callers see the corrected text/data, not just the parsed object.
+
+Custom strategies plug in as `{ name, apply(rawText, { errors, schema, parsed }) }`. Throwing custom strategies are skipped silently and the chain continues. All strategies share the same `StructuredOutputInvalidError` on exhaustion → unified downstream error handling with the 1.x validator. MCP resource: `config://structured-output-repair` (strategy list + per-strategy hit counts + LLM retries used).
+
+Standalone `jsonAutoFix(text)` is also exported for one-off cleanup outside a middleware chain (useful in offline scripts).
 
 ## Request coalescer (new in v2.8.0)
 

@@ -4,6 +4,50 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] — 2026-08-12
+
+### Added
+- **`structuredOutputRepair` middleware** — multi-strategy auto-recovery
+  for LLM responses that fail JSON-schema validation. Complements the
+  shipped 1.x `structuredOutputValidator` (validate + re-ask) by adding
+  a **strategy chain**: cheap deterministic local repair is tried before
+  an LLM re-ask, so most fixable outputs cost zero extra tokens.
+- **Built-in `json-fix` strategy** — strips ```json / ``` code fences,
+  narrows to outer `{...}` / `[...]` blocks, removes `//` and `/* */`
+  comments (respecting quoted regions), removes trailing commas, quotes
+  unquoted object keys, and converts single-quoted strings to
+  double-quoted (via a walker that respects existing double-quoted
+  regions). Deterministic and idempotent for already-valid JSON.
+- **Built-in `re-ask` strategy** — sends a corrective user message with
+  the schema violations inline, bounded by `maxLlmRetries` (default 1).
+  Retry-result is propagated so callers see the corrected text/data,
+  not just the parsed object.
+- **Custom strategies** — pass `{ name, apply(rawText, { errors, schema, parsed }) }`
+  objects alongside strings in the `strategies` array. Custom strategies
+  that throw are silently skipped; the chain continues.
+- Throws the same `StructuredOutputInvalidError` as the existing validator
+  when the chain is exhausted → downstream error handling is unified.
+- **`jsonAutoFix(text)`** exported as a standalone helper for one-off use
+  outside the middleware chain.
+- **`BUILT_IN_STRATEGIES`** frozen list exported for discoverability +
+  programmatic UI generation.
+- MCP resource `config://structured-output-repair` exposes strategy list,
+  `maxLlmRetries`, first-try / repaired / gave-up counts, per-strategy hit
+  counts, and LLM-retries used.
+- TypeScript: `StructuredOutputRepairOptions`, `StructuredOutputRepairStats`,
+  `StructuredOutputRepairMiddleware`, `StructuredOutputRepairStrategy`.
+
+### API contract (frozen)
+- Signature: `structuredOutputRepair({ schema, schemaFrom, validate, strategies=['json-fix', 're-ask'], maxLlmRetries=1, buildCorrection, applyCorrection, attachParsedAs='parsed', onRepair, onGiveUp, onSuccess })`
+- MCP URI: `config://structured-output-repair`
+- Built-in strategy names: `'json-fix'`, `'re-ask'` (stable — safe to match in tests)
+
+### Composition
+- `structuredOutputRepair` is a peer of the 1.x `structuredOutputValidator`
+  — use either, not both. Pick `structuredOutputRepair` when you want free
+  local fixes ahead of the LLM re-ask; pick `structuredOutputValidator`
+  when you want the simpler strict validate + re-ask semantics.
+
 ## [2.8.0] — 2026-08-12
 
 ### Added

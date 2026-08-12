@@ -4523,6 +4523,92 @@ export interface RequestCoalescerMiddleware extends Middleware {
  */
 export function requestCoalescer(options?: RequestCoalescerOptions): RequestCoalescerMiddleware;
 
+// ---- Structured output repair (new in 2.9.0) ------------------------
+
+export type StructuredOutputRepairStrategy =
+  | 'json-fix'
+  | 're-ask'
+  | {
+      name: string;
+      apply: (
+        rawText: string | null,
+        info: { errors: string[]; schema: unknown; parsed: unknown },
+      ) => unknown | Promise<unknown>;
+    };
+
+export interface StructuredOutputRepairOptions {
+  /** Static schema, used when `schemaFrom` isn't provided or returns null. */
+  schema?:         object | null;
+  /** Extract schema per-request from the ctx. Takes precedence over `schema`. */
+  schemaFrom?:     (ctx: unknown) => object | null;
+  /** Validator: `(obj, schema) => string[] | { ok, errors }`. Default: built-in. */
+  validate?:       (obj: unknown, schema: unknown) => string[] | { ok: boolean; errors?: string[] };
+  /**
+   * Strategy chain — tried in order until one succeeds. Strings resolve to
+   * built-ins (`json-fix`, `re-ask`); pass an object for custom strategies.
+   * Default `['json-fix', 're-ask']`.
+   */
+  strategies?:     StructuredOutputRepairStrategy[];
+  /** Max LLM re-ask attempts (across the whole strategy chain). Default 1. */
+  maxLlmRetries?:  number;
+  /** Customize the corrective prompt used by the re-ask strategy. */
+  buildCorrection?: (info: { errors: string[]; schema: unknown; rawText: string | null }) => string;
+  /** Customize how the corrective prompt is applied to the request. */
+  applyCorrection?: (request: unknown, correctionText: string) => unknown;
+  /** Attach the parsed object as this key on the result. Default 'parsed'. */
+  attachParsedAs?:  string | null;
+  onRepair?:  (info: { strategy: string; from: unknown; to: unknown; errors: string[] }) => void;
+  onGiveUp?:  (info: { errors: string[]; strategiesTried: string[]; rawText: string | null }) => void;
+  onSuccess?: (info: { attempts: number; strategy: string | null; result: unknown }) => void;
+}
+
+export interface StructuredOutputRepairStats {
+  totalValidated: number;
+  validFirstTry: number;
+  repaired:      number;
+  gaveUp:        number;
+  skipped:       number;
+  byStrategy:    Record<string, number>;
+  llmRetries:    number;
+}
+
+export interface StructuredOutputRepairMiddleware extends Middleware {
+  readonly stats: StructuredOutputRepairStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://structured-output-repair';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => StructuredOutputRepairStats & {
+      strategies:    string[];
+      maxLlmRetries: number;
+      hasStaticSchema: boolean;
+      hasSchemaFrom:   boolean;
+    };
+  };
+}
+
+/**
+ * Multi-strategy auto-recovery for JSON-schema violations. Complements the
+ * existing `structuredOutputValidator` (validate + re-ask) by adding a
+ * strategy chain: deterministic local `json-fix` (strip fences, quote
+ * unquoted keys, remove trailing commas, convert single-quotes) is tried
+ * before LLM `re-ask`, keeping repair free when possible. Throws the same
+ * `StructuredOutputInvalidError` on exhaustion so the two middlewares
+ * share downstream error handling.
+ * @since 2.9.0
+ */
+export function structuredOutputRepair(options?: StructuredOutputRepairOptions): StructuredOutputRepairMiddleware;
+
+/**
+ * Deterministic local JSON auto-fixer used by the `json-fix` strategy of
+ * `structuredOutputRepair`. Exposed for standalone use. Returns the parsed
+ * object on success, or `null` when repair fails.
+ * @since 2.9.0
+ */
+export function jsonAutoFix(text: string): unknown | null;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

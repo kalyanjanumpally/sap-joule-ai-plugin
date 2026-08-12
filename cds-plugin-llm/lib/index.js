@@ -223,6 +223,9 @@ module.exports = {
   cosineSimilarity:       require('./middleware/semanticCache').cosineSimilarity,
   // Request coalescer — in-flight dedup of identical concurrent LLM calls (new in 2.8.0)
   requestCoalescer:       require('./middleware/requestCoalescer').requestCoalescer,
+  // Structured output repair — multi-strategy auto-recovery for schema violations (new in 2.9.0)
+  structuredOutputRepair: require('./middleware/structuredOutputRepair').structuredOutputRepair,
+  jsonAutoFix:            require('./middleware/structuredOutputRepair').jsonAutoFix,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,
