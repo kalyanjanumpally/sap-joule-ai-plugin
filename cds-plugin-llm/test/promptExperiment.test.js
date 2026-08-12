@@ -372,6 +372,9 @@ test('promptExperiment: getWinner declares winner when CIs disjoint', async () =
   const w = mw.getWinner();
   assert.equal(w.status, 'confident');
   assert.equal(w.winner, 'good');
+  // Both `winner` and `top` set for symmetry with the inconclusive-overlap branch.
+  assert.equal(w.top, 'good');
+  assert.equal(w.runnerUp, 'bad');
 });
 
 test('promptExperiment: getWinner inconclusive-overlap when tied', async () => {

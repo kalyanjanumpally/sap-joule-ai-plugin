@@ -312,6 +312,7 @@ function promptExperiment(options = {}) {
     const info = {
       winner:      top.name,
       status:      'confident',
+      top:         top.name,
       topScore:    top.scoreMean,
       topCI:       topCI,
       runnerUp:    runnerUp.name,

@@ -4,6 +4,16 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.20.1] — 2026-08-12
+
+### Fixed
+- **`promptExperiment.getWinner()` missing `top` field on `confident` branch.**
+  The 2.20.0 TypeScript definitions declared `top?: string` on
+  `PromptExperimentWinner` and the `inconclusive-overlap` branch set it,
+  but the `confident` branch only set `winner` (leaving `top` undefined).
+  Now both branches populate `top` for symmetry — callers can uniformly
+  read `result.top` for the top variant name regardless of status.
+
 ## [2.20.0] — 2026-08-12
 
 ### Added
