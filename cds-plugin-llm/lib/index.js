@@ -249,6 +249,7 @@ module.exports = {
   // Provider load balancer — rotate across N credentials of same provider kind (new in 2.17.0)
   providerLoadBalancer:   require('./middleware/providerLoadBalancer').providerLoadBalancer,
   AllCredentialsUnhealthyError: require('./middleware/providerLoadBalancer').AllCredentialsUnhealthyError,
+  PROVIDER_LOAD_BALANCER_STRATEGIES: require('./middleware/providerLoadBalancer').STRATEGIES,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

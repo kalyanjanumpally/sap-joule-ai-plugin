@@ -4,6 +4,17 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.17.1] — 2026-08-12
+
+### Fixed
+- **Missing `PROVIDER_LOAD_BALANCER_STRATEGIES` runtime export.** The
+  2.17.0 TypeScript definitions declared `STRATEGIES` as a top-level
+  export from the package but the runtime `lib/index.js` didn't
+  re-export it — importing the constant threw `TypeError: Cannot read
+  properties of undefined`. Renamed to
+  `PROVIDER_LOAD_BALANCER_STRATEGIES` (avoids collision with future
+  generic strategy names) and wired the runtime export.
+
 ## [2.17.0] — 2026-08-12
 
 ### Added

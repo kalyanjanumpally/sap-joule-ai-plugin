@@ -5335,7 +5335,7 @@ export class AllCredentialsUnhealthyError extends LLMError {
 export function providerLoadBalancer(options: ProviderLoadBalancerOptions): ProviderLoadBalancerMiddleware;
 
 /** Strategy names accepted by `providerLoadBalancer`. Frozen. @since 2.17.0 */
-export const STRATEGIES: readonly ProviderLoadBalancerStrategy[];
+export const PROVIDER_LOAD_BALANCER_STRATEGIES: readonly ProviderLoadBalancerStrategy[];
 
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
