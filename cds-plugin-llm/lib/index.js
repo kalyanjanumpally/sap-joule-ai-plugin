@@ -226,6 +226,8 @@ module.exports = {
   // Structured output repair — multi-strategy auto-recovery for schema violations (new in 2.9.0)
   structuredOutputRepair: require('./middleware/structuredOutputRepair').structuredOutputRepair,
   jsonAutoFix:            require('./middleware/structuredOutputRepair').jsonAutoFix,
+  // Cost-aware model router — cheap-first, escalate on low score (new in 2.10.0)
+  costAwareRouter:        require('./middleware/costAwareRouter').costAwareRouter,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

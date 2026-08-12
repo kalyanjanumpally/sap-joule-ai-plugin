@@ -4609,6 +4609,107 @@ export function structuredOutputRepair(options?: StructuredOutputRepairOptions):
  */
 export function jsonAutoFix(text: string): unknown | null;
 
+// ---- Cost-aware model router (new in 2.10.0) ------------------------
+
+export interface CostAwareRouterTier {
+  /** Model identifier — swapped into `request.model` at each attempt. */
+  model:           string;
+  /** USD per million input tokens. Optional; enables cost accounting. */
+  pricePerMtokIn?: number;
+  /** USD per million output tokens. Optional; enables cost accounting. */
+  pricePerMtokOut?: number;
+  /** Arbitrary tier metadata — surfaced via `asMcpResource()` and callbacks. */
+  [key: string]: unknown;
+}
+
+export interface CostAwareRouterOptions {
+  /** Ordered tier list — cheap → premium. Must have at least 2 entries. */
+  tiers:  CostAwareRouterTier[];
+  /**
+   * Response scorer. Returns a number in [0, 1]; below `scoreThreshold`
+   * triggers escalation to the next tier. Throws / non-numeric results
+   * are treated as failing (safer to escalate than to fail loudly).
+   */
+  scorer: (result: unknown, ctx: unknown) => number | Promise<number>;
+  /** Threshold below which the current tier's response is rejected. Default 0.7. */
+  scoreThreshold?: number;
+  /**
+   * Max number of escalation steps. `null` = escalate through all tiers.
+   * `0` = never escalate (return the cheap tier's response as-is). Default null.
+   */
+  maxEscalations?: number | null;
+  /** Escalate to next tier on a downstream error. Default true. */
+  escalateOnError?: boolean;
+  /**
+   * Apply the tier's model to the request. Default:
+   * `(request, model) => ({ ...request, model })`.
+   */
+  applyModel?: (request: unknown, model: string) => unknown;
+  /** Label callback. Default `(tier, i) => \`tier\${i}\``. */
+  tierName?:   (tier: CostAwareRouterTier, index: number) => string;
+  onEscalate?: (info: {
+    fromTier: string; fromIndex: number;
+    toTier:   string; toIndex:   number;
+    reason:   'low-score' | 'downstream-error';
+    score:    number | null;
+    error?:   unknown;
+  }) => void;
+  onFinal?: (info: {
+    tier: string; tierIndex: number; score: number;
+    escalated: boolean; aboveThreshold: boolean;
+  }) => void;
+  onError?: (info: {
+    phase: 'downstream' | 'scorer';
+    tier?: string; tierIndex?: number;
+    error: unknown;
+  }) => void;
+}
+
+export interface CostAwareRouterStats {
+  totalCalls:              number;
+  resolvedByTier:          Record<string, number>;
+  escalations:             number;
+  escalationsByFromTier:   Record<string, number>;
+  scoreExceptions:         number;
+  downstreamErrors:        number;
+  givenUp:                 number;
+  tokensSavedUsd:          number;
+  tokensSpentUsd:          number;
+  lastTier:                string | null;
+  lastScore:               number | null;
+}
+
+export interface CostAwareRouterMiddleware extends Middleware {
+  readonly stats: CostAwareRouterStats;
+  reset(): void;
+  escalationRate(): number;
+  savingsRatio():   number;
+  asMcpResource(): {
+    uri: 'config://cost-aware-router';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => CostAwareRouterStats & {
+      tiers: Array<{ name: string; model: string; pricePerMtokIn: number | null; pricePerMtokOut: number | null }>;
+      scoreThreshold:  number;
+      maxEscalations:  number | null;
+      escalateOnError: boolean;
+      escalationRate:  number;
+      savingsRatio:    number;
+    };
+  };
+}
+
+/**
+ * Cost-aware model router. Tries a cheap tier first; if the response
+ * scores below `scoreThreshold`, escalates to the next tier. Ties
+ * together `modelRouter` (static routing), `scoreResponse` (2.4
+ * mechanical scoring), and `costForecast` (2.1 budgeting). Real
+ * economic win for repetitive tasks with a quality floor.
+ * @since 2.10.0
+ */
+export function costAwareRouter(options: CostAwareRouterOptions): CostAwareRouterMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

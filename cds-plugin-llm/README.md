@@ -28,7 +28,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
-| **Routing** | `modelRouter` · `tenantIsolate` |
+| **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
 | **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
@@ -1147,6 +1147,33 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Cost-aware model router (new in v2.10.0)
+
+`costAwareRouter` tries a **cheap-tier** model first; if the response scores below your quality threshold, it escalates to the **premium tier**. Ties together three previously-shipped primitives — `modelRouter` (static routing), `scoreResponse` (mechanical scoring), and `costForecast` (budgeting) — into an economic win pattern: most calls run cheap; only the hard ones escalate.
+
+```js
+const { costAwareRouter, scoreResponse } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(costAwareRouter({
+  tiers: [
+    { model: 'gpt-4o-mini', pricePerMtokIn: 0.15, pricePerMtokOut: 0.60 },
+    { model: 'gpt-4o',      pricePerMtokIn: 2.50, pricePerMtokOut: 10.00 },
+  ],
+  scorer:         (result) => scoreResponse(result, { rubric: myRubric }).score,
+  scoreThreshold: 0.75,
+  onEscalate: (i) => cds.log('llm:router').info('escalate', i),
+  onFinal:    (i) => cds.log('llm:router').info('final',    i),
+}));
+```
+
+Highlights:
+- **Multi-tier**: 2, 3, or N tiers. `maxEscalations` caps how far the router will escalate.
+- **`escalateOnError`** (default true): a downstream throw on the cheap tier promotes to the next tier instead of surfacing the error — this is a *quality-driven* re-attempt on a *different model*, distinct from `retry` (transport-error re-attempt on the *same* one).
+- **Fail-safe scorer**: exceptions or non-numeric returns count as failing scores. Safer to escalate than to fail loudly.
+- **Cost accounting**: when tier pricing is set, `tokensSpentUsd` / `tokensSavedUsd` / `savingsRatio()` are computed from the shipped `result.usage`. Live-visible via `config://cost-aware-router`.
+
+Placement rule: put `costAwareRouter` **outside** any middleware that reads `request.model` (retry, bulkhead, providers). The router mutates `request.model` per attempt so downstream sees each tier as a fresh call.
 
 ## Structured-output auto-repair (new in v2.9.0)
 

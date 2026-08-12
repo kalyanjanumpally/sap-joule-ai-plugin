@@ -4,6 +4,49 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] — 2026-08-12
+
+### Added
+- **`costAwareRouter` middleware** — tries a cheap-tier model first; if the
+  response scores below a quality threshold, escalates to the next tier.
+  Ties together `modelRouter` (1.x — static routing rules), `scoreResponse`
+  (2.4 — mechanical response scoring), and `costForecast` (2.1 — budget
+  projection). Real economic win for repetitive tasks with a quality
+  floor: most calls run on the cheap model; only the hard ones escalate.
+- **Multi-tier support** — `tiers: [{ model, pricePerMtokIn, pricePerMtokOut, ...meta }]`.
+  Escalate through 2, 3, or N tiers with `maxEscalations` as a safety cap
+  (default: escalate through all tiers).
+- **`escalateOnError`** (default true) — a downstream throw on the cheap
+  tier promotes the request to the next tier instead of surfacing the
+  error. Different from `retry` — this is a *quality-driven* re-attempt
+  onto a *different model*, not a transport-error retry on the same one.
+- **Fail-safe scorer** — scorer exceptions or non-numeric returns are
+  treated as failing scores (safer to escalate than to fail loudly).
+- **Cost accounting** — when `pricePerMtokIn`/`pricePerMtokOut` are set,
+  the middleware estimates `tokensSpentUsd` (what you actually spent) and
+  `tokensSavedUsd` (what the top tier would have cost minus what you paid
+  when resolving on a cheaper tier). `savingsRatio()` returns the fraction
+  saved vs. always-premium.
+- MCP resource `config://cost-aware-router` exposes per-tier config,
+  per-tier resolve counts, per-tier escalation counts, `escalationRate`,
+  `savingsRatio`, and full stats — real-time visibility into "how often
+  are we escalating and how much are we saving."
+- TypeScript: `CostAwareRouterOptions`, `CostAwareRouterTier`,
+  `CostAwareRouterStats`, `CostAwareRouterMiddleware`.
+
+### API contract (frozen)
+- Signature: `costAwareRouter({ tiers, scorer, scoreThreshold=0.7, maxEscalations=null, escalateOnError=true, applyModel, tierName, onEscalate, onFinal, onError })`
+- MCP URI: `config://cost-aware-router`
+- Escalation reason strings: `'low-score'`, `'downstream-error'` (stable — safe to match in tests)
+
+### Composition
+- Place `costAwareRouter` OUTSIDE any middleware that reads `request.model`
+  (retry, bulkhead, providers). The router mutates `request.model` per
+  attempt so downstream sees each tier as a fresh call.
+- Compose with `scoreResponse` (2.4) as the natural `scorer`, and with
+  `costForecast` (2.1) downstream to project the savings against a
+  monthly budget.
+
 ## [2.9.0] — 2026-08-12
 
 ### Added
