@@ -244,6 +244,8 @@ module.exports = {
   // Retry budget — SRE-style cap on retries-to-requests ratio (new in 2.15.0)
   retryBudget:            require('./middleware/retryBudget').retryBudget,
   RetryBudgetExhaustedError: require('./middleware/retryBudget').RetryBudgetExhaustedError,
+  // Semantic router — embedding-based routing to model/system prompt buckets (new in 2.16.0)
+  semanticRouter:         require('./middleware/semanticRouter').semanticRouter,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

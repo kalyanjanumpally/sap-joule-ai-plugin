@@ -29,7 +29,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
-| **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) |
+| **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
 | **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
@@ -1148,6 +1148,55 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Semantic router (new in v2.16.0)
+
+`semanticRouter` picks the model + system prompt + params by **embedding the user's request** and matching it against per-route centroids (cosine similarity). Each route is defined by a bucket of example prompts; the middleware averages their embeddings to form a centroid, then classifies incoming queries by nearest neighbor.
+
+```js
+const { semanticRouter } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(semanticRouter({
+  embedder: async (text) => (await llm.embed({ input: text })).embeddings[0],
+  routes: [
+    {
+      name:     'code',
+      model:    'anthropic/claude-opus-4-7',
+      system:   'You are an expert engineer. Return runnable code.',
+      examples: ['Write a Python function to reverse a string', 'Debug this TS error', 'Refactor this Go handler'],
+    },
+    {
+      name:     'procurement',
+      model:    'openai/gpt-4o',
+      system:   'You are an SAP procurement analyst.',
+      examples: ['Analyze this vendor quote', 'Draft a PO for 500 units', 'What are the payment terms?'],
+    },
+    {
+      name:        'chit-chat',
+      model:       'openai/gpt-4o-mini',
+      temperature: 0.9,
+      examples:    ['Hi', 'How are you?', 'Tell me a joke'],
+    },
+  ],
+  threshold:    0.75,
+  defaultRoute: 'chit-chat',
+  onRoute: (i) => cds.log('llm:router').info('routed', i),
+}));
+```
+
+Complements the two other routing primitives:
+- **`modelRouter`** (1.x) — static keyword/predicate routing. Deterministic, easy to reason about, but requires you to enumerate rules.
+- **`costAwareRouter`** (v2.10.0) — *reactive* escalation: cheap tier first, escalate on low score.
+- **`semanticRouter`** (v2.16.0) — *predictive* first pick: classify by meaning, get the right tier from the start.
+
+Compose them: semantic router picks the tier upfront; cost-aware router escalates when the prediction was wrong.
+
+Highlights:
+- **Lazy centroids** — construction is zero-latency. First call computes example embeddings and caches them. `warmup()` pre-computes eagerly if you want deterministic startup.
+- **Precomputed centroids** — ship `centroid: [1, 0, 0, ...]` on a route to skip embedding entirely. Useful for offline-computed centroids that stay stable across deploys.
+- **Fail-open** — embedder or extractKey errors fall through to `next()` unmodified. The router never takes the request path down.
+- **Threshold + fallback** — below-threshold queries use `defaultRoute` (or passthrough if null). Prevents forcing a bad route onto ambiguous queries.
+- MCP resource `config://semantic-router` exposes route table (names, models, example counts, centroid readiness), threshold, default route, and route distribution.
 
 ## Retry budget (new in v2.15.0)
 

@@ -4,6 +4,61 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.0] — 2026-08-12
+
+### Added
+- **`semanticRouter` middleware** — picks a model + system prompt +
+  temperature by embedding the user's request and matching it against
+  per-route centroids (cosine similarity). Bring your own embedder;
+  each route is defined by a bucket of example prompts (or a
+  precomputed centroid vector). Complements the shipped 1.x
+  `modelRouter` (static keyword/predicate routing) with learned
+  routing: classify by meaning, not by keyword.
+- Complements `costAwareRouter` (2.10) which is *reactive* (escalate
+  on low score) with a *predictive* first pick. Compose them: the
+  semantic router picks the right tier upfront; the cost-aware
+  router escalates when the prediction was wrong.
+- **Lazy centroid computation** — construction is zero-latency. On
+  first call, each route's example embeddings are computed + averaged
+  once, cached on the route. `warmup()` method pre-computes eagerly
+  so the first real request doesn't pay the setup cost.
+- **Precomputed centroids** — ship `centroid: [...]` on a route to
+  skip embedding entirely. Useful when you've computed centroids
+  offline for stability across deploys, or when the route is defined
+  in vector space directly (no natural-language examples exist).
+- **Threshold + fallback** — if no route scores above `threshold`
+  (default 0.75), the middleware uses `defaultRoute` if set, or
+  passes through unmodified if not. Prevents forcing a bad route
+  onto ambiguous queries.
+- **Fail-open** — embedder / extractKey errors fall through to
+  `next()` unmodified. The router never takes the request path down
+  because embeddings failed.
+- **Custom `applyRoute`** — pass a function that mutates the request
+  however you need (e.g., swap providers entirely, inject RAG chunks,
+  toggle tools). Default overrides model / system / temperature /
+  maxTokens if the route sets them.
+- MCP resource `config://semantic-router` exposes the route table
+  (names, models, example counts, centroid readiness), threshold,
+  default route, distribution across routes, and full stats.
+- TypeScript: `SemanticRoute`, `SemanticRouterOptions`,
+  `SemanticRouterStats`, `SemanticRouterMiddleware`.
+
+### API contract (frozen)
+- Signature: `semanticRouter({ routes, embedder, extractKey, threshold=0.75, defaultRoute=null, applyRoute, onRoute, onFallback, onError })`
+- MCP URI: `config://semantic-router`
+- Route shape: `{ name, model?, system?, temperature?, maxTokens?, examples?[], centroid?[], ...meta }`
+
+### Composition
+- Place `semanticRouter` OUTSIDE middlewares that read `request.model`
+  or `request.system` (retry, providers). The router mutates those
+  fields per call and restores them on exit.
+- Share embeddings with `semanticCache` (2.7) — if you're already
+  running semantic cache, using the same embedder means the router's
+  query embedding can be reused for the cache lookup (advanced setup,
+  cache the vector on `ctx`).
+- Combine with `costAwareRouter` (2.10) UNDERNEATH — semantic router
+  picks the tier upfront; cost-aware escalates on low score.
+
 ## [2.15.0] — 2026-08-12
 
 ### Added

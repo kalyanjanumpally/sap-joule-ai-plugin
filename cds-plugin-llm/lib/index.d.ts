@@ -5145,6 +5145,99 @@ export class RetryBudgetExhaustedError extends LLMError {
  */
 export function retryBudget(options?: RetryBudgetOptions): RetryBudgetMiddleware;
 
+// ---- Semantic router (new in 2.16.0) --------------------------------
+
+export interface SemanticRoute {
+  /** Required label. Used as MCP key + stats bucket. */
+  name:          string;
+  /** If set, applied to `request.model` when this route wins. */
+  model?:        string;
+  /** If set, applied to `request.system` when this route wins. */
+  system?:       string;
+  /** If set, applied to `request.temperature`. */
+  temperature?:  number;
+  /** If set, applied to `request.maxTokens`. */
+  maxTokens?:    number;
+  /** Example texts embedded + averaged to form the route centroid. */
+  examples?:     string[];
+  /** Skip lazy centroid computation by shipping the vector directly. */
+  centroid?:     number[];
+  /** Arbitrary metadata — passed to callbacks + surfaced via MCP. */
+  [key: string]: unknown;
+}
+
+export interface SemanticRouterOptions {
+  routes:        SemanticRoute[];
+  /** Async embedder for the query + example texts. */
+  embedder:      (text: string) => Promise<number[]> | number[];
+  /** Extract text to classify from ctx. Default: prompt / latest user message. */
+  extractKey?:   (ctx: unknown) => string | null;
+  /** Cosine similarity threshold; below → fallback. Default 0.75. */
+  threshold?:    number;
+  /** Route name to use when no route scores above threshold. Null = passthrough. */
+  defaultRoute?: string | null;
+  /** Apply a picked route to the request. Default: overrides model/system/temperature/maxTokens if set. */
+  applyRoute?:   (request: unknown, route: SemanticRoute) => unknown;
+  onRoute?: (info: {
+    route: string; score: number; belowThreshold: boolean;
+    scoresByName: Record<string, number>;
+  }) => void;
+  onFallback?: (info: {
+    bestScore: number; bestRoute: string | null;
+    threshold: number; defaultRoute: string;
+    scoresByName: Record<string, number>;
+  }) => void;
+  onError?: (info: {
+    phase: 'extractKey' | 'embedder' | 'centroid';
+    route?: string; error: unknown;
+  }) => void;
+}
+
+export interface SemanticRouterStats {
+  totalCalls:     number;
+  routedByName:   Record<string, number>;
+  fallbacks:      number;
+  passthroughs:   number;
+  embedderErrors: number;
+  keyErrors:      number;
+  lastRoute:      string | null;
+  lastScore:      number | null;
+}
+
+export interface SemanticRouterMiddleware extends Middleware {
+  readonly stats: SemanticRouterStats;
+  reset(): void;
+  /** Route distribution (routeName → fraction of routed calls). */
+  routeDistribution(): Record<string, number>;
+  /** Precompute all centroids — eliminates first-call latency spike. */
+  warmup(): Promise<void>;
+  asMcpResource(): {
+    uri: 'config://semantic-router';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => SemanticRouterStats & {
+      routes: Array<{ name: string; model: string | null; exampleCount: number; centroidReady: boolean }>;
+      threshold:    number;
+      defaultRoute: string | null;
+      distribution: Record<string, number>;
+    };
+  };
+}
+
+/**
+ * Semantic router. Embeds the user's request and picks a route by
+ * cosine similarity against per-route centroids (averaged from example
+ * prompts, or precomputed). Applies the picked route's model / system /
+ * temperature / maxTokens. Fail-open on embedder errors — falls through
+ * to `next()` without modifying the request.
+ *
+ * Complements `modelRouter` (static keyword rules) and `costAwareRouter`
+ * (reactive quality-based escalation). This is a *predictive* first pick.
+ * @since 2.16.0
+ */
+export function semanticRouter(options: SemanticRouterOptions): SemanticRouterMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {
