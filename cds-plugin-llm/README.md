@@ -24,7 +24,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 
 | Group | Primitives |
 | --- | --- |
-| **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
+| **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `quotaManager` (v2.23.0 — per-user USD quota with warnings) · `inMemoryQuotaStore` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
 | **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
@@ -1148,6 +1148,53 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Per-user quota manager (new in v2.23.0)
+
+`quotaManager` is per-user (or per-tenant) USD quota with sliding-window tracking, rising-edge warning thresholds, and hard cap with configurable grace period. Real ask for SaaS deployments that need to bill or throttle by usage. Blocks calls **before** any real work with `QuotaExhaustedError`, so an over-quota user doesn't consume a slot or a retry budget.
+
+```js
+const { quotaManager, inMemoryQuotaStore } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(quotaManager({
+  keyOf:  (ctx) => ctx.request.userId ?? 'anon',
+  store:  inMemoryQuotaStore({ maxKeys: 10_000 }),
+  costOf: (ctx, result) => {
+    // Compute USD from result.usage using your provider pricing.
+    const inputCost  = (result.usage?.input_tokens  ?? 0) * 0.15 / 1e6;
+    const outputCost = (result.usage?.output_tokens ?? 0) * 0.60 / 1e6;
+    return inputCost + outputCost;
+  },
+  quotas: {
+    default:      { limitUsd: 10 },      // most users
+    'user-vip':   { limitUsd: 1000 },     // VIP tier
+    'user-power': { limitUsd: 100 },
+  },
+  windowMs: 30 * 24 * 3600_000,           // 30-day rolling window
+  warnThresholds: [0.5, 0.8, 0.95],
+  gracePeriodRatio: 0.02,                 // allow 2% overshoot
+  onWarn:      (i) => cds.log('llm:quota').warn('threshold', i),
+  onExhausted: (i) => cds.log('llm:quota').error('exhausted', i),
+}));
+```
+
+Complements the shipped cost primitives — pick the right layer for the job:
+- **`costBudget`** — GLOBAL cap across all users
+- **`costGuard`** — per-call cap (single-call safety net)
+- **`costForecast`** (v2.1.0) — burn-rate projection (early warning)
+- **`costAwareRouter`** (v2.10.0) — quality-driven tier escalation
+- **`quotaManager`** (v2.23.0) — per-user fairness enforcement
+
+Highlights:
+- **Pluggable store** — three async methods (`get`, `add`, optional `setLastWarnLevel` / `reset`). Ships with `inMemoryQuotaStore` (LRU eviction) as zero-infra default; swap for Redis/DynamoDB/HANA for persistence across restarts.
+- **Grace period** (default 2%) — prevents "you were charged $10.01 for a $10 quota" complaints while keeping the cap meaningful. Set to 0 for a strict cap.
+- **Rising-edge warnings** — each threshold fires once as usage crosses it upward. Reset naturally as samples age out of the sliding window.
+- **`getUsage(key)`** returns `{ usageUsd, limitUsd, utilization, samplesInWindow }` for real-time dashboards and admin UIs.
+- **`resetKey(key)`** manually clears one user's usage — useful for ops overrides (compensation, quota rebase).
+- **Fail-open** — a broken store never takes the request path down.
+- MCP resource: `config://quota-manager`.
+
+Composition rule: put `quotaManager` **outside** `bulkhead` / `retryOnRateLimit` / providers — the quota check should short-circuit BEFORE any real work. Compose with `fairShareScheduler` (v2.14.0) for the full multi-tenant story: fair-share enforces per-tenant *concurrency*, quota manager enforces per-tenant *spend*.
 
 ## Auto tool chain (new in v2.22.0)
 

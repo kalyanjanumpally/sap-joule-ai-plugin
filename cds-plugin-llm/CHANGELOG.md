@@ -4,6 +4,68 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.23.0] — 2026-08-12
+
+### Added
+- **`quotaManager` middleware** — per-user (or per-tenant) USD quota
+  with sliding-window tracking, rising-edge warning thresholds, and
+  hard cap with configurable grace period. Real ask for SaaS
+  deployments that need to bill or throttle by usage. Blocks calls
+  with `QuotaExhaustedError` (`code: 'QUOTA_EXHAUSTED'`) BEFORE any
+  real work so an over-quota user doesn't consume a slot or a retry
+  budget.
+- Complements the shipped cost primitives:
+  - `costBudget` (1.x) — GLOBAL cap
+  - `costGuard` (1.x) — per-call cap
+  - `costForecast` (2.1) — burn-rate projection
+  - `costAwareRouter` (2.10) — quality-driven tier escalation
+  - `quotaManager` (this) — PER-USER fairness layer
+- **Pluggable store** — three async methods (`get`, `add`, optional
+  `setLastWarnLevel` / `reset` / `clear` / `size`). Ships with
+  `inMemoryQuotaStore` (LRU eviction) as a zero-infra default; swap
+  for Redis/DynamoDB/pgvector using the same interface for
+  persistence across restarts.
+- **Per-key quotas** — `quotas: { 'user-vip': { limitUsd: 1000 } }`
+  overrides `defaultLimitUsd` for specific keys. Enables VIP tiers.
+- **Rising-edge warnings** — `warnThresholds` (default `[0.5, 0.8, 0.95]`)
+  fire once each time usage crosses upward. Stable within a window;
+  reset naturally as samples age out of the sliding window.
+- **Grace period** — `gracePeriodRatio` (default 0.02, i.e., 2%)
+  allows small overshoots before the hard block. Prevents "you were
+  charged $10.01 for a $10 quota" complaints while keeping the cap
+  meaningful.
+- **`getUsage(key)`** returns `{ usageUsd, limitUsd, utilization, samplesInWindow }`
+  for real-time dashboards + admin UIs.
+- **`resetKey(key)`** manually clears one user's usage — useful for
+  ops overrides (compensation, quota rebase, testing).
+- **Fail-open** on store errors — a broken store never takes the
+  request path down. Errors are captured via `onError`.
+- **Anonymous bucket** (`'anon'`) — when `keyOf` returns null/empty,
+  those calls accumulate into a shared `'anon'` bucket so unauth'd
+  traffic doesn't slip past the quota system.
+- MCP resource `config://quota-manager` exposes windowMs, thresholds,
+  grace period, configured quotas, and all counters.
+- TypeScript: `QuotaManagerOptions`, `QuotaStore`, `QuotaStoreEntry`,
+  `QuotaDefinition`, `QuotaManagerStats`, `QuotaManagerMiddleware`,
+  `InMemoryQuotaStoreOptions`, `QuotaExhaustedError`.
+
+### API contract (frozen)
+- Signature: `quotaManager({ keyOf, store, costOf, quotas={}, defaultLimitUsd=10, windowMs=30*24*3600_000, warnThresholds=[0.5,0.8,0.95], gracePeriodRatio=0.02, onWarn, onExhausted, onError })`
+- MCP URI: `config://quota-manager`
+- Error code: `QUOTA_EXHAUSTED`
+- Anonymous bucket key: `'anon'`
+- Store interface: `{ get(key), add(key, cost, ts), setLastWarnLevel?, reset?, clear?, size? }`
+
+### Composition
+- Place `quotaManager` OUTSIDE `bulkhead` / `retryOnRateLimit` /
+  providers — the quota check should short-circuit BEFORE any real
+  work.
+- Compose with `costForecast` (2.1) as an upstream projection layer:
+  forecast warns BEFORE quota exhaustion; quota manager enforces.
+- Compose with `fairShareScheduler` (2.14) for the full multi-tenant
+  story: fair-share enforces per-tenant concurrency, quota manager
+  enforces per-tenant spend.
+
 ## [2.22.0] — 2026-08-12
 
 ### Added

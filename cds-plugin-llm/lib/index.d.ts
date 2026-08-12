@@ -5820,6 +5820,118 @@ export class ToolChainCycleError extends LLMError {
  */
 export function autoToolChain(options: AutoToolChainOptions): AutoToolChainMiddleware;
 
+// ---- Quota manager (new in 2.23.0) ----------------------------------
+
+export interface QuotaStoreEntry {
+  samples:       Array<{ ts: number; cost: number }>;
+  lastWarnLevel: number;
+}
+
+export interface QuotaStore {
+  get(key: string): Promise<QuotaStoreEntry | null>;
+  add(key: string, cost: number, ts: number): Promise<void>;
+  setLastWarnLevel?(key: string, level: number): Promise<void>;
+  reset?(key: string): Promise<void>;
+  clear?():   Promise<void>;
+  size?():    Promise<number>;
+}
+
+export interface InMemoryQuotaStoreOptions {
+  maxKeys?: number;
+  now?:     () => number;
+}
+
+/** In-memory quota store with LRU eviction. Swap for Redis/DB in prod using the same interface. @since 2.23.0 */
+export function inMemoryQuotaStore(options?: InMemoryQuotaStoreOptions): QuotaStore & { _map: Map<string, unknown> };
+
+export interface QuotaDefinition {
+  limitUsd: number;
+  [key: string]: unknown;
+}
+
+export interface QuotaManagerOptions {
+  /** Extract quota key from ctx. Non-string / empty → `'anon'`. */
+  keyOf:            (ctx: unknown) => string | null | undefined;
+  /** Any object implementing the QuotaStore interface. */
+  store:            QuotaStore;
+  /** Compute USD cost of this call from ctx + result. Return number; non-number = skip. */
+  costOf:           (ctx: unknown, result: unknown) => number | null | undefined;
+  /** Per-key quota overrides. Falls back to `defaultLimitUsd`. */
+  quotas?:          Record<string, QuotaDefinition>;
+  /** Default quota for unlisted keys. Default $10. */
+  defaultLimitUsd?: number;
+  /** Rolling window size in ms. Default 30 days. */
+  windowMs?:        number;
+  /**
+   * Rising-edge warning thresholds as fractions of limit. Fires each
+   * threshold once as usage crosses it upward. Default `[0.5, 0.8, 0.95]`.
+   */
+  warnThresholds?:  number[];
+  /**
+   * Fraction of limit tolerated over the hard cap before blocking.
+   * Default 0.02 (2%). Set to 0 for a strict cap.
+   */
+  gracePeriodRatio?: number;
+  onWarn?:      (info: { key: string; level: number; utilization: number; usageUsd: number; limitUsd: number; windowMs: number }) => void;
+  onExhausted?: (info: { key: string; usageUsd: number; limitUsd: number; windowMs: number }) => void;
+  onError?:     (info: { phase: string; error: unknown }) => void;
+  now?:         () => number;
+}
+
+export interface QuotaManagerStats {
+  totalCalls:      number;
+  allowedCalls:    number;
+  blockedCalls:    number;
+  warningsFired:   number;
+  costErrors:      number;
+  storeErrors:     number;
+  keyErrors:       number;
+  totalTrackedUsd: number;
+  lastKey:         string | null;
+}
+
+export interface QuotaManagerMiddleware extends Middleware {
+  readonly stats: QuotaManagerStats;
+  reset(): void;
+  getUsage(key: string): Promise<{ usageUsd: number; limitUsd: number; utilization: number; samplesInWindow: number }>;
+  resetKey(key: string): Promise<boolean>;
+  asMcpResource(): {
+    uri: 'config://quota-manager';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => QuotaManagerStats & {
+      windowMs:          number;
+      warnThresholds:    number[];
+      gracePeriodRatio:  number;
+      defaultLimitUsd:   number;
+      configuredQuotas:  Record<string, QuotaDefinition>;
+    };
+  };
+}
+
+/**
+ * Thrown when a key has exceeded its quota (`code: 'QUOTA_EXHAUSTED'`).
+ * @since 2.23.0
+ */
+export class QuotaExhaustedError extends LLMError {
+  readonly quotaKey: string;
+  readonly usageUsd: number;
+  readonly limitUsd: number;
+  readonly windowMs: number;
+}
+
+/**
+ * Per-user (or per-tenant) USD quota manager. Tracks spend against a
+ * configurable rolling-window quota per key; blocks calls when the hard
+ * cap is reached (plus a small grace period), fires warnings at
+ * rising-edge thresholds. Fail-open on store errors. Composes with
+ * `costBudget` (global cap) and `fairShareScheduler` (concurrency
+ * fairness) — this primitive is per-user cost fairness.
+ * @since 2.23.0
+ */
+export function quotaManager(options: QuotaManagerOptions): QuotaManagerMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

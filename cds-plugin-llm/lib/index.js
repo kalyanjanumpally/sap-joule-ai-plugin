@@ -269,6 +269,10 @@ module.exports = {
   UnknownToolError:       require('./middleware/autoToolChain').UnknownToolError,
   MaxDepthExceededError:  require('./middleware/autoToolChain').MaxDepthExceededError,
   ToolChainCycleError:    require('./middleware/autoToolChain').ToolChainCycleError,
+  // Quota manager — per-user USD quota with sliding-window + warnings (new in 2.23.0)
+  quotaManager:           require('./middleware/quotaManager').quotaManager,
+  inMemoryQuotaStore:     require('./middleware/quotaManager').inMemoryQuotaStore,
+  QuotaExhaustedError:    require('./middleware/quotaManager').QuotaExhaustedError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,
