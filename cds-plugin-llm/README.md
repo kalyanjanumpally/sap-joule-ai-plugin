@@ -26,7 +26,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | --- | --- |
 | **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
 | **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) |
-| **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `safetyClassifier` · `sensitiveDataAudit` |
+| **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) |
@@ -1148,6 +1148,38 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Reversible PII tokenization (new in v2.13.0)
+
+`reversibleTokenization` strips PII from the outbound request (replaces with opaque `<TYPE_N>` tokens like `<EMAIL_1>`, `<SSN_1>`), sends the tokenized prompt to the model, then restores the original values in the response before returning. The **model never sees raw customer data** but callers get useful answers back. Ideal for GDPR / HIPAA / financial compliance workloads where sending PII to an external LLM is legally or contractually restricted.
+
+```js
+const { reversibleTokenization } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(reversibleTokenization({
+  patterns: {                              // extends the built-in set
+    BADGE_ID: /\bE\d{6}\b/g,
+  },
+  onTokenize: (i) => cds.log('llm:pii').info('scrubbed', i.byType),
+  onUnknownToken: () => '[REDACTED]',     // rewrite hallucinated tokens
+}));
+
+// Then:
+const r = await llm.chat({ prompt: 'Send invoice to alice@x.com about SSN 123-45-6789.' });
+// Model saw:  'Send invoice to <EMAIL_1> about SSN <SSN_1>.'
+// Model said: 'I sent the invoice to <EMAIL_1> regarding <SSN_1>.'
+// Caller gets:'I sent the invoice to alice@x.com regarding 123-45-6789.'
+```
+
+Built-in patterns (low false-positive taxonomy): `EMAIL`, `CREDIT_CARD`, `SSN`, `PHONE`, `IPV4`, `IBAN`. `PERSON` / `ADDRESS` are intentionally NOT included — regex-based name detection is too noisy; compose with a proper NER model instead.
+
+Highlights:
+- **Dedup per request** — same value → same token everywhere. `alice@x.com` in both `system` and `messages[]` becomes the same `<EMAIL_1>`. Reduces token cost and makes downstream detokenization exact.
+- **Hallucinated tokens** — if the model returns `<EMAIL_99>` (no such token was ever emitted), it's left as-is by default; override via `onUnknownToken(token) => replacement` to redact.
+- **Standalone helpers** — `tokenizePII(text)` and `detokenizePII(text, mapping)` exported for one-off scrubbing (offline scripts, audit-log preparation, unit tests of pattern sets).
+- MCP resource `config://reversible-tokenization` exposes pattern types, `restorationRate`, tokens-created / restored / unknown, per-type counts.
+
+Composition rule: place `reversibleTokenization` **inside** `guardrails` / `promptInjectionGuard` (those need raw text) and **outside** any cache (`semanticCache`, `responseCache`) so tokenized prompts become the cache keys and PII never leaks into shared caches.
 
 ## Speculative hedging (new in v2.12.0)
 

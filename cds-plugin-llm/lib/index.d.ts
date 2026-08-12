@@ -4868,6 +4868,107 @@ export class AllHedgesFailedError extends LLMError {
  */
 export function speculativeHedge(options: SpeculativeHedgeOptions): SpeculativeHedgeMiddleware;
 
+// ---- Reversible PII tokenization (new in 2.13.0) --------------------
+
+export interface PIIMappingEntry {
+  original: string;
+  type:     string;
+}
+
+export interface TokenizePIIResult {
+  text:    string;
+  mapping: Record<string, PIIMappingEntry>;
+}
+
+export interface TokenizePIIOptions {
+  patterns?:    Record<string, RegExp>;
+  tokenPrefix?: string;
+  tokenSuffix?: string;
+}
+
+export interface DetokenizePIIOptions {
+  onUnknownToken?: (token: string) => string | undefined;
+}
+
+/**
+ * Standalone PII tokenizer. Detects PII via regex patterns (built-in +
+ * user-supplied); returns rewritten text + a mapping from tokens back
+ * to originals. Same value → same token.
+ * @since 2.13.0
+ */
+export function tokenizePII(text: string, options?: TokenizePIIOptions): TokenizePIIResult;
+
+/**
+ * Standalone PII detokenizer. Replaces `<TYPE_N>` tokens in text with
+ * their originals from the mapping. Unknown tokens are left as-is
+ * unless `onUnknownToken` rewrites them.
+ * @since 2.13.0
+ */
+export function detokenizePII(
+  text: string,
+  mapping: Record<string, PIIMappingEntry> | Map<string, PIIMappingEntry>,
+  options?: DetokenizePIIOptions,
+): string;
+
+/** Built-in PII regex patterns (frozen). Keys: EMAIL, CREDIT_CARD, SSN, PHONE, IPV4, IBAN. @since 2.13.0 */
+export const PII_PATTERNS: Readonly<Record<string, RegExp>>;
+
+export interface ReversibleTokenizationOptions {
+  /** Extends the built-in PII pattern set. All values MUST be /g regexes. */
+  patterns?:      Record<string, RegExp>;
+  /** Token wrapper — default `<` + `>` → `<EMAIL_1>`. */
+  tokenPrefix?:   string;
+  tokenSuffix?:   string;
+  /** Extract text-bearing fields from the request. Default: prompt + system + messages[].content. */
+  extractText?:   (request: unknown) => Array<{ path: string; text: string }>;
+  /** Apply rewritten text back to the request. Default handles the built-in extractText paths. */
+  applyText?:     (request: unknown, rewrites: Array<{ path: string; text: string }>) => unknown;
+  /** Rewrite / redact tokens the model hallucinated (no mapping entry). Default: leave as-is. */
+  onUnknownToken?: (token: string) => string | undefined;
+  onTokenize?: (info: { tokensCreated: number; byType: Record<string, number> }) => void;
+  onRestore?:  (info: { restored: number; unknown: number }) => void;
+  /** Skip streaming methods — chunk-by-chunk detokenization is not implemented. Default true. */
+  skipStreaming?: boolean;
+}
+
+export interface ReversibleTokenizationStats {
+  totalCalls:        number;
+  tokensCreated:     number;
+  tokensRestored:    number;
+  unknownTokensSeen: number;
+  skippedStreaming:  number;
+  byType:            Record<string, number>;
+}
+
+export interface ReversibleTokenizationMiddleware extends Middleware {
+  readonly stats: ReversibleTokenizationStats;
+  reset(): void;
+  restorationRate(): number;
+  asMcpResource(): {
+    uri: 'config://reversible-tokenization';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ReversibleTokenizationStats & {
+      patternTypes: string[];
+      tokenPrefix: string;
+      tokenSuffix: string;
+      skipStreaming: boolean;
+      restorationRate: number;
+    };
+  };
+}
+
+/**
+ * Reversible PII tokenization. Strips PII from the outbound request
+ * (replaces with opaque `<TYPE_N>` tokens), sends the tokenized prompt
+ * to the model, then restores the original values in the response.
+ * Model never sees raw PII; callers get useful answers back. Ideal for
+ * regulated workloads (GDPR / HIPAA / financial compliance).
+ * @since 2.13.0
+ */
+export function reversibleTokenization(options?: ReversibleTokenizationOptions): ReversibleTokenizationMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

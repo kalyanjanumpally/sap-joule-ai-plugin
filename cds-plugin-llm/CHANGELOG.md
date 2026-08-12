@@ -4,6 +4,60 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] — 2026-08-12
+
+### Added
+- **`reversibleTokenization` middleware** — strips PII from the outbound
+  request (replaces with opaque `<TYPE_N>` tokens like `<EMAIL_1>`,
+  `<SSN_1>`), sends the tokenized prompt to the model, then restores
+  the original values in the response before returning to the caller.
+  The model never sees raw customer data but callers still get useful
+  answers back. Ideal for GDPR / HIPAA / financial compliance workloads
+  where sending PII to an external LLM is legally or contractually
+  restricted.
+- **Six built-in PII patterns** covering the low-false-positive taxonomy:
+  `EMAIL`, `CREDIT_CARD`, `SSN`, `PHONE`, `IPV4`, `IBAN`. Extensible via
+  `patterns: { BADGE_ID: /\bE\d{6}\b/g, ... }`. `PERSON` / `ADDRESS`
+  intentionally NOT built in — regex-based name detection is too noisy;
+  compose with a proper NER model instead.
+- **Consistent per-request mapping** — same value → same token
+  everywhere in the request. If `alice@x.com` appears in both `system`
+  and `messages[]`, both get `<EMAIL_1>` (not `<EMAIL_1>` + `<EMAIL_2>`).
+  Dedup reduces token cost + makes downstream detokenization exact.
+- **Response detokenization** — walks `result.text` and restores tokens
+  from the mapping. Tokens the model hallucinated (`<EMAIL_99>` when no
+  such token was ever emitted) are left as-is by default; override via
+  `onUnknownToken(token) => replacement` to redact or rewrite them.
+- **Standalone helpers** — `tokenizePII(text, { patterns })` and
+  `detokenizePII(text, mapping, { onUnknownToken })` exported for
+  one-off scrubbing of ad-hoc text outside a middleware chain
+  (offline scripts, audit-log preparation, unit tests of pattern sets).
+- **`PII_PATTERNS`** exported as a frozen reference to the built-in
+  pattern set — inspect keys, deep-clone to build variants.
+- **Streaming skipped** by default (chunk-by-chunk detokenization is
+  not implemented — response tokens can straddle chunk boundaries).
+  Set `skipStreaming: false` and supply your own logic if needed.
+- MCP resource `config://reversible-tokenization` exposes pattern types
+  in use, `restorationRate`, tokens-created / restored / unknown, per-
+  type counts, and skip-streaming toggle.
+- TypeScript: `ReversibleTokenizationOptions`, `ReversibleTokenizationStats`,
+  `ReversibleTokenizationMiddleware`, `TokenizePIIResult`, `PIIMappingEntry`.
+
+### API contract (frozen)
+- Signature: `reversibleTokenization({ patterns, tokenPrefix='<', tokenSuffix='>', extractText, applyText, onUnknownToken, onTokenize, onRestore, skipStreaming=true })`
+- MCP URI: `config://reversible-tokenization`
+- Token format: `<TYPE_N>` — stable across versions (safe to match in tests + downstream regexes)
+- Built-in pattern names: `EMAIL`, `CREDIT_CARD`, `SSN`, `PHONE`, `IPV4`, `IBAN`
+
+### Composition
+- Place `reversibleTokenization` INSIDE `guardrails` / `promptInjectionGuard`
+  (guardrails run against raw text; tokenization happens after they pass).
+- Place OUTSIDE any cache (`semanticCache`, `responseCache`) — you want
+  tokenized prompts to be the cache key so PII never leaks into a shared
+  cache, and cached responses come back pre-tokenized for detokenization.
+- Combine with `sensitiveDataAudit` (1.96) — audit the original PII you
+  handled, tokenize before the LLM sees it. Belt-and-braces.
+
 ## [2.12.0] — 2026-08-12
 
 ### Added

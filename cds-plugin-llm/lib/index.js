@@ -233,6 +233,11 @@ module.exports = {
   // Speculative hedge — staggered parallel hedges, first success wins (new in 2.12.0)
   speculativeHedge:       require('./middleware/speculativeHedge').speculativeHedge,
   AllHedgesFailedError:   require('./middleware/speculativeHedge').AllHedgesFailedError,
+  // Reversible PII tokenization — model never sees raw PII (new in 2.13.0)
+  reversibleTokenization: require('./middleware/reversibleTokenization').reversibleTokenization,
+  tokenizePII:            require('./middleware/reversibleTokenization').tokenizePII,
+  detokenizePII:          require('./middleware/reversibleTokenization').detokenizePII,
+  PII_PATTERNS:           require('./middleware/reversibleTokenization').BUILT_IN_PATTERNS,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,
