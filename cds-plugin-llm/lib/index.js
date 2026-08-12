@@ -228,6 +228,8 @@ module.exports = {
   jsonAutoFix:            require('./middleware/structuredOutputRepair').jsonAutoFix,
   // Cost-aware model router — cheap-first, escalate on low score (new in 2.10.0)
   costAwareRouter:        require('./middleware/costAwareRouter').costAwareRouter,
+  // Chaos injector — deterministic fault injection for CI resilience testing (new in 2.11.0)
+  chaosInjector:          require('./middleware/chaosInjector').chaosInjector,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

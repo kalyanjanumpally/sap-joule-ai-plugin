@@ -28,6 +28,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
+| **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
 | **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
@@ -1147,6 +1148,36 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Chaos injector (new in v2.11.0 — test-only)
+
+`chaosInjector` gives you a way to verify that the shipped resilience stack — `retryOnRateLimit`, `circuitBreaker`, `bulkhead`, `adaptiveRateLimit`, `requestCoalescer`, `costAwareRouter` — actually behaves correctly when the provider misbehaves. Given a seed, it reproduces the exact same fault sequence, so a red CI run can be re-run locally byte-identical.
+
+```js
+const { chaosInjector, retryOnRateLimit, circuitBreaker } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(retryOnRateLimit());
+llm.use(circuitBreaker());
+// Injector sits INNERMOST — closest to the provider — so all outer
+// resilience middleware sees the fault and can react.
+llm.use(chaosInjector({
+  seed: 42,
+  faults: {
+    rate429:     0.30,
+    rateTimeout: 0.10,
+    rateGarbage: 0.05,
+  },
+}));
+```
+
+Fault types (stable priority order — `networkError → timeout → 500 → 503 → 429 → garbage → slow`; first roll that hits wins):
+- **`rateNetworkError`** → `ECONNRESET`
+- **`rateTimeout`** → `ETIMEDOUT`
+- **`rate500` / `rate503` / `rate429`** → HTTP status errors with `.status`/`.statusCode` set
+- **`rateGarbage`** → calls `next()` but replaces `result.text` with malformed content (empty string, truncated JSON, HTML error pages) so downstream parsers/validators see a real broken response
+- **`rateSlow`** → adds a configurable delay before calling `next()`
+
+**Safety guard**: `chaosInjector` refuses to construct unless one of `NODE_ENV=test`, `CHAOS_INJECTOR_ENABLED=1`, or `iKnowThisIsChaos: true` is present. That way an accidental prod deploy of a fault-injecting middleware throws loudly at boot instead of silently degrading requests. MCP resource: `config://chaos-injector` (exposes seed + rates + `lastFault` + `lastSeedRoll` for debugging non-reproducible failures).
 
 ## Cost-aware model router (new in v2.10.0)
 

@@ -4710,6 +4710,80 @@ export interface CostAwareRouterMiddleware extends Middleware {
  */
 export function costAwareRouter(options: CostAwareRouterOptions): CostAwareRouterMiddleware;
 
+// ---- Chaos injector (new in 2.11.0) ----------------------------------
+
+export interface ChaosFaults {
+  rateNetworkError?: number;
+  rateTimeout?:      number;
+  rate500?:          number;
+  rate503?:          number;
+  rate429?:          number;
+  rateGarbage?:      number;
+  rateSlow?:         number;
+}
+
+export interface ChaosInjectorOptions {
+  /** PRNG seed. Same seed → identical fault sequence. Default 42. */
+  seed?: number;
+  /** Fault probabilities in [0, 1]. Any key omitted defaults to 0. */
+  faults?: ChaosFaults;
+  /** Delay in ms when `rateSlow` fires. Default 5000. */
+  slowMs?: number;
+  /** Body texts used by the `rateGarbage` strategy. */
+  garbageBodies?: string[];
+  /** Only affect calls where `filter(ctx)` returns truthy. */
+  filter?: (ctx: unknown) => boolean;
+  /** Fired every time a fault is injected. */
+  onInject?: (info: { fault: keyof ChaosFaults; ctx: unknown }) => void;
+  /**
+   * Safety override — the injector refuses to construct outside test
+   * contexts (NODE_ENV=test or CHAOS_INJECTOR_ENABLED=1) unless this is
+   * true. Prevents accidental prod deploys.
+   */
+  iKnowThisIsChaos?: boolean;
+  /** Test seams. */
+  now?:   () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export interface ChaosInjectorStats {
+  totalCalls:      number;
+  skippedByFilter: number;
+  injected:        number;
+  passthrough:     number;
+  byFault:         Record<keyof ChaosFaults, number>;
+  lastFault:       keyof ChaosFaults | null;
+  lastSeedRoll:    Record<keyof ChaosFaults, number> | null;
+}
+
+export interface ChaosInjectorMiddleware extends Middleware {
+  readonly stats: ChaosInjectorStats;
+  reset(): void;
+  injectionRate(): number;
+  asMcpResource(): {
+    uri: 'config://chaos-injector';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ChaosInjectorStats & {
+      seed:          number;
+      slowMs:        number;
+      faults:        Required<ChaosFaults>;
+      injectionRate: number;
+    };
+  };
+}
+
+/**
+ * Deterministic seeded fault injection for CI resilience testing.
+ * Refuses to construct outside test contexts (`NODE_ENV=test`,
+ * `CHAOS_INJECTOR_ENABLED=1`, or `iKnowThisIsChaos:true`). Reproduces
+ * the same fault sequence given the same seed so red CI runs can be
+ * re-run locally byte-identical.
+ * @since 2.11.0
+ */
+export function chaosInjector(options?: ChaosInjectorOptions): ChaosInjectorMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

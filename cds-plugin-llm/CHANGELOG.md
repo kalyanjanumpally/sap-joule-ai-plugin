@@ -4,6 +4,60 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] — 2026-08-12
+
+### Added
+- **`chaosInjector` middleware** — deterministic seeded fault injection
+  for CI resilience testing. Reproduces the same fault sequence given
+  the same seed so a red CI run can be re-run locally byte-identical.
+  Verifies that the shipped resilience stack — `retryOnRateLimit` /
+  `circuitBreaker` / `bulkhead` / `adaptiveBulkhead` / `adaptiveRateLimit` /
+  `requestCoalescer` / `costAwareRouter` — behaves correctly when the
+  provider misbehaves.
+- **Seven fault types** covering the real-world provider failure modes:
+  - `rateNetworkError` — `ECONNRESET`
+  - `rateTimeout` — `ETIMEDOUT`
+  - `rate500` / `rate503` / `rate429` — HTTP status errors
+  - `rateGarbage` — replaces `result.text` with malformed content
+    (empty string, truncated JSON, HTML error pages) so downstream
+    parsers / validators see a real broken response
+  - `rateSlow` — adds a configurable delay before calling `next()`
+- **Stable fault priority** — `networkError → timeout → 500 → 503 → 429 →
+  garbage → slow`. First roll that hits wins; PRNG is advanced once per
+  fault type per call so the seed sequence is deterministic regardless
+  of which faults are enabled.
+- **`filter(ctx)`** narrows injection to matching calls (e.g. only chaos
+  on a specific tenant, or only outside business hours).
+- **Safety guard** — refuses to construct unless one of:
+  - `process.env.NODE_ENV === 'test'`
+  - `process.env.CHAOS_INJECTOR_ENABLED === '1'`
+  - `iKnowThisIsChaos: true` passed explicitly.
+  Prevents accidental prod deploys of a fault-injecting middleware.
+- **Seedable PRNG** (mulberry32) — 32-bit, dependency-free, exported as
+  `mulberry32(seed)` for advanced test scenarios that need to share the
+  RNG state with fixture generation.
+- MCP resource `config://chaos-injector` exposes seed, slowMs, fault
+  rates, `injectionRate`, per-fault injection counts, `lastFault`, and
+  `lastSeedRoll` (for debugging non-reproducible failures).
+- **`FAULT_ORDER`**, **`DEFAULT_FAULTS`**, **`GARBAGE_BODIES`** all
+  exported as frozen references — safe to inspect + reference.
+- TypeScript: `ChaosInjectorOptions`, `ChaosFaults`, `ChaosInjectorStats`,
+  `ChaosInjectorMiddleware`.
+
+### API contract (frozen)
+- Signature: `chaosInjector({ seed=42, faults={}, slowMs=5000, garbageBodies, filter, onInject, iKnowThisIsChaos, now, sleep })`
+- MCP URI: `config://chaos-injector`
+- Fault priority order: stable across versions (seeds remain reproducible)
+- Injected error shape stable: `.status`, `.statusCode` on HTTP faults; `.code` on network/timeout faults
+
+### Composition
+- Place `chaosInjector` **innermost** (closest to the provider) so all
+  outer resilience middlewares see the fault and can react. Wrap it
+  inside `retryOnRateLimit`, `bulkhead`, `circuitBreaker`, etc.
+- Combine with a `filter` to run chaos only against a specific tenant or
+  environment — useful for canary chaos testing against a real staging
+  deployment.
+
 ## [2.10.0] — 2026-08-12
 
 ### Added
