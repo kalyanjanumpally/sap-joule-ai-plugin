@@ -264,6 +264,11 @@ module.exports = {
   requestSigning:         require('./middleware/requestSigning').requestSigning,
   verifyReceiptChain:     require('./middleware/requestSigning').verifyReceiptChain,
   REQUEST_SIGNING_ALGORITHMS: require('./middleware/requestSigning').ALLOWED_ALGORITHMS,
+  // Auto tool chain — cascading tool-call loop with cycle detection (new in 2.22.0)
+  autoToolChain:          require('./middleware/autoToolChain').autoToolChain,
+  UnknownToolError:       require('./middleware/autoToolChain').UnknownToolError,
+  MaxDepthExceededError:  require('./middleware/autoToolChain').MaxDepthExceededError,
+  ToolChainCycleError:    require('./middleware/autoToolChain').ToolChainCycleError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

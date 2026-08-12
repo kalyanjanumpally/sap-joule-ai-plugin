@@ -38,7 +38,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` · `promptExperiment` (v2.20.0 — live A/B testing with 95% CI winner detection) |
 | **Bulk workflows** | `runBatch` · `waitForBatch` |
 | **Multimodal helpers** | `imageFromFile` / `pdfFromUrl` / `audioFromBase64` / `uploadPdfFromUrl` / etc. |
-| **Agent orchestration** | `runTools` · `streamTools` · `Agent` · `runAgents` · `streamAgents` |
+| **Agent orchestration** | `runTools` · `streamTools` · `Agent` · `runAgents` · `streamAgents` · `autoToolChain` (v2.22.0 — cascading tool loop with cycle detection) |
 | **Error taxonomy** | `LLMError` base + `errorRegistry` with 18 stable codes (`CIRCUIT_OPEN`, `BUDGET_EXCEEDED`, `PROMPT_INJECTION`, `SAFETY_CLASSIFIER_BLOCKED`, `ALL_REGIONS_FAILED`, ...) |
 
 Every primitive is composable via `llm.use(mw)` Koa-style — outermost first. `resilience.bundle()` wires the full resilience stack (retry → breaker → bulkhead → deadline → probes → tuner) with one call. `chainSnapshot(llm)` extracts the live config for GitOps drift detection; `chainDiff(baseline, live)` diffs; `validateMiddlewareOrder(chain)` warns on suspicious orderings.
@@ -1148,6 +1148,43 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Auto tool chain (new in v2.22.0)
+
+`autoToolChain` is the cascading tool-call loop that every agentic workflow needs. When the model returns `tool_calls`, this middleware automatically runs the tools via registered handlers, feeds tool results back as `tool` messages, re-invokes the chain, and loops until the model returns a final answer — or hits a safety cap. Frees callers from writing the tool-invocation-loop boilerplate for every agentic workflow.
+
+```js
+const { autoToolChain, functionCallArbitrator } = require('@saptarishi/cds-plugin-llm');
+
+// Compose with functionCallArbitrator (v2.18.0) for allowlist + schema safety:
+llm.use(functionCallArbitrator({ tools: [
+  { name: 'lookup_customer', input_schema: {...} },
+  { name: 'send_email',      input_schema: {...} },
+], onInvalid: 'strip' }));
+
+llm.use(autoToolChain({
+  handlers: {
+    lookup_customer: async (input) => ({ id: input.id, name: 'Alice', email: 'alice@x.com' }),
+    send_email:      async (input) => ({ sent: true, to: input.to }),
+  },
+  maxDepth:          10,          // safety cap
+  detectCycles:      true,        // reject same tool + same input twice
+  handleUnknownTool: 'throw',     // 'throw' | 'skip' | 'error-back'
+  onToolCall:        (i) => cds.log('llm:chain').info('tool', i),
+  onChainComplete:   (i) => cds.log('llm:chain').info('done at depth', i.depth),
+}));
+```
+
+Highlights:
+- **`maxDepth`** (default 10) bounds chain depth. Exceeding throws `MaxDepthExceededError` (code `MAX_TOOL_DEPTH_EXCEEDED`).
+- **Cycle detection** (default on) — stable-JSON hash of `(toolName, input)` catches the model calling the same tool with same input twice in a row. Throws `ToolChainCycleError` (code `TOOL_CHAIN_CYCLE`).
+- **Three-way policy on unknown tools**: `'throw'` (default `UnknownToolError`), `'skip'` (drop), `'error-back'` (send `{error: "unknown tool"}` to model so it can recover).
+- **Handler errors sent back to model** — a handler that throws emits an `{error: message}` tool result instead of propagating. Matches the OpenAI / Anthropic pattern for agentic loops.
+- **Correct multi-turn construction** — assistant tool_use turn appended before tool results, one `{role: 'tool', tool_call_id, content}` message per call. Handles the message-stack accumulation across hops automatically.
+- **`avgChainDepth()` + `maxObservedDepth`** — instrumented for real-world tuning.
+- MCP resource: `config://auto-tool-chain`.
+
+Composition rule: put `functionCallArbitrator` (v2.18.0) **outside** this middleware — the arbitrator validates + allowlists tool calls; this middleware runs them. Together: only vetted + schema-validated calls trigger a handler. Place **outside** `structuredOutputRepair` (v2.9.0) so repair operates on the FINAL response, not intermediate tool-request responses.
 
 ## Request signing / HMAC receipts (new in v2.21.0)
 

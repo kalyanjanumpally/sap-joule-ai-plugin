@@ -5725,6 +5725,101 @@ export function verifyReceiptChain(receipts: SignedReceipt[], secret: Buffer | s
 /** Algorithm names accepted by `requestSigning`. Frozen. @since 2.21.0 */
 export const REQUEST_SIGNING_ALGORITHMS: readonly RequestSigningAlgorithm[];
 
+// ---- Auto tool chain (new in 2.22.0) --------------------------------
+
+export type AutoToolChainUnknownPolicy = 'throw' | 'skip' | 'error-back';
+
+export interface AutoToolChainOptions {
+  /** Map of toolName → async handler. Handler receives `(input, ctx)` and returns any value; strings pass through as-is, other types are JSON-stringified. */
+  handlers: Record<string, (input: unknown, ctx: unknown) => unknown | Promise<unknown>>;
+  /** Safety cap on chain depth (hops through the tool loop). Default 10. */
+  maxDepth?: number;
+  /** Detect (toolName, sameInput) called twice in a row. Default true. */
+  detectCycles?: boolean;
+  /** Policy when the model calls a tool not in `handlers`. Default 'throw'. */
+  handleUnknownTool?: AutoToolChainUnknownPolicy;
+  onToolCall?: (info: { toolName: string; callId: string | undefined; input: unknown; depth: number }) => void;
+  onToolError?: (info: { toolName: string; callId: string | undefined; input: unknown; error: unknown }) => void;
+  onDepthExceeded?: (info: { depth: number; maxDepth: number }) => void;
+  onCycleDetected?: (info: { toolName: string; inputJson: string; depth: number }) => void;
+  onChainComplete?: (info: { depth: number; finalResult: unknown }) => void;
+  now?: () => number;
+}
+
+export interface AutoToolChainStats {
+  totalCalls:          number;
+  chainsStarted:       number;
+  chainsCompleted:     number;
+  depthExceededCount:  number;
+  cyclesDetectedCount: number;
+  toolCallsExecuted:   number;
+  toolErrors:          number;
+  unknownToolCalls:    number;
+  maxObservedDepth:    number;
+  totalDepth:          number;
+  lastChainDepth:      number | null;
+}
+
+export interface AutoToolChainMiddleware extends Middleware {
+  readonly stats: AutoToolChainStats;
+  reset(): void;
+  avgChainDepth(): number;
+  listTools(): string[];
+  asMcpResource(): {
+    uri: 'config://auto-tool-chain';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => AutoToolChainStats & {
+      registeredTools:   string[];
+      maxDepth:          number;
+      detectCycles:      boolean;
+      handleUnknownTool: AutoToolChainUnknownPolicy;
+      avgChainDepth:     number;
+    };
+  };
+}
+
+/**
+ * Thrown when the model calls a tool name not in `handlers` (with
+ * `handleUnknownTool: 'throw'`). `.code === 'UNKNOWN_TOOL'`.
+ * @since 2.22.0
+ */
+export class UnknownToolError extends LLMError {
+  readonly toolName:       string;
+  readonly availableTools: string[];
+}
+
+/**
+ * Thrown when the chain exceeds `maxDepth`. `.code === 'MAX_TOOL_DEPTH_EXCEEDED'`.
+ * @since 2.22.0
+ */
+export class MaxDepthExceededError extends LLMError {
+  readonly depth:    number;
+  readonly maxDepth: number;
+}
+
+/**
+ * Thrown when a tool is called with the same input twice in a row
+ * (cycle detection). `.code === 'TOOL_CHAIN_CYCLE'`.
+ * @since 2.22.0
+ */
+export class ToolChainCycleError extends LLMError {
+  readonly toolName:  string;
+  readonly inputJson: string;
+  readonly depth:     number;
+}
+
+/**
+ * Auto-tool-chain. When the model returns tool_calls, automatically runs
+ * the tools, feeds results back, re-invokes, loops until the model
+ * returns a final answer (no tool_calls) — or hits `maxDepth` or a
+ * detected cycle. Frees callers from writing tool-invocation-loop
+ * boilerplate for every agentic workflow.
+ * @since 2.22.0
+ */
+export function autoToolChain(options: AutoToolChainOptions): AutoToolChainMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

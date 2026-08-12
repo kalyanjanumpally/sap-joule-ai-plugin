@@ -4,6 +4,67 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.22.0] — 2026-08-12
+
+### Added
+- **`autoToolChain` middleware** — cascading tool-call loop. When the
+  model returns `tool_calls`, automatically runs the tools via
+  registered handlers, feeds tool results back as `tool` messages,
+  re-invokes the chain, and loops until the model returns a final
+  answer (no tool_calls) — or hits a safety cap. Frees callers from
+  writing the tool-invocation-loop boilerplate for every agentic
+  workflow.
+- **`maxDepth` safety cap** (default 10) — bounds chain depth to
+  prevent runaway loops. Exceeding it throws
+  `MaxDepthExceededError` (code: `MAX_TOOL_DEPTH_EXCEEDED`) with
+  `.depth` and `.maxDepth`.
+- **Cycle detection** (default on) — detects when the model calls the
+  same tool with the same input on consecutive turns (stable JSON
+  hash so key order doesn't matter). Throws `ToolChainCycleError`
+  (code: `TOOL_CHAIN_CYCLE`) with `.toolName`, `.inputJson`, `.depth`.
+- **Three-way policy** on unknown tools (model returns a call to a
+  name not in `handlers`):
+  - `'throw'` (default) — `UnknownToolError` (code: `UNKNOWN_TOOL`)
+  - `'skip'` — silently drop that call from the response, don't
+    append a tool result
+  - `'error-back'` — send `{ error: "unknown tool: X" }` back to the
+    model as the tool result so it can recover or give up gracefully
+- **Handler errors sent back to the model** — a handler that throws
+  emits an `{ error: message }` tool result rather than propagating
+  the exception. Matches the OpenAI / Anthropic pattern for agentic
+  loops where the model can decide to try a different tool.
+- **Correct multi-turn message construction** — assistant tool_use
+  turn appended before tool results, one `{ role: 'tool', tool_call_id, content }`
+  message per tool call, matched by `tool_call_id`. Handles the
+  message-stack accumulation across hops automatically.
+- **`avgChainDepth()`** returns the mean chain depth across all
+  completed chains. `maxObservedDepth` tracked in stats.
+  Instrumented for real-world tuning of `maxDepth`.
+- **`listTools()`** returns the registered handler names — useful
+  for introspection + composition with `functionCallArbitrator`.
+- MCP resource `config://auto-tool-chain` exposes registered tools,
+  policy, cycle detection flag, full stats.
+- TypeScript: `AutoToolChainOptions`, `AutoToolChainStats`,
+  `AutoToolChainMiddleware`, `AutoToolChainUnknownPolicy`,
+  `UnknownToolError`, `MaxDepthExceededError`, `ToolChainCycleError`.
+
+### API contract (frozen)
+- Signature: `autoToolChain({ handlers, maxDepth=10, detectCycles=true, handleUnknownTool='throw', onToolCall, onToolError, onDepthExceeded, onCycleDetected, onChainComplete })`
+- MCP URI: `config://auto-tool-chain`
+- Error codes: `UNKNOWN_TOOL`, `MAX_TOOL_DEPTH_EXCEEDED`, `TOOL_CHAIN_CYCLE`
+- Policy strings: `'throw'`, `'skip'`, `'error-back'`
+
+### Composition
+- Compose with `functionCallArbitrator` (2.18) OUTSIDE this middleware
+  — the arbitrator validates + allowlists tool calls; this middleware
+  runs them. The two combined: only vetted + schema-validated tool
+  calls trigger a handler.
+- Place OUTSIDE `structuredOutputRepair` (2.9) — repair should operate
+  on the FINAL response, not intermediate tool-request responses.
+- Place INSIDE prompt-safety layers (`guardrails`,
+  `promptInjectionGuard`) so those only see the initial user prompt,
+  not the tool-loop internals.
+
 ## [2.21.0] — 2026-08-12
 
 ### Added
