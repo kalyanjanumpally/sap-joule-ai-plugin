@@ -26,7 +26,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | --- | --- |
 | **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
 | **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
-| **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` |
+| **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) |
@@ -1148,6 +1148,41 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Request signing / HMAC receipts (new in v2.21.0)
+
+`requestSigning` cryptographically signs each outbound LLM call with HMAC-SHA256/384/512 and emits a **hash-chained receipt** on the response. Offline auditors can later verify with a shared secret that request/response pairs weren't tampered with between capture and audit. Strong compliance differentiator for SAP financial / healthcare / regulated workloads.
+
+```js
+const { requestSigning, verifyReceiptChain } = require('@saptarishi/cds-plugin-llm');
+
+const receipts = [];
+llm.use(requestSigning({
+  secret:     process.env.LLM_HMAC_KEY,   // Buffer or hex string
+  algorithm:  'sha256',                    // 'sha256' | 'sha384' | 'sha512'
+  onReceipt:  (r) => receipts.push(r),     // persist to HANA/S3/etc
+  includeRequestBody: false,               // opt-in — receipts stay small
+}));
+
+// Later, offline:
+const { valid, brokenIdx, reason } = verifyReceiptChain(receipts, secret);
+// { valid: true, brokenIdx: -1, reason: null }
+```
+
+Complements the shipped `sensitiveDataAudit` (v1.96.0):
+- `sensitiveDataAudit` — immutable hash-chained audit LOGS (what happened)
+- `requestSigning` — cryptographically-signed RECEIPTS keyed to a secret only the auditor can verify (non-repudiation)
+
+Together they give the full compliance story.
+
+Highlights:
+- **Chain continues across errors** — failed calls emit receipts with `isError: true`. Compliance requires audit of attempts, not just successes.
+- **Detects tampering + reordering** — each receipt is signed over `(requestHash + responseHash + prevReceiptHash)`, and `prevReceiptHash` is the SHA hash of the prior receipt's `sig`. Tampering with any field breaks the chain from that point forward; reordering breaks it too.
+- **Canonical serialization** excludes volatile fields (credentials, retries config) so the same logical call produces the same signature across restarts. Users can supply custom `canonicalizeRequest` / `canonicalizeResponse` if needed.
+- **`chainCursor()`** returns `{ index, prevSigHash }` — useful for live observability + persisting chain state across restarts (survives `reset()`).
+- MCP resource: `config://request-signing`.
+
+Composition rule: place `requestSigning` **outside** `providerLoadBalancer` (v2.17.0) — the signature should be over the canonical request, not the credential-applied one (the canonical serializer already excludes credentials so this is defensive).
 
 ## Prompt A/B experiment framework (new in v2.20.0)
 

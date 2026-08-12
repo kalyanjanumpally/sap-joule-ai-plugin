@@ -260,6 +260,10 @@ module.exports = {
   inMemorySessionStore:   require('./middleware/sessionContextStore').inMemorySessionStore,
   // Prompt experiment framework — live A/B testing of prompt variants (new in 2.20.0)
   promptExperiment:       require('./middleware/promptExperiment').promptExperiment,
+  // Request signing / HMAC receipts — cryptographic audit trail (new in 2.21.0)
+  requestSigning:         require('./middleware/requestSigning').requestSigning,
+  verifyReceiptChain:     require('./middleware/requestSigning').verifyReceiptChain,
+  REQUEST_SIGNING_ALGORITHMS: require('./middleware/requestSigning').ALLOWED_ALGORITHMS,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

@@ -4,6 +4,68 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.21.0] — 2026-08-12
+
+### Added
+- **`requestSigning` middleware** — cryptographically signs each outbound
+  LLM call with HMAC (SHA-256 / SHA-384 / SHA-512) and emits a
+  **hash-chained receipt** on the response. Offline auditors can later
+  verify with a shared secret that request/response pairs weren't
+  tampered with between capture and audit. Strong compliance
+  differentiator for SAP financial / healthcare / regulated workloads.
+- Complements the shipped `sensitiveDataAudit` (v1.96.0) — that
+  primitive produces immutable hash-chained AUDIT LOGS; this one
+  produces cryptographically-signed RECEIPTS keyed to a secret only
+  the auditor (not the LLM provider) can verify. Together they give
+  the full compliance story: audit log for what happened + signed
+  receipts for non-repudiation.
+- **Standalone `verifyReceiptChain(receipts, secret)` verifier** —
+  usable outside the middleware runtime. Walks the chain end-to-end
+  and returns `{ valid, brokenIdx, reason }` with reasons:
+  `'not-an-array'`, `'missing-field'`, `'algorithm-mismatch'`,
+  `'chain-broken'` (`prevReceiptHash` mismatch — detects reordering),
+  `'sig-mismatch'` (tampering with `requestHash` / `responseHash` /
+  wrong secret).
+- **Canonical serialization** of request + response excludes volatile
+  / secret fields (credentials, retries config) so the same logical
+  call produces the same signature across restarts. Users can supply
+  custom `canonicalizeRequest` / `canonicalizeResponse` if needed.
+- **Chain continues across error paths** — failed calls also emit
+  receipts with `isError: true`. Compliance requires audit of
+  attempts, not just successes.
+- **`chainCursor()`** returns `{ index, prevSigHash }` — useful for
+  live observability + persisting chain state across restarts.
+- **Body inclusion opt-in** — `includeRequestBody` /
+  `includeResponseBody` (default false) attach the full bodies to
+  the receipt for later replay. Off by default so receipts stay
+  small and don't leak sensitive content into the receipt store.
+- Standalone helpers `defaultCanonicalizeRequest`,
+  `defaultCanonicalizeResponse`, `stableStringify` exported for
+  custom canonicalization implementations.
+- `REQUEST_SIGNING_ALGORITHMS` frozen list of supported algorithms.
+- MCP resource `config://request-signing` exposes algorithm, chain
+  cursor, config, and all counters.
+- TypeScript: `RequestSigningOptions`, `RequestSigningAlgorithm`,
+  `RequestSigningStats`, `RequestSigningMiddleware`, `SignedReceipt`,
+  `VerifyReceiptChainResult`.
+
+### API contract (frozen)
+- Signature: `requestSigning({ secret, algorithm='sha256', canonicalizeRequest, canonicalizeResponse, attachTo='signature', includeRequestBody=false, includeResponseBody=false, onReceipt, onError })`
+- MCP URI: `config://request-signing`
+- Receipt shape: `{ index, timestamp, algorithm, requestHash, responseHash, prevReceiptHash, sig, isError, requestBody?, responseBody? }`
+- Verifier reason strings: `'not-an-array'`, `'missing-field'`, `'algorithm-mismatch'`, `'chain-broken'`, `'sig-mismatch'`
+
+### Composition
+- Place `requestSigning` OUTSIDE `providerLoadBalancer` (2.17) — the
+  signature should be over the canonical request, not the credential-
+  applied one. The canonical serializer already excludes credentials
+  so this is defensive.
+- Compose with `sensitiveDataAudit` (v1.96.0) as peers — both write
+  audit trails; signing adds cryptographic non-repudiation on top.
+- Persist receipts via `onReceipt` to any durable store: SAP HANA,
+  S3, an S/4HANA custom entity. Verifier is offline and needs only
+  the receipts + secret.
+
 ## [2.20.1] — 2026-08-12
 
 ### Fixed

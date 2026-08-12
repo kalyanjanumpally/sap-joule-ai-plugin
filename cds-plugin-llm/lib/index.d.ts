@@ -5628,6 +5628,103 @@ export interface PromptExperimentMiddleware extends Middleware {
  */
 export function promptExperiment(options: PromptExperimentOptions): PromptExperimentMiddleware;
 
+// ---- Request signing / HMAC receipts (new in 2.21.0) ----------------
+
+export type RequestSigningAlgorithm = 'sha256' | 'sha384' | 'sha512';
+
+export interface RequestSigningOptions {
+  /** HMAC key. Buffer for high-entropy binary secrets; string for hex/base64 or config values. */
+  secret:                Buffer | string;
+  /** HMAC algorithm. Default 'sha256'. */
+  algorithm?:            RequestSigningAlgorithm;
+  /** Canonical serialization for the request. Default: significant fields only (excludes credentials, retries). */
+  canonicalizeRequest?:  (request: unknown) => string;
+  /** Canonical serialization for the response. Default: text + data + toolCalls + usage. */
+  canonicalizeResponse?: (result: unknown) => string;
+  /** Attach signature to `ctx.request[attachTo]`. Null to skip. Default 'signature'. */
+  attachTo?:             string | null;
+  /** Include the full request body in the receipt (opt-in — receipts stay small by default). */
+  includeRequestBody?:   boolean;
+  /** Include the full response body in the receipt. Default false. */
+  includeResponseBody?:  boolean;
+  onReceipt?:            (receipt: SignedReceipt) => void;
+  onError?:              (info: { phase: string; error: unknown }) => void;
+  now?:                  () => number;
+}
+
+export interface SignedReceipt {
+  index:            number;
+  timestamp:        number;
+  algorithm:        RequestSigningAlgorithm;
+  requestHash:      string;
+  responseHash:     string;
+  prevReceiptHash:  string | null;
+  sig:              string;
+  isError:          boolean;
+  requestBody?:     unknown;
+  responseBody?:    unknown;
+}
+
+export interface RequestSigningStats {
+  totalCalls:        number;
+  signedRequests:    number;
+  receiptsEmitted:   number;
+  signatureFailures: number;
+  onReceiptFailures: number;
+  downstreamErrors:  number;
+}
+
+export interface RequestSigningMiddleware extends Middleware {
+  readonly stats: RequestSigningStats;
+  reset(): void;
+  /** Current chain state — useful for observability. Does NOT reset the chain (preserved across `reset()`). */
+  chainCursor(): { index: number; prevSigHash: string | null };
+  asMcpResource(): {
+    uri: 'config://request-signing';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => RequestSigningStats & {
+      algorithm:           RequestSigningAlgorithm;
+      attachTo:            string | null;
+      includeRequestBody:  boolean;
+      includeResponseBody: boolean;
+      chainIndex:          number;
+      hasPrevHash:         boolean;
+    };
+  };
+}
+
+/**
+ * Request signing / HMAC receipts. Cryptographically signs each outbound
+ * LLM call and emits a hash-chained receipt on the response. The chain
+ * lets an offline verifier prove that request/response pairs weren't
+ * tampered with between capture and audit. Complements the shipped
+ * `sensitiveDataAudit` (1.96) — that primitive produces immutable
+ * audit logs; this one produces receipts keyed to a secret only the
+ * auditor can verify (non-repudiation).
+ * @since 2.21.0
+ */
+export function requestSigning(options: RequestSigningOptions): RequestSigningMiddleware;
+
+export interface VerifyReceiptChainResult {
+  valid:     boolean;
+  brokenIdx: number;   // -1 when valid
+  reason:    'not-an-array' | 'missing-field' | 'algorithm-mismatch' | 'chain-broken' | 'sig-mismatch' | null;
+}
+
+/**
+ * Verifies an entire receipt chain end-to-end. Standalone — no
+ * middleware runtime dependency. Walks the chain checking each
+ * receipt's signature against the shared secret AND that
+ * `prevReceiptHash` links back to the prior receipt's `sig` hash.
+ * @since 2.21.0
+ */
+export function verifyReceiptChain(receipts: SignedReceipt[], secret: Buffer | string): VerifyReceiptChainResult;
+
+/** Algorithm names accepted by `requestSigning`. Frozen. @since 2.21.0 */
+export const REQUEST_SIGNING_ALGORITHMS: readonly RequestSigningAlgorithm[];
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {
