@@ -250,6 +250,11 @@ module.exports = {
   providerLoadBalancer:   require('./middleware/providerLoadBalancer').providerLoadBalancer,
   AllCredentialsUnhealthyError: require('./middleware/providerLoadBalancer').AllCredentialsUnhealthyError,
   PROVIDER_LOAD_BALANCER_STRATEGIES: require('./middleware/providerLoadBalancer').STRATEGIES,
+  // Function-call arbitrator — policy + validation for LLM tool calls (new in 2.18.0)
+  functionCallArbitrator: require('./middleware/functionCallArbitrator').functionCallArbitrator,
+  InvalidToolCallError:   require('./middleware/functionCallArbitrator').InvalidToolCallError,
+  normalizeToolShape:     require('./middleware/functionCallArbitrator').normalizeToolShape,
+  normalizeToolList:      require('./middleware/functionCallArbitrator').normalizeToolList,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

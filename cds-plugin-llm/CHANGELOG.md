@@ -4,6 +4,62 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.0] — 2026-08-12
+
+### Added
+- **`functionCallArbitrator` middleware** — policy + validation layer for
+  LLM tool calls. Sits above the shipped provider tool-call
+  normalization (each provider already lands responses at
+  `{ id, name, input }`) to enforce cross-provider consistency + safety.
+- **Registered-tool allowlist** — define tools once with a canonical
+  `{ name, description?, input_schema }` shape; tool calls to names
+  not in the registry are rejected by default. Set
+  `allowUnregistered: true` to relax.
+- **Per-call JSON Schema validation** — every `result.toolCalls[].input`
+  is validated against the tool's `input_schema` (using the shipped
+  `validateBuiltIn` from `structuredOutputValidator`). Catches
+  missing required fields, wrong types, unexpected props.
+- **Three-way policy** on invalid calls:
+  - `'throw'` → raise `InvalidToolCallError` (`code: 'INVALID_TOOL_CALL'`)
+    with `.callId`, `.name`, `.errors[]`
+  - `'strip'` → silently drop the invalid call from `result.toolCalls`
+    (default — fail-soft)
+  - `'log'` → keep the call but tag with `.invalid = true` +
+    `.invalidErrors[]` for downstream inspection
+- **Cross-provider tool shape normalization** on outbound
+  (opt-out via `normalizeOutbound: false`):
+  - Anthropic `input_schema` — canonical, pass-through
+  - OpenAI `parameters` → `input_schema`
+  - `schema` alias → `input_schema`
+  - Gemini `{ functionDeclarations: [...] }` → unwrapped flat list
+- **Per-tool observability**: `stats.callsByTool`,
+  `stats.invalidByTool`, `stats.invalidReasonCounts` (buckets:
+  `unknown-tool`, `schema-violation`, `not-an-object`).
+  `invalidRate()` returns invalid-vs-total.
+- Standalone helpers `normalizeToolShape(tool)` and
+  `normalizeToolList(tools)` exported for one-off use outside the
+  middleware chain (offline shape migration, tests, config validation).
+- MCP resource `config://function-call-arbitrator` exposes registered
+  tool names, policy, allow-unregistered flag, and full stats.
+- TypeScript: `FunctionCallArbitratorOptions`,
+  `FunctionCallArbitratorPolicy`, `FunctionCallArbitratorStats`,
+  `FunctionCallArbitratorMiddleware`, `InvalidToolCallError` class.
+
+### API contract (frozen)
+- Signature: `functionCallArbitrator({ tools=[], onInvalid='strip', allowUnregistered=false, normalizeOutbound=true, validateCalls=true, onCall, onInvalidCall, onError, validator })`
+- MCP URI: `config://function-call-arbitrator`
+- Error code: `INVALID_TOOL_CALL`
+- Reason strings: `'unknown-tool'`, `'schema-violation'`, `'not-an-object'` — stable
+
+### Composition
+- Place `functionCallArbitrator` INSIDE prompt-safety middleware
+  (`guardrails`, `promptInjectionGuard`) so those still guard the raw
+  text; OUTSIDE the tool runner (`runTools`, `streamTools`, `Agent`)
+  so the runner only ever sees validated + allowlisted calls.
+- Compose with `structuredOutputRepair` (2.9) as a peer — repair
+  handles free-form JSON schema validation of `result.data`;
+  arbitrator handles the same for `result.toolCalls[].input`.
+
 ## [2.17.1] — 2026-08-12
 
 ### Fixed

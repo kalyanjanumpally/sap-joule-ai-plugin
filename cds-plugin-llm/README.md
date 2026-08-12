@@ -31,7 +31,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
-| **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
+| **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `functionCallArbitrator` (v2.18.0 — tool-call allowlist + validation) · `normalizeToolShape` · `normalizeToolList` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
 | **Long-context** | `compactHistory` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` |
@@ -1148,6 +1148,49 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Function-call arbitrator (new in v2.18.0)
+
+`functionCallArbitrator` is a policy + validation layer for LLM tool calls. Each shipped provider already normalizes tool schemas to `{ name, description?, input_schema }` on outbound and tool-call responses to `{ id, name, input }` on inbound. This middleware sits **on top** to enforce cross-provider consistency + safety.
+
+```js
+const { functionCallArbitrator } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(functionCallArbitrator({
+  tools: [
+    {
+      name: 'lookup_customer',
+      description: 'Look up a customer by ID',
+      input_schema: {
+        type: 'object',
+        required: ['customerId'],
+        properties: { customerId: { type: 'string' } },
+      },
+    },
+    // ... more tools
+  ],
+  onInvalid:         'strip',       // 'throw' | 'strip' | 'log'
+  allowUnregistered:  false,
+  onCall:        (i) => cds.log('llm:tools').info('called', i.call.name),
+  onInvalidCall: (i) => cds.log('llm:tools').warn('rejected', i),
+}));
+```
+
+What it enforces:
+- **Registered-tool allowlist** — tool calls to names not in the registry are rejected by default. Prevents the model from calling tools you never intended to expose.
+- **Per-call JSON Schema validation** — every `result.toolCalls[].input` is validated against the tool's `input_schema` using the shipped `validateBuiltIn` from `structuredOutputValidator`. Catches missing required fields, wrong types, unexpected props.
+- **Three-way policy** on invalid calls:
+  - `'throw'` → raise `InvalidToolCallError` (`code: 'INVALID_TOOL_CALL'`) with `.callId`, `.name`, `.errors[]`
+  - `'strip'` → silently drop the invalid call from `result.toolCalls` (default — fail-soft)
+  - `'log'` → keep the call but tag it with `.invalid = true` + `.invalidErrors[]` for downstream inspection
+
+**Cross-provider tool shape normalization** on outbound (opt-out via `normalizeOutbound: false`) accepts Anthropic (`input_schema`), OpenAI (`parameters`), aliases (`schema`), and Gemini (`functionDeclarations` wrapper) forms — all normalized to the canonical `input_schema` shape before the provider sees the request.
+
+Standalone helpers `normalizeToolShape(tool)` and `normalizeToolList(tools)` are exported for one-off use outside the middleware chain (offline shape migration, tests, config validation).
+
+MCP resource: `config://function-call-arbitrator` (registered tool names + policy + stats + `invalidRate()`).
+
+Placement rule: put `functionCallArbitrator` **inside** prompt-safety middleware (`guardrails`, `promptInjectionGuard`) so those still guard the raw text; **outside** the tool runner (`runTools`, `streamTools`, `Agent`) so the runner only ever sees validated + allowlisted calls.
 
 ## Provider load balancer (new in v2.17.0)
 

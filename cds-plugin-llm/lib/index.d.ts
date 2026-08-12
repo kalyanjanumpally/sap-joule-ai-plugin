@@ -5337,6 +5337,111 @@ export function providerLoadBalancer(options: ProviderLoadBalancerOptions): Prov
 /** Strategy names accepted by `providerLoadBalancer`. Frozen. @since 2.17.0 */
 export const PROVIDER_LOAD_BALANCER_STRATEGIES: readonly ProviderLoadBalancerStrategy[];
 
+// ---- Function-call arbitrator (new in 2.18.0) -----------------------
+
+export type FunctionCallArbitratorPolicy = 'throw' | 'strip' | 'log';
+
+export interface FunctionCallArbitratorOptions {
+  /**
+   * Registered tools. Canonical shape: `{ name, description?, input_schema? }`.
+   * `parameters` and `schema` are also accepted (normalized on registration).
+   */
+  tools?: Tool[];
+  /**
+   * What to do with an invalid tool call in the response.
+   * - `'throw'`  → raise InvalidToolCallError
+   * - `'strip'`  → remove the call from `result.toolCalls` (default)
+   * - `'log'`    → keep the call but tag it with `.invalid = true` + `.invalidErrors[]`
+   */
+  onInvalid?: FunctionCallArbitratorPolicy;
+  /** Accept tool calls to names not in `tools`. Default false. */
+  allowUnregistered?: boolean;
+  /**
+   * Normalize outbound tool schemas (parameters → input_schema, unwrap
+   * Gemini functionDeclarations, etc.). Default true.
+   */
+  normalizeOutbound?: boolean;
+  /** Enable inbound validation. Set to false to only normalize outbound. Default true. */
+  validateCalls?:     boolean;
+  onCall?:            (info: { call: ToolCall; valid: boolean }) => void;
+  onInvalidCall?:     (info: {
+    call: ToolCall; errors: string[];
+    reason: 'unknown-tool' | 'schema-violation' | 'not-an-object';
+  }) => void;
+  onError?:           (info: { phase: string; error: unknown }) => void;
+  /** JSON Schema validator. Default: built-in from structuredOutputValidator. */
+  validator?:         (obj: unknown, schema: unknown) => string[] | { ok: boolean; errors?: string[] };
+}
+
+export interface FunctionCallArbitratorStats {
+  totalCalls:          number;
+  outboundNormalized:  number;
+  inboundValidated:    number;
+  validCalls:          number;
+  invalidCalls:        number;
+  strippedCalls:       number;
+  thrownCalls:         number;
+  loggedCalls:         number;
+  callsByTool:         Record<string, number>;
+  invalidByTool:       Record<string, number>;
+  invalidReasonCounts: Record<string, number>;
+}
+
+export interface FunctionCallArbitratorMiddleware extends Middleware {
+  readonly stats: FunctionCallArbitratorStats;
+  reset(): void;
+  listTools(): string[];
+  getTool(name: string): Tool | null;
+  invalidRate(): number;
+  asMcpResource(): {
+    uri: 'config://function-call-arbitrator';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => FunctionCallArbitratorStats & {
+      registeredTools:   string[];
+      onInvalid:         FunctionCallArbitratorPolicy;
+      allowUnregistered: boolean;
+      normalizeOutbound: boolean;
+      validateCalls:     boolean;
+      invalidRate:       number;
+    };
+  };
+}
+
+/**
+ * Thrown by `functionCallArbitrator` when `onInvalid: 'throw'` and a tool
+ * call fails validation. `.code === 'INVALID_TOOL_CALL'`.
+ * @since 2.18.0
+ */
+export class InvalidToolCallError extends LLMError {
+  readonly callId:            string | undefined;
+  readonly name:              string;
+  readonly errors:            string[];
+  readonly allowUnregistered: boolean;
+}
+
+/**
+ * Policy + validation layer for LLM tool calls. Registered-tool allowlist,
+ * per-call JSON Schema validation, configurable policy on invalid calls
+ * (`throw` / `strip` / `log`), per-tool observability. Sits above the
+ * shipped provider tool-call normalization to enforce cross-provider
+ * consistency + safety.
+ * @since 2.18.0
+ */
+export function functionCallArbitrator(options?: FunctionCallArbitratorOptions): FunctionCallArbitratorMiddleware;
+
+/**
+ * Normalize a tool declaration to the canonical `{ name, description?, input_schema }`
+ * shape. Accepts Anthropic (`input_schema`), OpenAI (`parameters`), and Gemini
+ * (`functionDeclarations` array wrapper) shapes.
+ * @since 2.18.0
+ */
+export function normalizeToolShape(tool: unknown): Tool | Tool[] | null;
+
+/** Normalize an array of tool declarations. Non-array pass-through. @since 2.18.0 */
+export function normalizeToolList(tools: unknown): Tool[] | unknown;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {
