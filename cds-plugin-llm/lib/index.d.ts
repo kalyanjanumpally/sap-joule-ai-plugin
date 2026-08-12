@@ -4784,6 +4784,90 @@ export interface ChaosInjectorMiddleware extends Middleware {
  */
 export function chaosInjector(options?: ChaosInjectorOptions): ChaosInjectorMiddleware;
 
+// ---- Speculative hedging (new in 2.12.0) ----------------------------
+
+export interface SpeculativeHedgeCandidate {
+  /** Required label for stats + callbacks. */
+  name:            string;
+  /** Delay before launching this hedge (ms). Overrides the top-level default. */
+  hedgeDelayMs?:   number;
+  /** Per-candidate request mutator (e.g. swap model/region). */
+  modifyRequest?:  (request: unknown) => unknown;
+  /** Arbitrary metadata — passed to callbacks. */
+  [key: string]:   unknown;
+}
+
+export interface SpeculativeHedgeOptions {
+  /** 1+ candidates. If only one is provided, no hedging happens. */
+  candidates:      SpeculativeHedgeCandidate[];
+  /** Default staggered delay between candidates (ms). Default 200. */
+  hedgeDelayMs?:   number;
+  /** How to apply a candidate to a request. Default: uses candidate.modifyRequest if set. */
+  applyCandidate?: (request: unknown, candidate: SpeculativeHedgeCandidate) => unknown;
+  /**
+   * Predicate — treat this result as a winning success? Losers keep racing.
+   * Default: any result is a success.
+   */
+  isSuccess?:      (result: unknown) => boolean;
+  onLaunch?: (info: { candidate: string; index: number; delayMs: number }) => void;
+  onWin?:    (info: { candidate: string; index: number; latencyMs: number; result: unknown }) => void;
+  onLoss?:   (info: { candidate: string; index: number }) => void;
+  onError?:  (info: { candidate: string; index: number; error: unknown }) => void;
+  onGiveUp?: (info: { errors: unknown[]; candidateNames: string[] }) => void;
+  now?:      () => number;
+  sleep?:    (ms: number) => Promise<void>;
+}
+
+export interface SpeculativeHedgeStats {
+  totalCalls:          number;
+  hedgesLaunched:      number;
+  hedgesWon:           number;
+  hedgesLost:          number;
+  hedgesErrored:       number;
+  givenUp:             number;
+  winsByCandidate:     Record<string, number>;
+  launchesByCandidate: Record<string, number>;
+  lastWinner:          string | null;
+  lastLatencyMs:       number | null;
+}
+
+export interface SpeculativeHedgeMiddleware extends Middleware {
+  readonly stats: SpeculativeHedgeStats;
+  reset(): void;
+  /** hedgesLaunched / totalCalls — >1 means the middleware is doing work. */
+  hedgeRatio(): number;
+  asMcpResource(): {
+    uri: 'config://speculative-hedge';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => SpeculativeHedgeStats & {
+      candidates: Array<{ name: string; index: number; hedgeDelayMs: number }>;
+      defaultHedgeDelayMs: number;
+      hedgeRatio: number;
+    };
+  };
+}
+
+/**
+ * Thrown by `speculativeHedge` when every candidate fails or returns a
+ * non-success result. `.code === 'ALL_HEDGES_FAILED'`.
+ * @since 2.12.0
+ */
+export class AllHedgesFailedError extends LLMError {
+  readonly errors: unknown[];
+  readonly candidateNames: string[];
+}
+
+/**
+ * Speculative hedging. Fires the request to N candidates with staggered
+ * delays; first successful reply wins, losers get signalled to abort via
+ * `ctx.signal`. Trades $ for tail latency — useful when your SLO is p99
+ * and one provider going slow ruins the distribution.
+ * @since 2.12.0
+ */
+export function speculativeHedge(options: SpeculativeHedgeOptions): SpeculativeHedgeMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

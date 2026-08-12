@@ -25,7 +25,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | Group | Primitives |
 | --- | --- |
 | **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
-| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` |
+| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
@@ -1148,6 +1148,34 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Speculative hedging (new in v2.12.0)
+
+`speculativeHedge` fires the same request to N candidates with staggered delays; the first successful reply wins, losers are signalled to abort. Trades $ for tail latency — pay for a small amount of duplicate work to guarantee p99 when your SLO is p99 (not p50).
+
+```js
+const { speculativeHedge } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(speculativeHedge({
+  candidates: [
+    { name: 'primary' /* fires immediately */ },
+    { name: 'us-east', hedgeDelayMs: 200, modifyRequest: (r) => ({ ...r, model: 'us-east/gpt-4o' }) },
+    { name: 'eu-west', hedgeDelayMs: 500, modifyRequest: (r) => ({ ...r, model: 'eu-west/gpt-4o' }) },
+  ],
+  isSuccess: (r) => !!r?.text,
+  onWin:  (i) => cds.log('llm:hedge').info('win', i),
+  onLoss: (i) => cds.log('llm:hedge').info('lost', i),
+}));
+```
+
+Highlights:
+- **Per-candidate config** — each entry can carry its own `hedgeDelayMs` + `modifyRequest`. Common patterns: swap `model`, route to different regions, or hit different provider endpoints.
+- **Loser cancellation** via Web-standard `AbortSignal` on `ctx.signal`. Providers that respect it early-exit; providers that don't keep running but their result is discarded (token cost may still be billed — choose `hedgeDelayMs` conservatively).
+- **`isSuccess(result)`** — treat a returned result as a losing hedge (still racing). Useful for "keep waiting for a better one" against low-confidence responses.
+- **Cost visibility** — `hedgeRatio()` = `hedgesLaunched / totalCalls`; per-candidate `winsByCandidate` + `launchesByCandidate` counters identify the reliable candidate. MCP resource: `config://speculative-hedge`.
+- **`AllHedgesFailedError`** (`code: 'ALL_HEDGES_FAILED'`) — thrown when every hedge errors or returns non-success. Carries `.errors[]` and `.candidateNames[]`.
+
+Placement rule: put `speculativeHedge` **outside** any per-attempt retry / bulkhead / breaker. Each hedge should consume its own retry / concurrency budget — otherwise a shared retry counter is drained by hedges the winner is racing against.
 
 ## Chaos injector (new in v2.11.0 — test-only)
 

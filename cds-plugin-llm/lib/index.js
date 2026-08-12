@@ -230,6 +230,9 @@ module.exports = {
   costAwareRouter:        require('./middleware/costAwareRouter').costAwareRouter,
   // Chaos injector — deterministic fault injection for CI resilience testing (new in 2.11.0)
   chaosInjector:          require('./middleware/chaosInjector').chaosInjector,
+  // Speculative hedge — staggered parallel hedges, first success wins (new in 2.12.0)
+  speculativeHedge:       require('./middleware/speculativeHedge').speculativeHedge,
+  AllHedgesFailedError:   require('./middleware/speculativeHedge').AllHedgesFailedError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

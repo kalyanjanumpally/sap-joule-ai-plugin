@@ -4,6 +4,57 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] — 2026-08-12
+
+### Added
+- **`speculativeHedge` middleware** — fires the same request to N
+  candidates with staggered delays; the first successful reply wins.
+  Losers are signalled to abort via `ctx.signal`. Trades $ for tail
+  latency — pay for a small amount of duplicate work to guarantee p99.
+  Useful when your SLO is p99 (not p50), and a single slow provider
+  ruins the distribution: multi-region deployments, multi-provider
+  failover, provider-availability hedges during known-degraded periods.
+- **Per-candidate config**: each `{ name, hedgeDelayMs?, modifyRequest? }`
+  entry can carry its own delay + request mutator. Common patterns:
+  swap `model` per hedge, or route to different regions/endpoints.
+- **`isSuccess(result)`** predicate — treat a returned result as a
+  losing hedge (still racing). Default: any returned value is a
+  winner. Useful for treating low-confidence responses as "keep
+  waiting for a better one."
+- **Loser abort**: winners set `ctx.signal.abort()` on the losing
+  hedges' contexts. `fetch`-based providers and any downstream code
+  that respects the Web-standard `AbortSignal` early-exits. Losers
+  that don't respect the signal keep running — their result is
+  discarded but token cost may still be billed; docs recommend
+  choosing `hedgeDelayMs` conservatively.
+- **Cost visibility**: `hedgeRatio()` = `hedgesLaunched / totalCalls`;
+  values > 1 mean the middleware is doing extra work. Per-candidate
+  `winsByCandidate` / `launchesByCandidate` counters help identify
+  which candidate is the reliable one.
+- **`AllHedgesFailedError`** (code: `ALL_HEDGES_FAILED`) — thrown when
+  every hedge errors or returns a non-success result. Carries `.errors`
+  array (per-candidate errors) + `.candidateNames`.
+- MCP resource `config://speculative-hedge` exposes candidate list,
+  per-candidate delays, `hedgeRatio`, `lastWinner`, `lastLatencyMs`.
+- TypeScript: `SpeculativeHedgeOptions`, `SpeculativeHedgeCandidate`,
+  `SpeculativeHedgeStats`, `SpeculativeHedgeMiddleware`,
+  `AllHedgesFailedError` class.
+
+### API contract (frozen)
+- Signature: `speculativeHedge({ candidates, hedgeDelayMs=200, applyCandidate, isSuccess, onLaunch, onWin, onLoss, onError, onGiveUp })`
+- MCP URI: `config://speculative-hedge`
+- Error code: `ALL_HEDGES_FAILED`
+- Loser cancellation via `ctx.signal` (Web-standard `AbortSignal`)
+
+### Composition
+- Place `speculativeHedge` OUTSIDE any per-attempt retry / bulkhead /
+  breaker. Each hedge should consume its own retry / concurrency
+  budget — otherwise a shared retry counter is drained by hedges that
+  the winner is racing against.
+- Combine with `costForecast` (2.1) to project the extra spend from
+  hedging; combine with `costAwareRouter` (2.10) as the top layer to
+  choose whether hedging is worth it per-tier.
+
 ## [2.11.0] — 2026-08-12
 
 ### Added
