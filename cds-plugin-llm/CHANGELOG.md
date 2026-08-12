@@ -4,6 +4,60 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.17.0] — 2026-08-12
+
+### Added
+- **`providerLoadBalancer` middleware** — rotate across N credential
+  sets of the same provider kind: multiple OpenAI accounts (per-account
+  rate limits), multiple Azure regions (geographic spread), multiple
+  Bedrock cross-account roles, etc. Complements the shipped 1.x
+  11-provider abstraction (one credential set per provider kind) with
+  per-account rotation ON TOP of the same kind.
+- **Four strategies** (all frozen + exported as `STRATEGIES`):
+  - `round-robin` — cycle through credentials in order (default)
+  - `least-loaded` — pick the credential with the fewest in-flight
+  - `weighted-random` — probability ∝ `weight`
+  - `sticky` — same `stickyKeyOf(ctx)` value always picks the same
+    credential (session affinity, tenant isolation across accounts)
+- **Health tracking** (opt-in via `unhealthyThreshold`) — after N
+  consecutive failures, a credential is marked unhealthy and skipped
+  by the strategy until `unhealthyCooldownMs` elapses. A successful
+  call resets the consecutive-error counter. Composes cleanly with
+  the shipped 1.62 `providerHealthProbe` — that primitive tests
+  liveness proactively; this one reacts to real failures.
+- **Manual overrides** — `markUnhealthy(name)` / `markHealthy(name)`
+  let ops toggle credential state manually (e.g., after a credential
+  rotation or a known-bad key).
+- **`AllCredentialsUnhealthyError`** (code:
+  `ALL_CREDENTIALS_UNHEALTHY`) — thrown when the strategy has no
+  healthy credential to pick. Fail loud rather than silently
+  fall through with no credential applied.
+- **Per-credential stats** — `snapshotCredentials()` returns
+  `{ name, weight, inFlight, totalPicks, totalErrors, consecutiveErrors,
+  healthy, unhealthySince }` for real-time SaaS dashboards.
+- MCP resource `config://provider-load-balancer` exposes strategy,
+  full credential state, health-tracking config, and all counters.
+- TypeScript: `ProviderCredential`, `ProviderLoadBalancerOptions`,
+  `ProviderLoadBalancerStrategy`, `ProviderLoadBalancerStats`,
+  `ProviderLoadBalancerMiddleware`, `ProviderCredentialSnapshot`,
+  `AllCredentialsUnhealthyError` class.
+
+### API contract (frozen)
+- Signature: `providerLoadBalancer({ credentials, strategy='round-robin', applyCredential, stickyKeyOf, unhealthyThreshold=null, unhealthyCooldownMs=30_000, random, onSelect, onCredentialError, onHealthChange })`
+- MCP URI: `config://provider-load-balancer`
+- Error code: `ALL_CREDENTIALS_UNHEALTHY`
+- Strategy names: `round-robin`, `least-loaded`, `weighted-random`, `sticky` — stable
+
+### Composition
+- Place `providerLoadBalancer` OUTSIDE providers, INSIDE routing
+  (`semanticRouter` 2.16, `costAwareRouter` 2.10). The routing decides
+  which MODEL to use; this middleware decides which CREDENTIAL to use.
+- Compose with `retryOnRateLimit` OUTSIDE the load balancer — a
+  credential-specific 429 will retry into a fresh credential
+  selection.
+- Compose with `providerHealthProbe` (1.62) for proactive liveness
+  checks alongside the reactive failure-counting here.
+
 ## [2.16.0] — 2026-08-12
 
 ### Added

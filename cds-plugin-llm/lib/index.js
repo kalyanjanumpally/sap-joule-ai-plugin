@@ -246,6 +246,9 @@ module.exports = {
   RetryBudgetExhaustedError: require('./middleware/retryBudget').RetryBudgetExhaustedError,
   // Semantic router — embedding-based routing to model/system prompt buckets (new in 2.16.0)
   semanticRouter:         require('./middleware/semanticRouter').semanticRouter,
+  // Provider load balancer — rotate across N credentials of same provider kind (new in 2.17.0)
+  providerLoadBalancer:   require('./middleware/providerLoadBalancer').providerLoadBalancer,
+  AllCredentialsUnhealthyError: require('./middleware/providerLoadBalancer').AllCredentialsUnhealthyError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

@@ -5238,6 +5238,105 @@ export interface SemanticRouterMiddleware extends Middleware {
  */
 export function semanticRouter(options: SemanticRouterOptions): SemanticRouterMiddleware;
 
+// ---- Provider load balancer (new in 2.17.0) -------------------------
+
+export type ProviderLoadBalancerStrategy =
+  | 'round-robin'
+  | 'least-loaded'
+  | 'weighted-random'
+  | 'sticky';
+
+export interface ProviderCredential {
+  /** Required label — used for stats bucket + MCP + callbacks. */
+  name:    string;
+  /** Weight for `weighted-random` strategy. Default 1. Positive integer. */
+  weight?: number;
+  /** Any other credential fields (apiKey, region, endpoint, ...) — passed through `applyCredential`. */
+  [key: string]: unknown;
+}
+
+export interface ProviderCredentialSnapshot {
+  name:              string;
+  weight:            number;
+  inFlight:          number;
+  totalPicks:        number;
+  totalErrors:       number;
+  consecutiveErrors: number;
+  healthy:           boolean;
+  unhealthySince:    number | null;
+}
+
+export interface ProviderLoadBalancerOptions {
+  credentials:         ProviderCredential[];
+  strategy?:           ProviderLoadBalancerStrategy;
+  /** Apply the picked credential to the request. Required — user knows where credentials belong. */
+  applyCredential:     (request: unknown, credential: ProviderCredential) => unknown;
+  /** Extract sticky key from ctx. Required when strategy=sticky. */
+  stickyKeyOf?:        (ctx: unknown) => string | null | undefined;
+  /** Consecutive failures before marking a credential unhealthy. Null = disable health tracking. Default null. */
+  unhealthyThreshold?: number | null;
+  /** Cooldown before an unhealthy credential is retried. Default 30000. Min 100. */
+  unhealthyCooldownMs?: number;
+  random?:             () => number;
+  onSelect?:           (info: { credential: string; strategy: string; inFlight: number }) => void;
+  onCredentialError?:  (info: { credential: string; error: unknown; consecutiveErrors: number }) => void;
+  onHealthChange?:     (info: { credential: string; healthy: boolean; reason: string }) => void;
+  now?:                () => number;
+}
+
+export interface ProviderLoadBalancerStats {
+  totalCalls:        number;
+  totalSelections:   number;
+  healthChecks:      number;
+  unhealthyAtSelect: number;
+  lastCredential:    string | null;
+  lastStrategy:      ProviderLoadBalancerStrategy;
+}
+
+export interface ProviderLoadBalancerMiddleware extends Middleware {
+  readonly stats: ProviderLoadBalancerStats;
+  reset(): void;
+  snapshotCredentials(): ProviderCredentialSnapshot[];
+  markUnhealthy(name: string, reason?: string): boolean;
+  markHealthy(name: string, reason?: string): boolean;
+  asMcpResource(): {
+    uri: 'config://provider-load-balancer';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ProviderLoadBalancerStats & {
+      strategy:             ProviderLoadBalancerStrategy;
+      credentialCount:      number;
+      unhealthyThreshold:   number | null;
+      unhealthyCooldownMs:  number;
+      credentials:          ProviderCredentialSnapshot[];
+    };
+  };
+}
+
+/**
+ * Thrown by `providerLoadBalancer` when every credential is marked unhealthy.
+ * `.code === 'ALL_CREDENTIALS_UNHEALTHY'`.
+ * @since 2.17.0
+ */
+export class AllCredentialsUnhealthyError extends LLMError {
+  readonly credentialNames: string[];
+}
+
+/**
+ * Rotate across N credential sets of the same provider kind: multiple
+ * OpenAI accounts (per-account rate limits), multiple Azure regions
+ * (geographic spread), etc. Strategies: `round-robin`, `least-loaded`,
+ * `weighted-random`, `sticky` (session/tenant affinity). Optional
+ * health tracking marks a credential unhealthy after N consecutive
+ * failures with configurable cooldown.
+ * @since 2.17.0
+ */
+export function providerLoadBalancer(options: ProviderLoadBalancerOptions): ProviderLoadBalancerMiddleware;
+
+/** Strategy names accepted by `providerLoadBalancer`. Frozen. @since 2.17.0 */
+export const STRATEGIES: readonly ProviderLoadBalancerStrategy[];
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

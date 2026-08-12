@@ -29,7 +29,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
-| **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) |
+| **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
 | **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
@@ -1148,6 +1148,42 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Provider load balancer (new in v2.17.0)
+
+`providerLoadBalancer` rotates across N credential sets of the **same** provider kind — multiple OpenAI accounts to work around per-account rate limits, multiple Azure regions for geographic spread, multiple Bedrock cross-account roles, etc. Complements the shipped 11-provider abstraction (which supports one credential set per provider kind) with per-account rotation on top.
+
+```js
+const { providerLoadBalancer } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(providerLoadBalancer({
+  credentials: [
+    { name: 'openai-org-a', apiKey: process.env.OPENAI_KEY_A, weight: 3 },
+    { name: 'openai-org-b', apiKey: process.env.OPENAI_KEY_B, weight: 1 },
+    { name: 'openai-org-c', apiKey: process.env.OPENAI_KEY_C, weight: 1 },
+  ],
+  strategy: 'least-loaded',                                       // round-robin | least-loaded | weighted-random | sticky
+  applyCredential: (req, cred) => ({ ...req, credentials: { apiKey: cred.apiKey } }),
+  unhealthyThreshold:  3,                                         // 3 consecutive failures → mark unhealthy
+  unhealthyCooldownMs: 30_000,
+  onHealthChange: (i) => cds.log('llm:lb').warn('health', i),
+}));
+```
+
+Four strategies:
+- **`round-robin`** — cycle through credentials in order (default)
+- **`least-loaded`** — pick the credential with the fewest in-flight calls
+- **`weighted-random`** — probability ∝ `weight` (higher weight = more picks)
+- **`sticky`** — same `stickyKeyOf(ctx)` value always picks the same credential (session affinity, tenant isolation across accounts)
+
+Health tracking is **opt-in** via `unhealthyThreshold`. After N consecutive failures, a credential is marked unhealthy and skipped by the strategy until `unhealthyCooldownMs` elapses. A successful call resets the consecutive-error counter. Composes with `providerHealthProbe` (v1.62.0) — that primitive tests liveness *proactively*; this one *reacts* to real failures.
+
+- `snapshotCredentials()` returns per-credential state (weight, inFlight, totalPicks, totalErrors, healthy, unhealthySince) for real-time SaaS dashboards.
+- `markUnhealthy(name)` / `markHealthy(name)` for ops overrides.
+- `AllCredentialsUnhealthyError` (code `ALL_CREDENTIALS_UNHEALTHY`) when the strategy has no healthy credential to pick — fail loud rather than silently proceed with no credential applied.
+- MCP resource: `config://provider-load-balancer`.
+
+Placement rule: put `providerLoadBalancer` **outside** providers, **inside** routing (`semanticRouter` v2.16.0, `costAwareRouter` v2.10.0). The routing decides which *model* to use; this middleware decides which *credential* to use.
 
 ## Semantic router (new in v2.16.0)
 
