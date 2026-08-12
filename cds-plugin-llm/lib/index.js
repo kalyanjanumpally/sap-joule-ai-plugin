@@ -238,6 +238,9 @@ module.exports = {
   tokenizePII:            require('./middleware/reversibleTokenization').tokenizePII,
   detokenizePII:          require('./middleware/reversibleTokenization').detokenizePII,
   PII_PATTERNS:           require('./middleware/reversibleTokenization').BUILT_IN_PATTERNS,
+  // Fair-share scheduler — per-tenant WRR admission control (new in 2.14.0)
+  fairShareScheduler:     require('./middleware/fairShareScheduler').fairShareScheduler,
+  FairShareRejectedError: require('./middleware/fairShareScheduler').FairShareRejectedError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

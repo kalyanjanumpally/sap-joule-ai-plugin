@@ -4,6 +4,57 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] — 2026-08-12
+
+### Added
+- **`fairShareScheduler` middleware** — weighted round-robin (WRR)
+  admission across tenants on top of a shared concurrency ceiling. No
+  single tenant can starve the others under load; per-tenant queue
+  depth caps enforce backpressure. Fixes the noisy-neighbor problem
+  in SaaS deployments of the plugin.
+- Distinct from the shipped 1.x `tenantIsolate` (which TAGS requests
+  for observability) and `bulkhead` (which caps concurrency without
+  fairness). This primitive adds a *scheduler*: when the pool is
+  full, the next request admitted is the one from the tenant with
+  the most WRR credit, not FIFO.
+- **Weighted round-robin**: `weights: { gold: 3, silver: 1, free: 1 }`
+  gives gold tenants 3x more admission slots per cycle. When all
+  tenants with pending work run out of credit, credits are refilled
+  from weight — but only for tenants with pending work, so idle
+  tenants don't accumulate unfair credit debt.
+- **Backpressure signal**: per-tenant queue depth cap
+  (`maxPerTenantQueue`, default 100). Exceeding it throws
+  `FairShareRejectedError` (`code: 'FAIR_SHARE_QUEUE_FULL'`) with
+  `.tenant`, `.queueDepth`, `.queueLimit` fields. One over-subscribed
+  tenant cannot block others — separate per-tenant queues.
+- **Cleanup on error**: a downstream throw releases the slot so the
+  scheduler doesn't leak capacity.
+- **Live observability**: `snapshotTenants()` returns a per-tenant
+  snapshot (weight, credits, active, queued, admitted, rejected,
+  queued) — great for real-time SaaS dashboards. `activeCount()`,
+  `queuedCount()`, `tenantCount()` for cheap gauges.
+- MCP resource `config://fair-share-scheduler` exposes the full
+  scheduler state including per-tenant breakdown.
+- TypeScript: `FairShareSchedulerOptions`, `FairShareSchedulerStats`,
+  `FairShareSchedulerMiddleware`, `FairShareTenantSnapshot`,
+  `FairShareRejectedError` class.
+
+### API contract (frozen)
+- Signature: `fairShareScheduler({ tenantOf, maxConcurrent=10, weights={}, defaultWeight=1, maxPerTenantQueue=100, onAdmit, onQueue, onReject, onError })`
+- MCP URI: `config://fair-share-scheduler`
+- Error code: `FAIR_SHARE_QUEUE_FULL`
+- Anonymous bucket: `__anon__` (when `tenantOf` returns null/empty)
+
+### Composition
+- Place `fairShareScheduler` OUTSIDE the shipped `bulkhead` — the
+  scheduler manages its own concurrency ceiling; wrapping bulkhead
+  underneath would double-count slots.
+- Combine with `tenantIsolate` (1.x) for observability tagging plus
+  fairness enforcement — orthogonal concerns.
+- With `retryOnRateLimit` OUTSIDE the scheduler, per-tenant retries
+  consume per-tenant queue slots (respect the fairness). INSIDE means
+  retries bypass fairness — appropriate only for short internal loops.
+
 ## [2.13.0] — 2026-08-12
 
 ### Added

@@ -29,7 +29,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
-| **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) |
+| **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
 | **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
@@ -1148,6 +1148,35 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Multi-tenant fair-share scheduler (new in v2.14.0)
+
+`fairShareScheduler` sits above the shipped concurrency primitives and admits requests in weighted round-robin (WRR) order across tenants. No single tenant can starve the others under load — solves the noisy-neighbor problem in SaaS deployments of the plugin.
+
+```js
+const { fairShareScheduler } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(fairShareScheduler({
+  tenantOf:          (ctx) => ctx.request.tenantId ?? 'anon',
+  maxConcurrent:     20,
+  weights:           { gold: 5, silver: 2, free: 1 },
+  defaultWeight:     1,
+  maxPerTenantQueue: 100,
+  onReject: (i) => cds.log('llm:fair-share').warn('backpressure', i),
+}));
+```
+
+Distinct from the shipped primitives:
+- **`tenantIsolate`** just TAGS requests for observability. `fairShareScheduler` *schedules*.
+- **`bulkhead`** caps concurrency globally without fairness. `fairShareScheduler` cap + share fairly.
+- **`distributedLock`** is per-key exclusivity across instances. `fairShareScheduler` is per-tenant queueing within an instance.
+
+Highlights:
+- **WRR**: `weights: { gold: 3, silver: 1 }` gives gold 3× more slots per cycle. When all tenants with pending work run out of credit, credits refill from weight — but only for tenants with pending work, so idle tenants don't accumulate unfair credit debt.
+- **Backpressure**: per-tenant queue depth cap (`maxPerTenantQueue`). Exceeding throws `FairShareRejectedError` (code `FAIR_SHARE_QUEUE_FULL`) with `.tenant`/`.queueDepth`/`.queueLimit`. One over-subscribed tenant cannot block others — separate per-tenant queues.
+- **Live snapshot**: `snapshotTenants()` returns per-tenant weight, credits, active, queued, admitted, rejected. Great for real-time SaaS dashboards. MCP resource: `config://fair-share-scheduler`.
+
+Composition rule: place `fairShareScheduler` **outside** the shipped `bulkhead` (the scheduler manages its own ceiling; wrapping bulkhead underneath would double-count slots). Place `retryOnRateLimit` **outside** the scheduler so per-tenant retries consume per-tenant queue slots (respect fairness); placing it **inside** means retries bypass fairness — appropriate only for short internal loops.
 
 ## Reversible PII tokenization (new in v2.13.0)
 

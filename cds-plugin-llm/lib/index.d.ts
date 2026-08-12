@@ -4969,6 +4969,93 @@ export interface ReversibleTokenizationMiddleware extends Middleware {
  */
 export function reversibleTokenization(options?: ReversibleTokenizationOptions): ReversibleTokenizationMiddleware;
 
+// ---- Fair-share scheduler (new in 2.14.0) ---------------------------
+
+export interface FairShareSchedulerOptions {
+  /** Extract tenant ID from ctx. Non-string / empty → bucket `__anon__`. */
+  tenantOf:      (ctx: unknown) => string | null | undefined;
+  /** Total in-flight concurrency ceiling across all tenants. Default 10. */
+  maxConcurrent?: number;
+  /** Per-tenant weight overrides. Higher weight = more slots per WRR cycle. */
+  weights?:       Record<string, number>;
+  /** Weight for tenants not in `weights`. Default 1. */
+  defaultWeight?: number;
+  /** Per-tenant queue depth cap. Over-limit throws FairShareRejectedError. Default 100. */
+  maxPerTenantQueue?: number;
+  onAdmit?:  (info: { tenant: string; waitMs: number; activeCount: number }) => void;
+  onQueue?:  (info: { tenant: string; queueDepth: number; totalQueued: number }) => void;
+  onReject?: (info: { tenant: string; queueDepth: number; queueLimit: number }) => void;
+  onError?:  (info: { phase: 'tenantOf'; error: unknown }) => void;
+  now?:      () => number;
+}
+
+export interface FairShareTenantSnapshot {
+  weight:        number;
+  credits:       number;
+  active:        number;
+  queued:        number;
+  totalAdmitted: number;
+  totalRejected: number;
+  totalQueued:   number;
+}
+
+export interface FairShareSchedulerStats {
+  totalCalls:         number;
+  totalAdmitted:      number;
+  totalRejected:      number;
+  totalQueued:        number;
+  peakActive:         number;
+  peakQueued:         number;
+  lastTenant:         string | null;
+  lastAdmitLatencyMs: number | null;
+}
+
+export interface FairShareSchedulerMiddleware extends Middleware {
+  readonly stats: FairShareSchedulerStats;
+  reset(): void;
+  activeCount(): number;
+  queuedCount(): number;
+  tenantCount(): number;
+  snapshotTenants(): Record<string, FairShareTenantSnapshot>;
+  asMcpResource(): {
+    uri: 'config://fair-share-scheduler';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => FairShareSchedulerStats & {
+      maxConcurrent:       number;
+      defaultWeight:       number;
+      maxPerTenantQueue:   number;
+      configuredWeights:   Record<string, number>;
+      currentActive:       number;
+      currentQueued:       number;
+      tenants:             Record<string, FairShareTenantSnapshot>;
+    };
+  };
+}
+
+/**
+ * Thrown by `fairShareScheduler` when a tenant's queue exceeds
+ * `maxPerTenantQueue`. `.code === 'FAIR_SHARE_QUEUE_FULL'`.
+ * @since 2.14.0
+ */
+export class FairShareRejectedError extends LLMError {
+  readonly tenant:     string;
+  readonly queueDepth: number;
+  readonly queueLimit: number;
+}
+
+/**
+ * Multi-tenant fair-share scheduler. Weighted round-robin admission
+ * across tenants on top of a shared concurrency ceiling. No single
+ * tenant can starve the others under load; per-tenant queue depth
+ * caps enforce backpressure. Distinct from `tenantIsolate` (which
+ * only tags requests) and `bulkhead` (which caps concurrency without
+ * fairness).
+ * @since 2.14.0
+ */
+export function fairShareScheduler(options: FairShareSchedulerOptions): FairShareSchedulerMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {
