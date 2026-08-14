@@ -27,7 +27,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `quotaManager` (v2.23.0 — per-user USD quota with warnings) · `inMemoryQuotaStore` · `costOverrunPredictor` (v2.33.0 — calendar-window spend projection) · `startOfMonth` / `endOfMonth` (+day / quarter helpers) · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
 | **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `clientSideRateLimit` (v2.26.0 — proactive N-per-window throttle) · `deadline` · `gracePeriod` (v2.28.0 — soft-deadline warnings + optional hard timeout) · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) · `responseSigning` (v2.32.0 — HMAC responses + `verifyResponseSignature`) |
-| **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` · `providerHealthAggregate` (v2.31.0 — unified provider health score) |
+| **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` · `providerHealthAggregate` (v2.31.0 — unified provider health score) · `latencyHistogram` (v2.35.0 — per-dimension p50/p95/p99 with Prometheus export) |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) · `multimodalRouter` (v2.25.0 — capability-aware routing by attachment type) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
@@ -1148,6 +1148,44 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Latency histogram (new in v2.35.0)
+
+`latencyHistogram` tracks per-dimension latency distributions using Prometheus-style bucketed counts (**bucket counts + sum + count** — not raw samples). Reports p50/p95/p99 percentiles cheaply. O(1) memory per dimension regardless of sample count. Complements `providerHealthAggregate` (v2.31.0 — single p95 verdict) with the **full percentile shape** + exportable Prometheus format.
+
+```js
+const { latencyHistogram } = require('@saptarishi/cds-plugin-llm');
+
+const hist = latencyHistogram({
+  dimensionsOf:    (ctx, result) => ({ model: result?.model ?? 'unknown' }),
+  overThresholdMs: 15_000,             // p95 threshold
+  onOverThreshold: (i) => cds.log('llm:slo').warn('p95 breach', i),
+});
+llm.use(hist);
+
+// Query percentiles:
+const p = hist.getPercentiles({ model: 'gpt-4o' });
+// → { count: 145, sum: 92500, mean: 638, p50: 500, p95: 2500, p99: 5000 }
+
+// Export for Prometheus scraping:
+const prom = hist.prometheusHistograms('llm_latency_ms');
+// llm_latency_ms_bucket{model="gpt-4o",le="500"} 87
+// llm_latency_ms_bucket{model="gpt-4o",le="1000"} 120
+// ...
+// llm_latency_ms_sum{model="gpt-4o"} 92500
+// llm_latency_ms_count{model="gpt-4o"} 145
+```
+
+Highlights:
+- **Prometheus-canonical bucket layout** by default: `[5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]` ms. Users with different SLOs pass a custom `buckets` array.
+- **Percentile computation** via cumulative-count walk — O(buckets) regardless of sample count.
+- **Filtered percentiles** — `getPercentiles({ model: 'gpt-4o' })` aggregates matching dimensions.
+- **Custom percentile arrays** — `getPercentiles(filter, [10, 90, 99.9])` for tail-latency analysis.
+- **Rising-edge over-threshold** callback rearms on recovery so subsequent breaches also fire.
+- **Fail-safe**: dimensionsOf errors captured via `onError`; latency still recorded on downstream error paths.
+- MCP resource: `config://latency-histogram`.
+
+Compose with `providerHealthAggregate` (v2.31.0) — aggregate gives the healthy/degraded verdict; histogram gives the full percentile shape for diagnostics. Compose with `promMetrics` (v1.x) — expose `prometheusHistograms()` output alongside the shipped `llm_*` metrics for unified Grafana dashboards.
 
 ## User feedback aggregator (new in v2.34.0)
 

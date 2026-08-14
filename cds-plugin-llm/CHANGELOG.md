@@ -4,6 +4,61 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.35.0] — 2026-08-14
+
+### Added
+- **`latencyHistogram` middleware** — per-dimension latency histograms
+  using Prometheus-style bucketed counts (bucket counts + sum + count,
+  NOT raw samples). Reports p50/p95/p99 percentiles cheaply. O(1)
+  memory per dimension regardless of sample count. Complements
+  `providerHealthAggregate` (2.31 — single p95 verdict) with the FULL
+  percentile shape + exportable Prometheus format.
+- **Prometheus-canonical bucket layout** by default:
+  `[5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]` ms.
+  Users with different SLOs pass a custom `buckets` array (must be
+  positive, sorted ascending on registration).
+- **Per-dimension aggregation** — `dimensionsOf(ctx, result)` returns
+  `{ model: 'gpt-4o', tenant: 'acme' }` (or similar). Same dimensions
+  merge into a single bucket; different dimensions get separate ones.
+- **Percentile computation** via cumulative-count walk — O(buckets)
+  regardless of sample count.
+- **Filtered percentiles** — `getPercentiles({ model: 'gpt-4o' })`
+  aggregates matching dimensions' buckets, then computes percentiles.
+- **Custom percentile arrays** — `getPercentiles(filter, [10, 90, 99.9])`
+  returns any set of percentiles the user asks for.
+- **Rising-edge over-threshold callback** — `onOverThreshold` fires
+  when the configured percentile (default p95) crosses `overThresholdMs`
+  upward. Rearms on recovery so subsequent breaches also fire.
+- **Prometheus text export** — `prometheusHistograms(metricName)`
+  returns scrape-ready `_bucket` / `_sum` / `_count` lines with `le=`
+  labels. Escapes `"` in label values correctly.
+- **Fail-safe** — dimensionsOf errors are captured via `onError` and
+  the sample is still recorded under empty dimensions.
+- **Records latency on downstream errors too** — timing data still
+  captured on the error path so latency histograms reflect real
+  provider behavior including failures.
+- MCP resource `config://latency-histogram` exposes buckets + full
+  per-dimension snapshot with p50/p95/p99.
+- `DEFAULT_LATENCY_BUCKETS_MS` frozen constant exported.
+- TypeScript: `LatencyHistogramOptions`, `LatencyHistogramStats`,
+  `LatencyHistogramMiddleware`, `LatencyPercentiles`,
+  `LatencyHistogramSnapshot`.
+
+### API contract (frozen)
+- Signature: `latencyHistogram({ dimensionsOf, buckets, overThresholdMs, overThresholdPercentile=95, onOverThreshold, onError })`
+- MCP URI: `config://latency-histogram`
+- Prometheus format: `_bucket` / `_sum` / `_count` with `le=` labels — stable
+
+### Composition
+- Compose with `providerHealthAggregate` (2.31) — aggregate gives
+  single-signal healthy/degraded verdict; histogram gives full
+  percentile shape for diagnostics.
+- Compose with `promMetrics` (1.x) — expose `prometheusHistograms()`
+  output alongside the shipped `llm_*` metrics for unified Grafana
+  dashboards.
+- Compose with `otelSpans` (1.93) — emit p95/p99 as span attributes
+  for Distributed Trace analysis.
+
 ## [2.34.0] — 2026-08-14
 
 ### Added

@@ -6810,6 +6810,90 @@ export interface UserFeedbackAggregatorMiddleware extends Middleware {
  */
 export function userFeedbackAggregator(options?: UserFeedbackAggregatorOptions): UserFeedbackAggregatorMiddleware;
 
+// ---- Latency histogram (new in 2.35.0) -----------------------------
+
+export interface LatencyHistogramSnapshot {
+  dimensions: Record<string, unknown>;
+  count:      number;
+  sum:        number;
+  mean:       number;
+  p50:        number;
+  p95:        number;
+  p99:        number;
+}
+
+export interface LatencyPercentiles {
+  count: number;
+  sum:   number;
+  mean:  number;
+  [pctKey: string]: number;   // e.g., p50, p95, p99, p99.9
+}
+
+export interface LatencyHistogramOptions {
+  /** Extract dimensions to bucket by (model, tenant, etc.). Default: empty (single global bucket). */
+  dimensionsOf?:            (ctx: unknown, result: unknown) => Record<string, unknown> | null | undefined;
+  /** Bucket upper bounds in ms. Sorted ascending. Default: Prometheus-canonical layout. */
+  buckets?:                 number[];
+  /** Fire onOverThreshold when the given percentile of the target dimension exceeds this ms. */
+  overThresholdMs?:         number | null;
+  /** Percentile to check against overThresholdMs. Default 95. Range (0, 100). */
+  overThresholdPercentile?: number;
+  onOverThreshold?: (info: {
+    dimensions: Record<string, unknown>;
+    percentile: number;
+    value:      number;
+    threshold:  number;
+    count:      number;
+  }) => void;
+  onError?: (info: { phase: 'dimensionsOf'; error: unknown }) => void;
+  now?:     () => number;
+}
+
+export interface LatencyHistogramStats {
+  totalCalls:         number;
+  dimensionsCount:    number;
+  overThresholdFires: number;
+  dimensionErrors:    number;
+  lastLatencyMs:      number | null;
+}
+
+export interface LatencyHistogramMiddleware extends Middleware {
+  readonly stats: LatencyHistogramStats;
+  reset(): void;
+  getPercentiles(
+    filter?: Record<string, unknown> | null,
+    percentiles?: number[],
+  ): LatencyPercentiles;
+  snapshot(): Record<string, LatencyHistogramSnapshot>;
+  /** Export as Prometheus histogram text (scrape-ready). */
+  prometheusHistograms(metricName?: string): string;
+  asMcpResource(): {
+    uri: 'config://latency-histogram';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => LatencyHistogramStats & {
+      buckets:                 number[];
+      overThresholdMs:         number | null;
+      overThresholdPercentile: number;
+      dimensions:              Record<string, LatencyHistogramSnapshot>;
+    };
+  };
+}
+
+/**
+ * Latency histogram. Tracks per-dimension latency distributions using
+ * Prometheus-style bucketed counts (bucket counts + sum + count — not
+ * raw samples). Reports p50/p95/p99 percentiles cheaply. Complements
+ * `providerHealthAggregate` (2.31 — single p95) with the FULL
+ * percentile shape + exportable Prometheus format.
+ * @since 2.35.0
+ */
+export function latencyHistogram(options?: LatencyHistogramOptions): LatencyHistogramMiddleware;
+
+/** Prometheus-canonical latency bucket layout in ms. Frozen. @since 2.35.0 */
+export const DEFAULT_LATENCY_BUCKETS_MS: readonly number[];
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

@@ -309,6 +309,9 @@ module.exports = {
   endOfQuarter:            require('./middleware/costOverrunPredictor').endOfQuarter,
   // User feedback aggregator — human rating collection + per-dimension breakdown (new in 2.34.0)
   userFeedbackAggregator:  require('./middleware/userFeedbackAggregator').userFeedbackAggregator,
+  // Latency histogram — per-dimension bucketed distribution + p50/p95/p99 (new in 2.35.0)
+  latencyHistogram:        require('./middleware/latencyHistogram').latencyHistogram,
+  DEFAULT_LATENCY_BUCKETS_MS: require('./middleware/latencyHistogram').DEFAULT_BUCKETS_MS,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,
