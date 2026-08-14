@@ -275,6 +275,9 @@ module.exports = {
   QuotaExhaustedError:    require('./middleware/quotaManager').QuotaExhaustedError,
   // Stream aggregator — buffer + emit aggregated chunks for smooth UI (new in 2.24.0)
   streamAggregator:       require('./middleware/streamAggregator').streamAggregator,
+  // Multimodal attachment router — pick model by attachment type (new in 2.25.0)
+  multimodalRouter:       require('./middleware/multimodalRouter').multimodalRouter,
+  MULTIMODAL_ROUTE_TYPES: require('./middleware/multimodalRouter').KNOWN_TYPES,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

@@ -5995,6 +5995,71 @@ export interface StreamAggregatorMiddleware extends Middleware {
  */
 export function streamAggregator(options?: StreamAggregatorOptions): StreamAggregatorMiddleware;
 
+// ---- Multimodal attachment router (new in 2.25.0) -------------------
+
+export type MultimodalRouteType = 'text' | 'vision' | 'pdf' | 'audio' | 'video';
+
+export interface MultimodalRoute {
+  model?:        string;
+  system?:       string;
+  temperature?:  number;
+  maxTokens?:    number;
+  [key: string]: unknown;
+}
+
+export interface MultimodalRouterOptions {
+  /** Map of canonical capability key → route config. Keys must be sorted (`'pdf+vision'`, not `'vision+pdf'`). */
+  routes:             Record<string, MultimodalRoute>;
+  /** Route key to use when no exact match. Must exist in `routes`. Default `'text'`. */
+  fallbackKey?:       string;
+  /** Custom attachment detection. Must return a Set of type strings. */
+  detectAttachments?: (request: unknown) => Set<string>;
+  /** Custom route application. Default overrides model/system/temperature/maxTokens. */
+  applyRoute?:        (request: unknown, route: MultimodalRoute) => unknown;
+  onRoute?:    (info: { key: string; detectedKey: string; detectedTypes: string[]; usedFallback: boolean; route: MultimodalRoute }) => void;
+  onFallback?: (info: { detectedKey: string; fallbackKey: string; detectedTypes: string[] }) => void;
+  onError?:    (info: { phase: 'detectAttachments'; error: unknown }) => void;
+}
+
+export interface MultimodalRouterStats {
+  totalCalls:    number;
+  routedByKey:   Record<string, number>;
+  fallbacks:     number;
+  detectErrors:  number;
+  lastKey:       string | null;
+  lastDetected:  string | null;
+}
+
+export interface MultimodalRouterMiddleware extends Middleware {
+  readonly stats: MultimodalRouterStats;
+  reset(): void;
+  listRouteKeys(): string[];
+  routeDistribution(): Record<string, number>;
+  asMcpResource(): {
+    uri: 'config://multimodal-router';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => MultimodalRouterStats & {
+      routes:        Record<string, { model: string | null; system: boolean }>;
+      fallbackKey:   string;
+      distribution:  Record<string, number>;
+    };
+  };
+}
+
+/**
+ * Inspects the request's message content blocks, detects which media types
+ * are present (text / vision / pdf / audio / video), and routes to the
+ * model configured for that capability set. Canonical key = sorted-set of
+ * detected types joined by `+` (e.g. `'pdf+vision'`).
+ * @since 2.25.0
+ */
+export function multimodalRouter(options: MultimodalRouterOptions): MultimodalRouterMiddleware;
+
+/** Known route type names. Frozen. @since 2.25.0 */
+export const MULTIMODAL_ROUTE_TYPES: readonly MultimodalRouteType[];
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

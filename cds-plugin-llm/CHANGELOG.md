@@ -4,6 +4,61 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.25.0] — 2026-08-14
+
+### Added
+- **`multimodalRouter` middleware** — inspects the request's message
+  content blocks, detects which media types are present (text, vision,
+  pdf, audio, video), and routes to the model configured for that
+  capability set. Complements the shipped router primitives:
+  - `modelRouter` (1.x) — static keyword rules
+  - `semanticRouter` (2.16) — embedding-based routing
+  - `costAwareRouter` (2.10) — quality-driven escalation
+  - `multimodalRouter` (this) — **capability-aware** routing
+- **Canonical sorted-set keys** — `'pdf+vision'`, not `'vision+pdf'`.
+  Middleware validates route keys at construction and rejects
+  unsorted ones so config mistakes fail loud.
+- **Broad detection heuristics** — recognizes Anthropic-style
+  `{ type: 'image' }`, OpenAI-style `{ type: 'image_url' }`,
+  `{ type: 'pdf' }`, `{ type: 'audio' }`, `{ type: 'video' }`, and
+  `document`/`file` blocks with MIME sniffing
+  (`application/pdf` → pdf, `image/*` → vision, etc.). Extensible via
+  `detectAttachments(request)` override.
+- **Fallback strategy** — when the detected key isn't in `routes`,
+  falls back to `fallbackKey` (default `'text'`). Fires `onFallback`
+  callback for observability so config gaps surface quickly.
+- **Respects capability matrix** — routes are just config; if you
+  route vision requests to a text-only model, `capabilities(llm)`
+  (v2.3.0) will flag the mismatch and `preflight` will refuse to
+  boot.
+- **Fail-open on detection error** — a throwing `detectAttachments`
+  falls through to `next()` without modifying the request.
+- **`listRouteKeys()`** returns registered keys; **`routeDistribution()`**
+  returns per-key fraction of routed calls for dashboards.
+- Standalone helpers `defaultDetectAttachments`, `defaultApplyRoute`,
+  `keyFor` exported for custom composition.
+- `MULTIMODAL_ROUTE_TYPES` frozen list of known type names.
+- MCP resource `config://multimodal-router` exposes route table
+  (with models), fallback key, distribution, and full stats.
+- TypeScript: `MultimodalRouterOptions`, `MultimodalRoute`,
+  `MultimodalRouteType`, `MultimodalRouterStats`,
+  `MultimodalRouterMiddleware`.
+
+### API contract (frozen)
+- Signature: `multimodalRouter({ routes, fallbackKey='text', detectAttachments, applyRoute, onRoute, onFallback, onError })`
+- MCP URI: `config://multimodal-router`
+- Route key format: canonical sorted-set joined by `+`
+- Known type names: `'text'`, `'vision'`, `'pdf'`, `'audio'`, `'video'`
+
+### Composition
+- Place `multimodalRouter` OUTSIDE any middleware that reads
+  `request.model` (retry, providers, `costAwareRouter`,
+  `semanticRouter`). The router mutates `request.model` per call and
+  restores it on exit.
+- Compose with `costAwareRouter` (2.10) UNDERNEATH — multimodal
+  picks the *capability tier* (vision-capable model); cost-aware
+  escalates within that tier on low score.
+
 ## [2.24.0] — 2026-08-14
 
 ### Added

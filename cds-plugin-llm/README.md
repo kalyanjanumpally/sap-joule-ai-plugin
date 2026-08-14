@@ -29,7 +29,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
-| **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) |
+| **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) · `multimodalRouter` (v2.25.0 — capability-aware routing by attachment type) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
 | **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `functionCallArbitrator` (v2.18.0 — tool-call allowlist + validation) · `normalizeToolShape` · `normalizeToolList` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
@@ -1148,6 +1148,50 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Multimodal attachment router (new in v2.25.0)
+
+`multimodalRouter` inspects the request's message content blocks, detects which media types are present (text, vision, pdf, audio, video), and routes to the model configured for that capability set. Fills the "how do I automatically pick the right model for a vision request vs. a text request?" gap that the four other routers don't cover.
+
+```js
+const { multimodalRouter } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(multimodalRouter({
+  routes: {
+    'text':          { model: 'openai/gpt-4o-mini' },
+    'vision':        { model: 'openai/gpt-4o' },
+    'text+vision':   { model: 'openai/gpt-4o' },
+    'pdf':           { model: 'anthropic/claude-opus-4-7' },
+    'audio':         { model: 'openai/whisper-1' },
+    'pdf+vision':    { model: 'anthropic/claude-opus-4-7' },
+  },
+  fallbackKey: 'text',
+  onRoute:    (i) => cds.log('llm:mm').info('routed', i.key),
+  onFallback: (i) => cds.log('llm:mm').warn('no route for', i.detectedKey),
+}));
+```
+
+Detection recognizes both Anthropic and OpenAI shapes:
+- `{ type: 'image' }` / `{ type: 'image_url' }` / `{ type: 'image_base64' }` → **vision**
+- `{ type: 'pdf' }` / `{ type: 'document', mimeType: 'application/pdf' }` → **pdf**
+- `{ type: 'audio' }` / `{ type: 'input_audio' }` → **audio**
+- `{ type: 'video' }` → **video**
+- string content or `{ type: 'text' }` blocks → **text**
+- MIME sniffing on `document`/`file` blocks (`image/*` → vision, `audio/*` → audio, etc.)
+
+Complements the four other routers:
+- **`modelRouter`** — static keyword rules
+- **`semanticRouter`** — embedding-based routing
+- **`costAwareRouter`** — quality-driven escalation
+- **`multimodalRouter`** — capability-aware routing
+
+Compose them: multimodal picks the capability tier upfront; cost-aware escalates within that tier if the response scores low.
+
+Highlights:
+- **Canonical sorted-set keys** (`'pdf+vision'`, not `'vision+pdf'`). Middleware validates + rejects unsorted keys at construction so config mistakes fail loud.
+- **Respects capability matrix** — routes are just config; if you route vision to a text-only model, `capabilities(llm)` (v2.3.0) flags the mismatch and `preflight` refuses to boot.
+- **Fail-open** on detection error — a throwing `detectAttachments` falls through unmodified.
+- MCP resource: `config://multimodal-router` (route table + distribution + full stats).
 
 ## Streaming chunk aggregator (new in v2.24.0)
 
