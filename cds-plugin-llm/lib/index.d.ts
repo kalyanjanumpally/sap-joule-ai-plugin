@@ -5932,6 +5932,69 @@ export class QuotaExhaustedError extends LLMError {
  */
 export function quotaManager(options: QuotaManagerOptions): QuotaManagerMiddleware;
 
+// ---- Streaming chunk aggregator (new in 2.24.0) ---------------------
+
+export interface StreamAggregatorOptions {
+  /** Flush when the buffer reaches this many characters. Default 20. */
+  minChars?:    number;
+  /** Flush after the buffer has been sitting for this long. Default 100ms. 0 disables idle flushing. */
+  maxIdleMs?:   number;
+  /** Methods to skip (pass through unwrapped). Default `['chat', 'embed', 'batch']`. */
+  skipMethods?: string[];
+  /** Extract flushable text from a chunk. Default: returns `chunk.text` or `chunk` if string. */
+  extractText?: (chunk: unknown) => string | null;
+  /** Build the aggregated output chunk. Default: `{ text }`. */
+  makeChunk?:   (text: string) => unknown;
+  onFlush?:     (info: { text: string; reason: 'idle' | 'threshold' | 'final'; size: number }) => void;
+  now?:         () => number;
+}
+
+export interface StreamAggregatorStats {
+  totalStreams:       number;
+  totalSourceChunks:  number;
+  totalEmittedChunks: number;
+  totalChars:         number;
+  idleFlushes:        number;
+  threshFlushes:      number;
+  finalFlushes:       number;
+  passthroughChunks:  number;
+  skippedStreams:     number;
+}
+
+export interface StreamAggregatorMiddleware extends Middleware {
+  readonly stats: StreamAggregatorStats;
+  reset(): void;
+  /** 1 - (emitted / source). Higher = more coalescing happening. */
+  reductionRatio(): number;
+  asMcpResource(): {
+    uri: 'config://stream-aggregator';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => StreamAggregatorStats & {
+      minChars:       number;
+      maxIdleMs:      number;
+      skipMethods:    string[];
+      reductionRatio: number;
+    };
+  };
+}
+
+/**
+ * Streaming chunk aggregator. Buffers per-token chunks from the provider
+ * and emits aggregated chunks either when the buffer reaches `minChars`
+ * OR when it's been idle for `maxIdleMs`. Reduces UI cursor jitter when
+ * the provider emits per-character chunks. Preserves the 1.72 stream
+ * completion tracker — non-text chunks (including the `done` chunk)
+ * pass through untouched so `onComplete` still fires correctly.
+ *
+ * Distinct from `streamThrottle` (1.97) — that PACES chunks with a
+ * delay; this one COMBINES chunks. Compose both together for fewer
+ * chunks AT a smooth cadence.
+ * @since 2.24.0
+ */
+export function streamAggregator(options?: StreamAggregatorOptions): StreamAggregatorMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

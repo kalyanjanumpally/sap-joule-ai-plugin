@@ -273,6 +273,8 @@ module.exports = {
   quotaManager:           require('./middleware/quotaManager').quotaManager,
   inMemoryQuotaStore:     require('./middleware/quotaManager').inMemoryQuotaStore,
   QuotaExhaustedError:    require('./middleware/quotaManager').QuotaExhaustedError,
+  // Stream aggregator — buffer + emit aggregated chunks for smooth UI (new in 2.24.0)
+  streamAggregator:       require('./middleware/streamAggregator').streamAggregator,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

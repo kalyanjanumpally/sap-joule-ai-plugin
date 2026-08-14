@@ -34,7 +34,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `functionCallArbitrator` (v2.18.0 — tool-call allowlist + validation) · `normalizeToolShape` · `normalizeToolList` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
 | **Long-context** | `compactHistory` · `sessionContextStore` (v2.19.0 — per-session history with prune / summarize) · `inMemorySessionStore` |
-| **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` |
+| **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` · `streamAggregator` (v2.24.0 — coalesce per-token chunks for smoother UI) |
 | **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` · `promptExperiment` (v2.20.0 — live A/B testing with 95% CI winner detection) |
 | **Bulk workflows** | `runBatch` · `waitForBatch` |
 | **Multimodal helpers** | `imageFromFile` / `pdfFromUrl` / `audioFromBase64` / `uploadPdfFromUrl` / etc. |
@@ -1148,6 +1148,36 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Streaming chunk aggregator (new in v2.24.0)
+
+`streamAggregator` buffers per-token stream chunks and emits **aggregated** chunks either when the buffer reaches `minChars` (default 20) OR when it's been idle for `maxIdleMs` (default 100ms). Reduces UI cursor jitter when the provider emits per-character chunks — a common quirk of some OpenAI-compat endpoints and local models via Ollama.
+
+```js
+const { streamAggregator, streamThrottle } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(streamThrottle({ maxTokensPerSecond: 40 }));   // outer — paces cadence
+llm.use(streamAggregator({
+  minChars:  20,      // flush when buffer >= 20 chars
+  maxIdleMs: 100,     // OR after 100ms idle
+  onFlush:   (i) => cds.log('llm:agg').debug('flush', i),
+}));
+```
+
+Distinct from the shipped `streamThrottle` (v1.97.0):
+- **`streamThrottle`** — PACES existing chunks with a delay (throttle bursts)
+- **`streamAggregator`** — COMBINES chunks (fewer to render)
+
+Use both together: aggregator produces fewer chunks; throttle paces them at a smooth cursor speed.
+
+Highlights:
+- **`Promise.race`** between source chunk and idle timer — flushes as soon as EITHER condition fires. Timer is `unref()`'d so it doesn't hold the event loop.
+- **Terminal chunk detection** — `done`, `isDone`, `type: 'done'`, `finish_reason`, `stopReason` all recognized as end-of-stream markers. Buffer flushed first, then terminal chunk passes through untouched so the `wrapStreamCompletion` (v1.72.0) tracker fires with the correct `doneChunk`.
+- **Non-text chunks pass through** — tool call deltas, metadata chunks, etc. bypass the buffer. Ordering preserved: buffer flushes BEFORE the non-text chunk emits.
+- **Preserves stream completion** — `hasStreamCompletion` still detects the wrapped stream; `.onComplete()`, `.completedInfo`, `.isCompleted` all re-exposed.
+- **Custom shapes** — `extractText(chunk)` for provider-specific chunk formats (e.g., OpenAI's `delta.content`); `makeChunk(text)` to change the emitted-chunk shape.
+- **`reductionRatio()`** returns `1 - (emitted / source)`. Higher = more coalescing happening — instrumented for tuning `minChars` / `maxIdleMs`.
+- MCP resource: `config://stream-aggregator`.
 
 ## Per-user quota manager (new in v2.23.0)
 

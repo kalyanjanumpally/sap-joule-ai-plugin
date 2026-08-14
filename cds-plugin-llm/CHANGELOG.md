@@ -4,6 +4,63 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.24.0] — 2026-08-14
+
+### Added
+- **`streamAggregator` middleware** — buffers per-token stream chunks
+  from the provider and emits aggregated chunks either when the
+  buffer reaches `minChars` (default 20) OR when it's been idle for
+  `maxIdleMs` (default 100ms). Reduces UI cursor jitter when the
+  provider emits per-character chunks (some OpenAI-compat endpoints,
+  some local models via Ollama).
+- Distinct from the shipped `streamThrottle` (v1.97.0) — that primitive
+  PACES existing chunks with a delay; this one COMBINES chunks so
+  there are fewer to render. Use both together when you want
+  (1) fewer chunks (this) AT (2) a smooth cadence (throttle).
+- **`Promise.race` between source chunk and idle timer** — buffer
+  flushes as soon as EITHER condition fires. Timer is `unref()`'d
+  so it doesn't hold the event loop.
+- **Terminal chunk detection** — `done`, `isDone`, `type: 'done'`,
+  `finish_reason`, `stopReason` are all recognized as end-of-stream
+  markers. Buffer is flushed first, then the terminal chunk passes
+  through untouched so the `wrapStreamCompletion` (1.72) tracker
+  fires with the correct `doneChunk`.
+- **Non-text chunks pass through** — tool call deltas, metadata
+  chunks, and anything without extractable text bypass the buffer.
+  Ordering is preserved: buffer is flushed BEFORE the non-text chunk
+  emits so the sequence stays correct.
+- **Preserves stream completion machinery** — the wrapper re-exposes
+  `.onComplete()`, `.completedInfo`, `.isCompleted`, and the
+  `Symbol.for('cds-plugin-llm.streamCompletion')` marker so downstream
+  middleware relying on `hasStreamCompletion()` still detects the
+  stream correctly.
+- **Custom shapes** — `extractText(chunk)` for provider-specific
+  chunk formats (e.g., OpenAI's `delta.content`); `makeChunk(text)`
+  to change the emitted-chunk shape (e.g., emit `{ role, content }`
+  instead of `{ text }`).
+- **`reductionRatio()`** returns `1 - (emittedChunks / sourceChunks)`.
+  Higher = more coalescing happening. Instrumented for real-world
+  tuning of `minChars` / `maxIdleMs`.
+- MCP resource `config://stream-aggregator` exposes config + full
+  stats (idle vs threshold vs final flush breakdown).
+- Standalone helpers `defaultExtractText`, `defaultMakeAggregatedChunk`,
+  `isTerminalChunk` exported for custom composition + tests.
+- TypeScript: `StreamAggregatorOptions`, `StreamAggregatorStats`,
+  `StreamAggregatorMiddleware`.
+
+### API contract (frozen)
+- Signature: `streamAggregator({ minChars=20, maxIdleMs=100, skipMethods=['chat','embed','batch'], extractText, makeChunk, onFlush })`
+- MCP URI: `config://stream-aggregator`
+- Flush reason strings: `'threshold'`, `'idle'`, `'final'` — stable
+
+### Composition
+- Compose with `streamThrottle` (v1.97.0) — put `streamAggregator`
+  INSIDE `streamThrottle`. Aggregator produces fewer chunks; throttle
+  paces the aggregated chunks at a smooth cursor speed.
+- Preserves `hasStreamCompletion` — safe to compose with any 1.72+
+  middleware that reads stream completion (bulkhead slot release,
+  circuit breaker success/failure, jsonLog completion, etc.).
+
 ## [2.23.0] — 2026-08-12
 
 ### Added
