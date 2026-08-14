@@ -293,6 +293,8 @@ module.exports = {
   // Prompt version pinning — canary/rollback for prompt templates (new in 2.30.0)
   promptVersionPin:       require('./middleware/promptVersionPin').promptVersionPin,
   PromptVersionRegistry:  require('./middleware/promptVersionPin').PromptVersionRegistry,
+  // Provider health aggregate — unified health score per provider (new in 2.31.0)
+  providerHealthAggregate: require('./middleware/providerHealthAggregate').providerHealthAggregate,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

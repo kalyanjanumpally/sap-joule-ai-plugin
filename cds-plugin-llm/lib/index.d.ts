@@ -6464,6 +6464,83 @@ export interface PromptVersionPinMiddleware extends Middleware {
  */
 export function promptVersionPin(options: PromptVersionPinOptions): PromptVersionPinMiddleware;
 
+// ---- Provider health aggregate (new in 2.31.0) ----------------------
+
+export interface ProviderHealthAggregateOptions {
+  /** REQUIRED. Extract provider name from ctx (or result — after the call). */
+  providerOf:           (ctx: unknown, result?: unknown) => string | null | undefined;
+  /** Rolling window in ms. Default 60_000. */
+  windowMs?:            number;
+  /** Error rate threshold above which the provider is marked degraded. Default 0.10 (10%). */
+  errorRateThreshold?:  number;
+  /** p95 latency threshold in ms above which the provider is marked degraded. Default 15_000. */
+  latencyP95Threshold?: number;
+  /** Min samples before the health verdict is considered valid. Default 10. */
+  minSampleSize?:       number;
+  /** Weight of each signal in the unified score. Default `{ errorRate: 0.6, latencyP95: 0.4 }`. */
+  scoreWeights?:        { errorRate?: number; latencyP95?: number; breakerState?: number };
+  /** Optional circuit-breaker lookup. If provided + `scoreWeights.breakerState > 0`, breaker state contributes to the score. */
+  breakerFor?:          (providerName: string) => { state?: 'open' | 'closed' | 'half-open' } | null | undefined;
+  onDegraded?:  (info: { provider: string; errorRate: number; latencyP95Ms: number; score: number; samples: number }) => void;
+  onRecovered?: (info: { provider: string; errorRate: number; latencyP95Ms: number; score: number; samples: number }) => void;
+  onSample?:    (info: { provider: string; latencyMs: number; ok: boolean; samples: number }) => void;
+  onError?:     (info: { phase: 'providerOf' | 'breakerFor'; error: unknown }) => void;
+  now?:         () => number;
+}
+
+export interface ProviderHealthSnapshot {
+  healthy:          boolean;
+  score:            number;
+  errorRate:        number;
+  latencyP95Ms:     number;
+  samples:          number;
+  totalCalls:       number;
+  totalErrors:      number;
+  lastTransitionAt?: number | null;
+}
+
+export interface ProviderHealthAggregateStats {
+  totalCalls:           number;
+  totalErrors:          number;
+  degradedTransitions:  number;
+  recoveredTransitions: number;
+  providersTracked:     number;
+  lastProvider:         string | null;
+}
+
+export interface ProviderHealthAggregateMiddleware extends Middleware {
+  readonly stats: ProviderHealthAggregateStats;
+  reset(): void;
+  getHealth(name: string): ProviderHealthSnapshot;
+  listProviders(): string[];
+  snapshotAll(): Record<string, ProviderHealthSnapshot>;
+  asMcpResource(): {
+    uri: 'config://provider-health-aggregate';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ProviderHealthAggregateStats & {
+      windowMs:            number;
+      errorRateThreshold:  number;
+      latencyP95Threshold: number;
+      minSampleSize:       number;
+      scoreWeights:        Record<string, number>;
+      providers:           Record<string, ProviderHealthSnapshot>;
+    };
+  };
+}
+
+/**
+ * Provider health aggregate. Combines error rate + p95 latency +
+ * optional circuit-breaker state into a unified health score per
+ * provider. Emits `onDegraded` / `onRecovered` transitions with
+ * hysteresis via `minSampleSize`. Composes with `providerHealthProbe`
+ * (proactive pings) and `circuitBreaker` (per-error trip) as the
+ * unified observability layer.
+ * @since 2.31.0
+ */
+export function providerHealthAggregate(options: ProviderHealthAggregateOptions): ProviderHealthAggregateMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

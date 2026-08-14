@@ -27,7 +27,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `quotaManager` (v2.23.0 — per-user USD quota with warnings) · `inMemoryQuotaStore` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
 | **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `clientSideRateLimit` (v2.26.0 — proactive N-per-window throttle) · `deadline` · `gracePeriod` (v2.28.0 — soft-deadline warnings + optional hard timeout) · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) |
-| **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
+| **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` · `providerHealthAggregate` (v2.31.0 — unified provider health score) |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) · `multimodalRouter` (v2.25.0 — capability-aware routing by attachment type) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
@@ -1148,6 +1148,45 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Provider health aggregate (new in v2.31.0)
+
+`providerHealthAggregate` combines multiple health signals per provider into a **unified score** — routing decisions can consult one metric instead of stitching together five. Instruments every call, records latency + success/error per provider, computes a rolling error rate + p95 latency, emits `onDegraded` / `onRecovered` transitions with hysteresis via `minSampleSize`.
+
+```js
+const { providerHealthAggregate } = require('@saptarishi/cds-plugin-llm');
+
+const health = providerHealthAggregate({
+  providerOf:          (ctx, result) => result?.model?.split('/')[0] ?? 'unknown',
+  windowMs:            60_000,
+  errorRateThreshold:  0.10,           // >10% errors → degraded
+  latencyP95Threshold: 15_000,          // >15s p95 → degraded
+  minSampleSize:       10,             // don't judge until enough data
+  onDegraded:  (i) => cds.log('llm:health').error('degraded', i),
+  onRecovered: (i) => cds.log('llm:health').info('recovered', i),
+});
+llm.use(health);
+
+// Later, in routing logic:
+const s = health.getHealth('openai');
+// → { healthy: true, score: 0.92, errorRate: 0.02, latencyP95Ms: 3200, samples: 145, ... }
+```
+
+Complements the four other health primitives:
+- **`providerHealthProbe`** (v1.62.0) — PROACTIVE liveness pings
+- **`circuitBreaker`** (v1.x) — REACTIVE per-error trip
+- **`adaptiveBulkhead`** (v1.61.0) — latency-driven concurrency tuner
+- **`providerHealthAggregate`** (v2.31.0) — UNIFIED score across all signals
+
+Highlights:
+- **Weighted composite** (default: 60% error rate + 40% p95 latency; optional 20% breaker-state weight when `breakerFor` is wired). Score in `[0, 1]` where 1 = fully healthy.
+- **Sample-size gate** prevents cold-start false-degrades — verdict is not computed until `minSampleSize` samples accumulate.
+- **Transition callbacks fire on state changes only** (rising / falling edges), not per-call — perfect for alerting.
+- **Rolling window** with lazy pruning — O(1) memory per provider over long-running processes.
+- **`snapshotAll()`** / **`listProviders()`** for dashboards.
+- MCP resource: `config://provider-health-aggregate`.
+
+Composition rule: put `providerHealthAggregate` **outside** providers so it observes every call. It's a passive instrumentation layer — never modifies the request path. Use `getHealth()` in your `chatWithFallback` / `regionFailover` selector to skip degraded providers proactively.
 
 ## Prompt version pinning (new in v2.30.0)
 

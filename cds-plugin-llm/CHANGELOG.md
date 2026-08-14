@@ -4,6 +4,63 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.31.0] — 2026-08-14
+
+### Added
+- **`providerHealthAggregate` middleware** — unified health score per
+  provider computed from a rolling error rate + p95 latency + optional
+  circuit-breaker state. Routing decisions can consult ONE metric
+  instead of stitching together five. Complements the shipped health
+  primitives:
+  - `providerHealthProbe` (1.62) — PROACTIVE liveness pings
+  - `circuitBreaker` (1.x)         — REACTIVE per-error trip
+  - `adaptiveBulkhead` (1.61)      — latency-driven concurrency tuner
+  - `providerHealthAggregate` (this) — UNIFIED score across all signals
+- **Weighted composite score** (default weights: 60% error rate + 40%
+  p95 latency; optional 20% breaker-state weight). Score is in `[0, 1]`
+  where 1 = fully healthy. Threshold-based `healthy` verdict flips
+  the aggregate to degraded when either error-rate or p95-latency
+  cross their limits.
+- **Sample-size gate** (`minSampleSize`, default 10) — verdict is not
+  computed until enough samples accumulate; prevents cold-start
+  false-degrades.
+- **Transition callbacks** — `onDegraded` / `onRecovered` fire on
+  state changes only (rising and falling edges), not per-call. Perfect
+  for alerting.
+- **`getHealth(providerName)`** returns the full per-provider snapshot
+  `{ healthy, score, errorRate, latencyP95Ms, samples, totalCalls,
+  totalErrors, lastTransitionAt }`. Use it in routing code to skip
+  unhealthy providers.
+- **`snapshotAll()`** and **`listProviders()`** for dashboards +
+  observability.
+- **Rolling window** — samples pruned lazily on each check. O(1)
+  memory per provider over long-running processes.
+- MCP resource `config://provider-health-aggregate` exposes per-
+  provider snapshot + config + stats.
+- Standalone `percentile(sortedAsc, p)` helper exported for custom
+  metric computation.
+- TypeScript: `ProviderHealthAggregateOptions`,
+  `ProviderHealthAggregateStats`, `ProviderHealthAggregateMiddleware`,
+  `ProviderHealthSnapshot`.
+
+### API contract (frozen)
+- Signature: `providerHealthAggregate({ providerOf, windowMs=60_000, errorRateThreshold=0.10, latencyP95Threshold=15_000, minSampleSize=10, scoreWeights, breakerFor, onDegraded, onRecovered, onSample, onError })`
+- MCP URI: `config://provider-health-aggregate`
+- Snapshot shape: `{ healthy, score, errorRate, latencyP95Ms, samples, totalCalls, totalErrors, lastTransitionAt }`
+
+### Composition
+- Place `providerHealthAggregate` OUTSIDE providers so it observes
+  every call. It's a passive instrumentation layer — never modifies
+  the request path.
+- Compose with `providerHealthProbe` (1.62) — probe provides
+  synthetic-liveness data; aggregate provides real-traffic-latency
+  data. Together they give the full picture.
+- Compose with `chatWithFallback` (1.x) / `regionFailover` (1.99) —
+  use `getHealth()` in your fallback selector to skip degraded
+  providers proactively.
+- Compose with `costAwareRouter` (2.10) / `semanticRouter` (2.16) —
+  the aggregate is the health input for routing decisions.
+
 ## [2.30.0] — 2026-08-14
 
 ### Added
