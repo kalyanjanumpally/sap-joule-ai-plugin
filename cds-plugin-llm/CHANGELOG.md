@@ -4,6 +4,63 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.37.0] — 2026-08-14
+
+### Added
+- **`emptyResponseDetector` middleware** — catches broken model
+  responses (empty string, whitespace-only, single-char replies,
+  refusal patterns like "I can't help with that") BEFORE they reach
+  the caller. Three-way policy: throw / auto-retry / log.
+- **Common failure modes caught**:
+  - Provider hiccup (empty payload from timeout / bad JSON parse)
+  - Safety-filter or guardrail evasion that returned `""` or `"..."`
+  - Soft-refusal on a legitimate request
+- Distinct from other quality primitives:
+  - `structuredOutputRepair` (2.9)    — SCHEMA-driven repair
+  - `responseRevision` (2.29)          — RUBRIC-driven re-ask
+  - `emptyResponseDetector` (this)     — EMPTY / REFUSAL detection
+- **Built-in refusal patterns** (6 anchored-to-start regexes):
+  "I can't/cannot/won't help/assist", "I'm unable/not able/sorry to",
+  "Sorry, but I can't", "I must decline/refuse", "This request cannot
+  be", "As an AI assistant, I can't". Anchored to start so mid-response
+  mentions don't false-positive.
+- **Custom detection** — pass `detectEmpty(result)` for full override;
+  return `true`/`false` or `{ empty, reason }`. Return `null` to fall
+  back to defaults.
+- **Auto-retry with revision prompt** — reason-aware prompt asks the
+  model to either explain WHY it refused or provide a substantive
+  answer. `applyRetry` appends assistant + user messages standardly.
+- **Rising-edge stats per reason**: `byReason: { 'too-short': n,
+  'whitespace': n, 'refusal-pattern': n, 'custom': n }` for
+  dashboard breakdowns.
+- **Fail-safe custom detector** — exceptions in `detectEmpty` fall
+  back to default detection (never blocks the request path).
+- Standalone `extractResponseText`, `defaultBuildRetryPrompt`,
+  `defaultApplyRetry`, `DEFAULT_REFUSAL_PATTERNS`, `ON_EMPTY_POLICIES`
+  exported.
+- MCP resource `config://empty-response-detector` exposes policy +
+  minChars + refusal-pattern count + `emptyRate` + full stats.
+- TypeScript: `EmptyResponseDetectorOptions`,
+  `EmptyResponseDetectorStats`, `EmptyResponseDetectorMiddleware`,
+  `EmptyResponsePolicy`, `EmptyResponseReason`,
+  `EmptyResponseError` class.
+
+### API contract (frozen)
+- Signature: `emptyResponseDetector({ minChars=5, refusalPatterns, detectEmpty, onEmpty='throw', maxRetries=1, buildRetryPrompt, applyRetry, onDetected, onRetry, onFinalize, onError })`
+- MCP URI: `config://empty-response-detector`
+- Error code: `EMPTY_RESPONSE`
+- Reason strings: `'too-short'`, `'whitespace'`, `'refusal-pattern'`, `'custom'` (plus any custom-detector-supplied reason)
+
+### Composition
+- Compose with `responseRevision` (2.29) OUTSIDE this detector —
+  first check for emptiness; if substantive but low-scoring, then
+  revise. Two-stage quality gate.
+- Compose with `structuredOutputRepair` (2.9) INSIDE this detector
+  — extract text validation happens before schema validation on the
+  same response.
+- Compose with `chaosInjector` (2.11) using `rateGarbage` fault to
+  verify the retry-loop behavior in CI.
+
 ## [2.36.0] — 2026-08-14
 
 ### Added

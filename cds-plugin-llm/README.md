@@ -26,7 +26,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | --- | --- |
 | **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `quotaManager` (v2.23.0 — per-user USD quota with warnings) · `inMemoryQuotaStore` · `costOverrunPredictor` (v2.33.0 — calendar-window spend projection) · `startOfMonth` / `endOfMonth` (+day / quarter helpers) · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
 | **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `clientSideRateLimit` (v2.26.0 — proactive N-per-window throttle) · `deadline` · `gracePeriod` (v2.28.0 — soft-deadline warnings + optional hard timeout) · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
-| **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) · `responseSigning` (v2.32.0 — HMAC responses + `verifyResponseSignature`) |
+| **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) · `responseSigning` (v2.32.0 — HMAC responses + `verifyResponseSignature`) · `emptyResponseDetector` (v2.37.0 — catch empty/refusal responses with auto-retry) |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` · `providerHealthAggregate` (v2.31.0 — unified provider health score) · `latencyHistogram` (v2.35.0 — per-dimension p50/p95/p99 with Prometheus export) |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) · `multimodalRouter` (v2.25.0 — capability-aware routing by attachment type) |
@@ -1148,6 +1148,37 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Empty-response detector (new in v2.37.0)
+
+`emptyResponseDetector` catches broken model responses (empty string, whitespace-only, single-char replies, refusal patterns like `"I can't help with that"`) BEFORE they reach the caller. Common failure modes caught: provider hiccups (empty payload), safety-filter or guardrail evasion that returned `""`, or soft-refusals on legitimate requests.
+
+```js
+const { emptyResponseDetector } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(emptyResponseDetector({
+  minChars:   10,
+  onEmpty:    'retry',       // 'throw' | 'retry' | 'log'
+  maxRetries: 1,
+  onDetected: (i) => cds.log('llm:empty').warn('empty response', i),
+}));
+```
+
+Distinct from other quality primitives:
+- **`structuredOutputRepair`** (v2.9.0) — SCHEMA-driven repair
+- **`responseRevision`** (v2.29.0) — RUBRIC-driven re-ask
+- **`emptyResponseDetector`** (v2.37.0) — EMPTY / REFUSAL detection
+
+Built-in refusal patterns (6 anchored-to-start regexes): `I can't/cannot/won't help/assist`, `I'm unable/not able/sorry to`, `Sorry, but I can't`, `I must decline/refuse`, `This request cannot be`, `As an AI assistant, I can't`. Anchored to start so mid-response mentions don't false-positive.
+
+Highlights:
+- **Custom detection**: pass `detectEmpty(result)` for full override; return `true`/`false` or `{ empty, reason }`. Return `null` to fall back to defaults.
+- **Reason-aware retry prompt**: refusal detection asks the model to explain WHY rather than refuse outright; too-short asks for a substantive answer.
+- **Per-reason stats** (`byReason`) — dashboard breakdowns across `too-short` / `whitespace` / `refusal-pattern` / custom.
+- **Fail-safe custom detector** — exceptions fall back to default detection.
+- MCP resource: `config://empty-response-detector`.
+
+Compose with `responseRevision` (v2.29.0) OUTSIDE this detector — first check for emptiness; if substantive but low-scoring, then revise. Two-stage quality gate.
 
 ## Content-length gate (new in v2.36.0)
 

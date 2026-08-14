@@ -317,6 +317,11 @@ module.exports = {
   ContentLengthExceededError: require('./middleware/contentLengthGate').ContentLengthExceededError,
   CONTENT_LENGTH_OVERAGE_MODES: require('./middleware/contentLengthGate').OVERAGE_MODES,
   defaultTokenEstimator:   require('./middleware/contentLengthGate').defaultTokenEstimator,
+  // Empty-response detector — catch broken/refusal responses (new in 2.37.0)
+  emptyResponseDetector:   require('./middleware/emptyResponseDetector').emptyResponseDetector,
+  EmptyResponseError:      require('./middleware/emptyResponseDetector').EmptyResponseError,
+  DEFAULT_REFUSAL_PATTERNS: require('./middleware/emptyResponseDetector').DEFAULT_REFUSAL_PATTERNS,
+  EMPTY_RESPONSE_POLICIES: require('./middleware/emptyResponseDetector').ON_EMPTY_POLICIES,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

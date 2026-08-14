@@ -6982,6 +6982,88 @@ export function defaultTokenEstimator(text: string): number;
 /** Frozen list of accepted overage modes. @since 2.36.0 */
 export const CONTENT_LENGTH_OVERAGE_MODES: readonly ContentLengthOverageMode[];
 
+// ---- Empty-response detector (new in 2.37.0) -----------------------
+
+export type EmptyResponseReason = 'too-short' | 'whitespace' | 'refusal-pattern' | 'custom' | string;
+export type EmptyResponsePolicy = 'throw' | 'retry' | 'log';
+
+export interface EmptyResponseDetectorOptions {
+  /** Minimum trimmed-response length required. Default 5. */
+  minChars?:         number;
+  /** Anchored-to-start refusal regex patterns. Default: common soft-refusal openings. */
+  refusalPatterns?:  RegExp[];
+  /** Custom detector. Return `true`/`false` or `{ empty, reason }`; return null to fall back to default. */
+  detectEmpty?:      (result: unknown) => boolean | { empty: boolean; reason?: string } | null;
+  /** Policy on empty detection. Default `'throw'`. */
+  onEmpty?:          EmptyResponsePolicy;
+  /** For retry mode: max retry attempts. Default 1. */
+  maxRetries?:       number;
+  buildRetryPrompt?: (info: { previousText: string; reason: EmptyResponseReason; retryIndex: number }) => string;
+  applyRetry?:       (originalRequest: unknown, retryPrompt: string, previousResponse: unknown) => unknown;
+  onDetected?: (info: { reason: EmptyResponseReason; textLength: number; retries: number }) => void;
+  onRetry?:    (info: { retryIndex: number; reason: EmptyResponseReason; previousText: string }) => void;
+  onFinalize?: (info: { result: unknown; empty: boolean; retries: number; reason?: EmptyResponseReason }) => void;
+  onError?:    (info: { phase: 'detectEmpty' | 'buildRetryPrompt' | 'applyRetry'; error: unknown }) => void;
+}
+
+export interface EmptyResponseDetectorStats {
+  totalCalls:      number;
+  emptyDetected:   number;
+  retried:         number;
+  retrySucceeded:  number;
+  thrownCount:     number;
+  loggedCount:     number;
+  byReason:        Record<string, number>;
+  lastReason:      EmptyResponseReason | null;
+}
+
+export interface EmptyResponseDetectorMiddleware extends Middleware {
+  readonly stats: EmptyResponseDetectorStats;
+  reset(): void;
+  emptyRate(): number;
+  asMcpResource(): {
+    uri: 'config://empty-response-detector';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => EmptyResponseDetectorStats & {
+      minChars:             number;
+      onEmpty:              EmptyResponsePolicy;
+      maxRetries:           number;
+      refusalPatternCount:  number;
+      emptyRate:            number;
+    };
+  };
+}
+
+/**
+ * Thrown when the empty-response detector fails to get a substantive
+ * response (either directly with `onEmpty: 'throw'` or after retries
+ * exhausted). `.code === 'EMPTY_RESPONSE'`.
+ * @since 2.37.0
+ */
+export class EmptyResponseError extends LLMError {
+  readonly reason:     EmptyResponseReason;
+  readonly textLength: number;
+  readonly retries:    number;
+}
+
+/**
+ * Detects broken responses (empty, whitespace-only, too-short, refusal
+ * patterns) and applies a three-way policy: throw, auto-retry with a
+ * revision prompt, or log-only. Catches common failure modes:
+ * provider hiccups (empty payload), safety-filter or guardrail evasion
+ * that returned `""`, or soft-refusals on legitimate requests.
+ * @since 2.37.0
+ */
+export function emptyResponseDetector(options?: EmptyResponseDetectorOptions): EmptyResponseDetectorMiddleware;
+
+/** Default anchored refusal-detection regex patterns. Frozen. @since 2.37.0 */
+export const DEFAULT_REFUSAL_PATTERNS: readonly RegExp[];
+
+/** Frozen list of accepted onEmpty policies. @since 2.37.0 */
+export const EMPTY_RESPONSE_POLICIES: readonly EmptyResponsePolicy[];
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {
