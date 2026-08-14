@@ -4,6 +4,59 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.27.0] — 2026-08-14
+
+### Added
+- **`batchAggregator` middleware** — window-based pooling of concurrent
+  LLM calls. Waits up to `batchWindowMs` for a batch to fill (or hits
+  `maxBatchSize`), fires once, splits the response back to individual
+  callers. Big cost saver for high-throughput fan-out patterns with
+  uniform structure — classification, embedding, translation — where
+  N similar prompts can be concatenated into 1 and the response is an
+  ordered array.
+- Distinct from the shipped primitives:
+  - `requestCoalescer` (2.8) — dedups IDENTICAL requests
+  - `runBatch` / `waitForBatch` (1.79) — offline batch-API workflows
+  - `batchAggregator` (this) — ONLINE pooling of DIFFERENT requests
+- **User-supplied hooks** (required):
+  - `aggregateRequests(batch)` → single request. Users own the
+    prompt-concatenation logic (with delimiters).
+  - `splitResponse(result, batch)` → array of results. Users own the
+    response-parsing logic. Wrong-count returns fail the batch loud.
+- **`batchable(ctx)`** predicate — opt individual calls out of
+  batching (e.g., non-uniform prompts pass straight to `next()`).
+- **`batchKeyOf(ctx)`** — separate pending batches per key (e.g.,
+  per model, per user, per tenant). Members with different keys
+  batch independently.
+- **Flush triggers**: `batchWindowMs` timer, `maxBatchSize` hit
+  (immediate flush), and manual flush via `mw.pendingKeys()`
+  introspection.
+- **`BatchAggregationError`** (`code: 'BATCH_AGGREGATION_FAILED'`)
+  — fails ALL members of a failed batch with the same error. Carries
+  `.batchSize` and `.cause` (the underlying error).
+- **Fail-loud contract on splitResponse** — if the split function
+  returns a wrong-count or non-array, all batch members fail with
+  `BatchAggregationError` so bugs surface immediately.
+- **Live observability** — `pendingCount()`, `pendingKeys()`,
+  `avgBatchSize()`. MCP resource `config://batch-aggregator` exposes
+  full stats + pending queue state.
+- TypeScript: `BatchAggregatorOptions`, `BatchMember`,
+  `BatchAggregatorStats`, `BatchAggregatorMiddleware`,
+  `BatchAggregationError`.
+
+### API contract (frozen)
+- Signature: `batchAggregator({ batchWindowMs=50, maxBatchSize=20, batchable, aggregateRequests, splitResponse, batchKeyOf, onBatch, onFlush, onError })`
+- MCP URI: `config://batch-aggregator`
+- Error code: `BATCH_AGGREGATION_FAILED`
+- Flush reason strings: `'full'`, `'window'` — stable
+
+### Composition
+- Place `batchAggregator` OUTSIDE `semanticCache` / `responseCache`
+  / `requestCoalescer` — batching only happens on cache misses.
+- Place INSIDE `bulkhead` — one batch = one slot.
+- Compose with `clientSideRateLimit` (2.26) — one batch counts as
+  one token; big cost savings in throttled workloads.
+
 ## [2.26.0] — 2026-08-14
 
 ### Added

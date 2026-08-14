@@ -36,7 +36,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Long-context** | `compactHistory` · `sessionContextStore` (v2.19.0 — per-session history with prune / summarize) · `inMemorySessionStore` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` · `streamAggregator` (v2.24.0 — coalesce per-token chunks for smoother UI) |
 | **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` · `promptExperiment` (v2.20.0 — live A/B testing with 95% CI winner detection) |
-| **Bulk workflows** | `runBatch` · `waitForBatch` |
+| **Bulk workflows** | `runBatch` · `waitForBatch` · `batchAggregator` (v2.27.0 — window-based pooling of concurrent LLM calls) |
 | **Multimodal helpers** | `imageFromFile` / `pdfFromUrl` / `audioFromBase64` / `uploadPdfFromUrl` / etc. |
 | **Agent orchestration** | `runTools` · `streamTools` · `Agent` · `runAgents` · `streamAgents` · `autoToolChain` (v2.22.0 — cascading tool loop with cycle detection) |
 | **Error taxonomy** | `LLMError` base + `errorRegistry` with 18 stable codes (`CIRCUIT_OPEN`, `BUDGET_EXCEEDED`, `PROMPT_INJECTION`, `SAFETY_CLASSIFIER_BLOCKED`, `ALL_REGIONS_FAILED`, ...) |
@@ -1148,6 +1148,50 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Batch aggregator (new in v2.27.0)
+
+`batchAggregator` is window-based pooling of concurrent LLM calls. Waits up to `batchWindowMs` for a batch to fill (or hits `maxBatchSize`), fires **one** upstream call, then splits the response back to individual callers. Real cost saver for high-throughput fan-out patterns with uniform structure (classification, embedding, translation) where N similar prompts can be concatenated into 1 request and the response is an ordered array.
+
+```js
+const { batchAggregator } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(batchAggregator({
+  batchWindowMs: 50,
+  maxBatchSize:  10,
+  batchable:     (ctx) => ctx.request.batchKey === 'classify-support-ticket',
+
+  // User owns the concatenation logic:
+  aggregateRequests: (batch) => ({
+    messages: [{ role: 'user', content:
+      'Classify each ticket (respond as a JSON array of labels):\n' +
+      batch.map((b, i) => `${i+1}. ${b.ctx.request.messages[0].content}`).join('\n')
+    }],
+    format: { type: 'array', items: { enum: ['billing', 'bug', 'question'] } },
+  }),
+  // User owns the split logic:
+  splitResponse: (result, batch) => {
+    const labels = result.data;
+    return batch.map((b, i) => ({ ...result, data: labels[i], text: labels[i] }));
+  },
+
+  onBatch: (i) => cds.log('llm:batch').info('flushed', i),
+}));
+```
+
+Distinct from other batching primitives:
+- **`requestCoalescer`** (v2.8.0) — dedups IDENTICAL requests
+- **`runBatch`** / **`waitForBatch`** (v1.79.0) — offline batch-API workflows (24-hour turnaround)
+- **`batchAggregator`** (v2.27.0) — ONLINE pooling of DIFFERENT requests across a short window
+
+Highlights:
+- **`batchable(ctx)`** predicate opts calls in — non-uniform prompts pass straight through.
+- **`batchKeyOf(ctx)`** partitions pending batches (e.g., per model, per user, per tenant) — members with different keys batch independently.
+- **Fail-loud contract** — if `splitResponse` returns a wrong-count or non-array, all batch members fail with `BatchAggregationError` (code `BATCH_AGGREGATION_FAILED`) so bugs surface immediately.
+- **`pendingCount()`, `pendingKeys()`, `avgBatchSize()`** for tuning.
+- MCP resource: `config://batch-aggregator`.
+
+Composition rule: put `batchAggregator` **outside** `semanticCache` / `responseCache` / `requestCoalescer` (batching only happens on cache misses) and **inside** `bulkhead` (one batch = one slot).
 
 ## Client-side rate limiter (new in v2.26.0)
 

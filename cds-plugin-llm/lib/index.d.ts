@@ -6147,6 +6147,96 @@ export function clientSideRateLimit(options?: ClientSideRateLimitOptions): Clien
 /** Strategy names accepted by `clientSideRateLimit`. Frozen. @since 2.26.0 */
 export const CLIENT_RATE_LIMIT_STRATEGIES: readonly ClientSideRateLimitStrategy[];
 
+// ---- Batch aggregator (new in 2.27.0) -------------------------------
+
+export interface BatchMember {
+  ctx:         unknown;
+  next:        () => Promise<unknown>;
+  resolve:     (value: unknown) => void;
+  reject:      (err: unknown) => void;
+  enqueuedAt:  number;
+}
+
+export interface BatchAggregatorOptions {
+  /** Ms to wait for a batch to fill before flushing. Default 50. */
+  batchWindowMs?: number;
+  /** Max batch size; hitting this triggers immediate flush. Default 20. Min 2. */
+  maxBatchSize?: number;
+  /** Predicate: is this call batchable? Non-batchable calls bypass and pass to next() directly. */
+  batchable?:    (ctx: unknown) => boolean;
+  /** REQUIRED: combine N members into 1 aggregated request. Called with the batch members[]. */
+  aggregateRequests: (batch: BatchMember[]) => unknown;
+  /** REQUIRED: split 1 aggregated response into N individual results. Must return an array of length batch.length. */
+  splitResponse:  (result: unknown, batch: BatchMember[]) => unknown[];
+  /** Extract a batch-partition key from ctx. Members with different keys batch separately. Default: all together. */
+  batchKeyOf?:    (ctx: unknown) => string | null | undefined;
+  onBatch?: (info: { key: string; size: number; reason: 'full' | 'window'; totalLatencyMs: number }) => void;
+  onFlush?: (info: { key: string; size: number; reason: 'full' | 'window' }) => void;
+  onError?: (info: { phase: 'aggregateRequests' | 'next' | 'splitResponse'; error: unknown; batchSize: number }) => void;
+  now?:      () => number;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
+}
+
+export interface BatchAggregatorStats {
+  totalCalls:          number;
+  batched:             number;
+  unbatched:           number;
+  batchesFlushed:      number;
+  fullBatches:         number;
+  windowFlushes:       number;
+  failedBatches:       number;
+  totalMembersFlushed: number;
+  lastBatchSize:       number | null;
+}
+
+export interface BatchAggregatorMiddleware extends Middleware {
+  readonly stats: BatchAggregatorStats;
+  reset(): void;
+  avgBatchSize(): number;
+  pendingCount(): number;
+  pendingKeys(): string[];
+  asMcpResource(): {
+    uri: 'config://batch-aggregator';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => BatchAggregatorStats & {
+      batchWindowMs:  number;
+      maxBatchSize:   number;
+      avgBatchSize:   number;
+      pendingCount:   number;
+      pendingKeys:    string[];
+    };
+  };
+}
+
+/**
+ * Thrown when the aggregated batch call fails — all members of the
+ * batch fail with this error. `.code === 'BATCH_AGGREGATION_FAILED'`.
+ * @since 2.27.0
+ */
+export class BatchAggregationError extends LLMError {
+  readonly batchSize: number;
+  readonly cause:     unknown;
+}
+
+/**
+ * Batch aggregator. Coalesces N concurrent individual LLM calls into a
+ * single upstream call using caller-supplied `aggregateRequests` and
+ * `splitResponse` hooks. Waits up to `batchWindowMs` for a batch to
+ * fill (or hits `maxBatchSize`), fires once, splits the response back
+ * to individual callers. Useful for high-throughput fan-out patterns
+ * with uniform structure (classification, embedding, translation).
+ *
+ * Distinct from `requestCoalescer` (2.8 — deduplicates IDENTICAL
+ * requests) and `runBatch`/`waitForBatch` (1.79 — offline batch API
+ * workflows). This one pools DIFFERENT requests across a short window
+ * for cost savings on uniform tasks.
+ * @since 2.27.0
+ */
+export function batchAggregator(options: BatchAggregatorOptions): BatchAggregatorMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

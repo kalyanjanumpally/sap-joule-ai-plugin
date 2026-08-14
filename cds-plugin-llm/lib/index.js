@@ -282,6 +282,9 @@ module.exports = {
   clientSideRateLimit:    require('./middleware/clientSideRateLimit').clientSideRateLimit,
   RateLimitTimeoutError:  require('./middleware/clientSideRateLimit').RateLimitTimeoutError,
   CLIENT_RATE_LIMIT_STRATEGIES: require('./middleware/clientSideRateLimit').CLIENT_RATE_LIMIT_STRATEGIES,
+  // Batch aggregator — window-based pooling of concurrent LLM calls (new in 2.27.0)
+  batchAggregator:        require('./middleware/batchAggregator').batchAggregator,
+  BatchAggregationError:  require('./middleware/batchAggregator').BatchAggregationError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,
