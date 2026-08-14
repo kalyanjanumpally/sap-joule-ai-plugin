@@ -6237,6 +6237,74 @@ export class BatchAggregationError extends LLMError {
  */
 export function batchAggregator(options: BatchAggregatorOptions): BatchAggregatorMiddleware;
 
+// ---- Grace period / soft deadline (new in 2.28.0) -------------------
+
+export interface GracePeriodOptions {
+  /** Fire a warning callback after this many ms (call still runs). Optional if hardMs is set. */
+  softMs?:            number;
+  /** Kill the call after this many ms with GracePeriodExhaustedError. Optional if softMs is set. */
+  hardMs?:            number | null;
+  onSoftDeadline?:    (info: { elapsedMs: number; softMs: number | undefined; hardMs: number | null }) => void;
+  onHardDeadline?:    (info: { elapsedMs: number; softMs: number | undefined; hardMs: number }) => void;
+  onComplete?:        (info: { elapsedMs: number; softFired: boolean; hardFired: boolean }) => void;
+  /** Attach a fresh AbortController on ctx.signal so downstream can early-exit on hard deadline. Default true. */
+  attachAbortSignal?: boolean;
+  now?:               () => number;
+}
+
+export interface GracePeriodStats {
+  totalCalls:          number;
+  softDeadlineFires:   number;
+  hardDeadlineFires:   number;
+  completedUnderSoft:  number;
+  completedOverSoft:   number;
+  completedOverHard:   number;
+  totalLatencyMs:      number;
+  lastLatencyMs:       number | null;
+}
+
+export interface GracePeriodMiddleware extends Middleware {
+  readonly stats: GracePeriodStats;
+  reset(): void;
+  avgLatencyMs(): number;
+  softDeadlineRate(): number;
+  asMcpResource(): {
+    uri: 'config://grace-period';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => GracePeriodStats & {
+      softMs:            number | undefined;
+      hardMs:            number | null;
+      attachAbortSignal: boolean;
+      avgLatencyMs:      number;
+      softDeadlineRate:  number;
+    };
+  };
+}
+
+/**
+ * Thrown when a call exceeds the hard deadline.
+ * `.code === 'GRACE_PERIOD_EXHAUSTED'`.
+ * @since 2.28.0
+ */
+export class GracePeriodExhaustedError extends LLMError {
+  readonly elapsedMs: number;
+  readonly hardMs:    number;
+  readonly softMs:    number | undefined;
+}
+
+/**
+ * Grace-period / soft-deadline middleware. Complements the shipped
+ * `deadline` (1.x hard timeout) with a SOFT deadline that fires a
+ * warning callback while the request keeps running — plus an optional
+ * hard deadline that DOES kill. Useful for SLO monitoring: catch
+ * tail-latency spikes early. Signals via AbortController on
+ * `ctx.signal` so cancellation-aware providers can early-exit.
+ * @since 2.28.0
+ */
+export function gracePeriod(options: GracePeriodOptions): GracePeriodMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

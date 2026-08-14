@@ -4,6 +4,49 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.28.0] — 2026-08-14
+
+### Added
+- **`gracePeriod` middleware** — soft-deadline warnings + optional
+  hard timeout. Complements the shipped `deadline` (1.x hard timeout)
+  with a SOFT deadline that fires a warning callback while the
+  request keeps running. Useful for SLO monitoring: catch tail-latency
+  spikes BEFORE they become full timeouts.
+- **Three modes**:
+  - `softMs` alone → warning only, no kill (SLO monitoring)
+  - `hardMs` alone → equivalent to the shipped `deadline`
+  - `softMs` + `hardMs` → warn at soft, kill at hard
+- **AbortSignal on `ctx.signal`** — fresh `AbortController` per call
+  (opt-out via `attachAbortSignal: false`). Aborts on hard deadline so
+  cancellation-aware providers early-exit instead of continuing to
+  consume tokens after the timeout fires. Original ctx.signal restored
+  after the call.
+- **`GracePeriodExhaustedError`** (`code: 'GRACE_PERIOD_EXHAUSTED'`) —
+  thrown on hard deadline; carries `.elapsedMs`, `.hardMs`, `.softMs`.
+- **Rich observability** — `avgLatencyMs()`, `softDeadlineRate()`,
+  and buckets: `completedUnderSoft` vs `completedOverSoft`. Instrumented
+  for real-world SLO tuning of `softMs`.
+- MCP resource `config://grace-period` exposes both thresholds + full
+  stats.
+- TypeScript: `GracePeriodOptions`, `GracePeriodStats`,
+  `GracePeriodMiddleware`, `GracePeriodExhaustedError`.
+
+### API contract (frozen)
+- Signature: `gracePeriod({ softMs, hardMs, onSoftDeadline, onHardDeadline, onComplete, attachAbortSignal=true })`
+- MCP URI: `config://grace-period`
+- Error code: `GRACE_PERIOD_EXHAUSTED`
+- Validation: `softMs < hardMs` when both set
+
+### Composition
+- Compose with `speculativeHedge` (2.12) — use `onSoftDeadline` as a
+  signal to fire a late hedge. Soft deadline says "the primary is
+  probably going to be slow, start a backup."
+- Compose with the shipped `deadline` — `gracePeriod` at the outer
+  layer provides SLO warnings + a generous outer hard limit;
+  `deadline` at an inner layer provides tight per-attempt hard limits.
+- Compose with `promMetrics` — feed `onSoftDeadline` into a histogram
+  bucket for real-time p95/p99 tracking.
+
 ## [2.27.0] — 2026-08-14
 
 ### Added

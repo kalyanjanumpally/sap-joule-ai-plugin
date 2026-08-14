@@ -25,7 +25,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | Group | Primitives |
 | --- | --- |
 | **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `quotaManager` (v2.23.0 — per-user USD quota with warnings) · `inMemoryQuotaStore` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
-| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `clientSideRateLimit` (v2.26.0 — proactive N-per-window throttle) · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
+| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `clientSideRateLimit` (v2.26.0 — proactive N-per-window throttle) · `deadline` · `gracePeriod` (v2.28.0 — soft-deadline warnings + optional hard timeout) · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
@@ -1148,6 +1148,34 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Grace period / soft deadline (new in v2.28.0)
+
+`gracePeriod` complements the shipped `deadline` (v1.x hard timeout) with a **soft deadline** that fires a warning callback while the request keeps running. Useful for SLO monitoring: catch tail-latency spikes early, *before* they become full timeouts.
+
+```js
+const { gracePeriod } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(gracePeriod({
+  softMs: 5000,          // warn at 5s
+  hardMs: 15000,          // kill at 15s
+  onSoftDeadline: (i) => cds.log('llm:slo').warn('slow', i),
+  onHardDeadline: (i) => cds.log('llm:slo').error('killed', i),
+}));
+```
+
+Three modes:
+- **`softMs` alone** → warning only, no kill (pure SLO monitoring)
+- **`hardMs` alone** → equivalent to the shipped `deadline`
+- **`softMs` + `hardMs`** → warn at soft, kill at hard (SLO + safety net)
+
+Highlights:
+- **AbortSignal integration** — fresh `AbortController` per call on `ctx.signal` (opt-out via `attachAbortSignal: false`). Aborts on hard deadline so cancellation-aware providers early-exit instead of continuing to burn tokens after the timeout fires. Original ctx.signal restored after the call.
+- **`GracePeriodExhaustedError`** (code `GRACE_PERIOD_EXHAUSTED`) with `.elapsedMs`, `.hardMs`, `.softMs`.
+- **Buckets** — `completedUnderSoft` vs `completedOverSoft` for real-world SLO tuning. `softDeadlineRate()` returns the fraction of calls that crossed the soft line.
+- MCP resource: `config://grace-period`.
+
+Compose with `speculativeHedge` (v2.12.0) — use `onSoftDeadline` as a signal to fire a late hedge ("primary is probably slow, start a backup"). Compose with `promMetrics` — feed `onSoftDeadline` into a histogram bucket for real-time p95/p99 tracking.
 
 ## Batch aggregator (new in v2.27.0)
 

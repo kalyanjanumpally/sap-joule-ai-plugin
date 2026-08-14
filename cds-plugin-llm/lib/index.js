@@ -285,6 +285,9 @@ module.exports = {
   // Batch aggregator — window-based pooling of concurrent LLM calls (new in 2.27.0)
   batchAggregator:        require('./middleware/batchAggregator').batchAggregator,
   BatchAggregationError:  require('./middleware/batchAggregator').BatchAggregationError,
+  // Grace period — soft-deadline warnings + optional hard timeout (new in 2.28.0)
+  gracePeriod:            require('./middleware/gracePeriod').gracePeriod,
+  GracePeriodExhaustedError: require('./middleware/gracePeriod').GracePeriodExhaustedError,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,
