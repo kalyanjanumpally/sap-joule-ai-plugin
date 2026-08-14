@@ -290,6 +290,9 @@ module.exports = {
   GracePeriodExhaustedError: require('./middleware/gracePeriod').GracePeriodExhaustedError,
   // Response revision loop — re-ask same model with feedback when score low (new in 2.29.0)
   responseRevision:       require('./middleware/responseRevision').responseRevision,
+  // Prompt version pinning — canary/rollback for prompt templates (new in 2.30.0)
+  promptVersionPin:       require('./middleware/promptVersionPin').promptVersionPin,
+  PromptVersionRegistry:  require('./middleware/promptVersionPin').PromptVersionRegistry,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

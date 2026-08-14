@@ -6382,6 +6382,88 @@ export interface ResponseRevisionMiddleware extends Middleware {
  */
 export function responseRevision(options: ResponseRevisionOptions): ResponseRevisionMiddleware;
 
+// ---- Prompt version pinning (new in 2.30.0) -------------------------
+
+export interface PromptTemplateRef {
+  name:     string;
+  version?: string | number;
+  [key: string]: unknown;
+}
+
+export interface PromptVersionSnapshot {
+  latest:   string | undefined;
+  versions: string[];
+}
+
+export class PromptVersionRegistry {
+  register(name: string, version: string | number, template: unknown): this;
+  setLatest(name: string, version: string | number): this;
+  getVersion(name: string, version: string | number): unknown | null;
+  latestVersion(name: string): string | null;
+  getLatest(name: string): unknown | null;
+  listVersions(name: string): string[];
+  listTemplates(): string[];
+  snapshot(): Record<string, PromptVersionSnapshot>;
+}
+
+export interface PromptVersionPinOptions {
+  /** REQUIRED. Look up a template by name+version. Return `null` if missing. */
+  resolveTemplate:  (name: string, version: string) => unknown | null;
+  /** REQUIRED. Return the latest known version string for a template name. Return `null` if none. */
+  latestVersionOf:  (name: string) => string | null | undefined;
+  /** REQUIRED. Extract `{ name, version? }` from ctx. Return null/undefined to opt out. */
+  templateRefOf:    (ctx: unknown) => PromptTemplateRef | null | undefined;
+  /** Optional per-request pin. Returns a version string to override templateRef.version. */
+  pinFor?:          (ctx: unknown, name: string) => string | number | null | undefined;
+  /** REQUIRED. Apply the resolved template to the request. */
+  applyTemplate:    (originalRequest: unknown, template: unknown, ctx: unknown) => unknown;
+  /** ctx.meta field where the audit trail is written. Default `'promptVersion'`. */
+  metaField?:       string;
+  onPin?:      (info: { name: string; version: string; source: 'pin' }) => void;
+  onUnpinned?: (info: { name: string; version: string; source: 'explicit' | 'latest' }) => void;
+  onMissing?:  (info: { name: string; version?: string; reason: 'no-latest-version' | 'template-not-found' }) => void;
+  onError?:    (info: { phase: string; error: unknown }) => void;
+}
+
+export interface PromptVersionPinStats {
+  totalCalls:       number;
+  passthroughs:     number;
+  pinned:           number;
+  explicit:         number;
+  latestFallback:   number;
+  missing:          number;
+  errors:           number;
+  byTemplate:       Record<string, Record<string, number>>;
+  lastResolved:     { name: string; version: string; source: 'pin' | 'explicit' | 'latest' } | null;
+}
+
+export interface PromptVersionPinMiddleware extends Middleware {
+  readonly stats: PromptVersionPinStats;
+  reset(): void;
+  pinRate(): number;
+  asMcpResource(): {
+    uri: 'config://prompt-version-pin';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => PromptVersionPinStats & {
+      metaField: string;
+      pinRate:   number;
+    };
+  };
+}
+
+/**
+ * Prompt version pinning middleware. Resolves `ctx.request.templateRef`
+ * (via `templateRefOf`) to a specific template version, applying an
+ * optional per-request pin (via `pinFor`) with fallback to
+ * `latestVersionOf`. Records the resolved version in
+ * `ctx.meta[metaField]` for audit. Rollback-friendly for canary
+ * deployments: 5% of traffic pinned to v3 while 95% runs v4.
+ * @since 2.30.0
+ */
+export function promptVersionPin(options: PromptVersionPinOptions): PromptVersionPinMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

@@ -4,6 +4,61 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.30.0] — 2026-08-14
+
+### Added
+- **`promptVersionPin` middleware + `PromptVersionRegistry` class** —
+  version selection for prompt templates. Rollback-friendly for canary
+  deployments where 5% of traffic pins to v3 while 95% runs v4, or
+  per-session rollback for a user who reported a bad response on the
+  new version.
+- **`PromptVersionRegistry`** — lightweight in-memory registry storing
+  templates by `(name, version)`. Methods: `register`, `setLatest`,
+  `getVersion`, `latestVersion`, `getLatest`, `listVersions`,
+  `listTemplates`, `snapshot`. Latest tracks most-recently-registered
+  by default; use `setLatest()` to override.
+- **Resolution priority** (highest first):
+  1. `pinFor(ctx, name)` — per-request pin (canary / rollback)
+  2. `templateRef.version` — explicit caller-supplied version
+  3. `latestVersionOf(name)` — falls back to registry's latest
+- **`ctx.meta[metaField]`** — audit trail. After resolution, the
+  middleware writes `{ name, version, source }` (source is `'pin'` |
+  `'explicit'` | `'latest'`) so downstream observability + logs know
+  which template version was used. Default `metaField: 'promptVersion'`.
+- **Original request restored** — the resolved template is applied
+  transiently for the downstream call, then `ctx.request` is restored
+  so callers see their original state.
+- **Fail-open** — missing templates, unknown versions, or errors in
+  `applyTemplate` fall through to `next()` without modifying the
+  request. `onMissing` / `onError` fire for observability.
+- **Bring-your-own registry** — the middleware takes any
+  `resolveTemplate(name, version) → template | null` +
+  `latestVersionOf(name) → version | null` pair, so you can wire in
+  `gitPromptRegistry` (2.1) with commit SHAs as versions, or a
+  database-backed registry.
+- Per-template usage counts (`stats.byTemplate.summarize = { '1': 12, '2': 45 }`)
+  + `pinRate()` for canary-progress monitoring.
+- MCP resource `config://prompt-version-pin` exposes full stats +
+  pin rate.
+- TypeScript: `PromptVersionPinOptions`, `PromptVersionPinStats`,
+  `PromptVersionPinMiddleware`, `PromptTemplateRef`,
+  `PromptVersionSnapshot`, `PromptVersionRegistry` class.
+
+### API contract (frozen)
+- Signature: `promptVersionPin({ resolveTemplate, latestVersionOf, templateRefOf, pinFor, applyTemplate, metaField='promptVersion', onPin, onUnpinned, onMissing, onError })`
+- MCP URI: `config://prompt-version-pin`
+- Source strings: `'pin'`, `'explicit'`, `'latest'` — stable
+
+### Composition
+- Compose with `PromptRegistry` (1.8) — build a `PromptVersionRegistry`
+  where each entry wraps a `PromptRegistry` template. Different
+  versions live side-by-side.
+- Compose with `gitPromptRegistry` (2.1) — use the commit SHA as
+  the version string. Immutable pins for prod; branch head for canary.
+- Compose with `promptExperiment` (2.20) — experiment picks the
+  variant (name), pin locks a version of that variant. Rollback while
+  A/B testing.
+
 ## [2.29.0] — 2026-08-14
 
 ### Added

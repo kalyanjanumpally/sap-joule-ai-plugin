@@ -32,7 +32,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) · `multimodalRouter` (v2.25.0 — capability-aware routing by attachment type) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
 | **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `functionCallArbitrator` (v2.18.0 — tool-call allowlist + validation) · `normalizeToolShape` · `normalizeToolList` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
-| **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
+| **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) · `promptVersionPin` (v2.30.0 — canary/rollback for prompt templates) · `PromptVersionRegistry` |
 | **Long-context** | `compactHistory` · `sessionContextStore` (v2.19.0 — per-session history with prune / summarize) · `inMemorySessionStore` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` · `streamAggregator` (v2.24.0 — coalesce per-token chunks for smoother UI) |
 | **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` · `promptExperiment` (v2.20.0 — live A/B testing with 95% CI winner detection) · `responseRevision` (v2.29.0 — quality-driven re-ask loop) |
@@ -1148,6 +1148,49 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Prompt version pinning (new in v2.30.0)
+
+`promptVersionPin` is version selection for prompt templates: **rollback-friendly** for canary deployments where 5% of traffic pins to v3 while 95% runs v4, or per-session rollback for a user who reported a bad response on the new version. Ships with a lightweight `PromptVersionRegistry` class; bring-your-own resolver if you want to back the registry with Git commit SHAs, a database, or `gitPromptRegistry` (v2.1.0).
+
+```js
+const { promptVersionPin, PromptVersionRegistry } = require('@saptarishi/cds-plugin-llm');
+
+const registry = new PromptVersionRegistry();
+registry.register('summarize', 1, (vars) => ({
+  messages: [{ role: 'user', content: `Summarize (v1): ${vars.text}` }],
+}));
+registry.register('summarize', 2, (vars) => ({
+  messages: [{ role: 'user', content: `Summarize concisely (v2): ${vars.text}` }],
+}));
+
+llm.use(promptVersionPin({
+  resolveTemplate: (name, version) => registry.getVersion(name, version),
+  latestVersionOf: (name) => registry.latestVersion(name),
+  templateRefOf:   (ctx) => ctx.request.templateRef,
+  pinFor:          (ctx, name) => sessionPins[ctx.request.sessionId]?.[name],
+  applyTemplate:   (req, tpl, ctx) => ({ ...req, ...tpl(req.vars ?? {}) }),
+  onPin: (i) => cds.log('llm:pin').info(i),
+}));
+
+// Callers set:
+llm.chat({ templateRef: { name: 'summarize' }, vars: { text: '...' } });
+```
+
+Resolution priority (highest first):
+1. **`pinFor(ctx, name)`** — per-request pin (canary / rollback)
+2. **`templateRef.version`** — explicit caller-supplied version
+3. **`latestVersionOf(name)`** — falls back to registry's latest
+
+Audit metadata written to `ctx.meta.promptVersion = { name, version, source }` — downstream logs, MCP resources, and dashboards see exactly which template version was used per call.
+
+Highlights:
+- **Bring-your-own registry** — the middleware just needs `resolveTemplate` + `latestVersionOf` functions. Wire in `gitPromptRegistry` (v2.1.0) with commit SHAs as versions, a database, whatever.
+- **Fail-open** — missing templates or unknown versions fall through to `next()` without modifying the request. Never blocks the request path.
+- **Per-template usage counts** (`stats.byTemplate.summarize = { '1': 12, '2': 45 }`) + `pinRate()` for canary-progress monitoring.
+- MCP resource: `config://prompt-version-pin`.
+
+Compose with `promptExperiment` (v2.20.0) — experiment picks the variant (name), pin locks a version of that variant. Rollback while A/B testing.
 
 ## Response revision loop (new in v2.29.0)
 
