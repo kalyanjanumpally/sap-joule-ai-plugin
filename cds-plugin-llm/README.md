@@ -24,7 +24,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 
 | Group | Primitives |
 | --- | --- |
-| **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `quotaManager` (v2.23.0 — per-user USD quota with warnings) · `inMemoryQuotaStore` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
+| **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `quotaManager` (v2.23.0 — per-user USD quota with warnings) · `inMemoryQuotaStore` · `costOverrunPredictor` (v2.33.0 — calendar-window spend projection) · `startOfMonth` / `endOfMonth` (+day / quarter helpers) · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
 | **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `clientSideRateLimit` (v2.26.0 — proactive N-per-window throttle) · `deadline` · `gracePeriod` (v2.28.0 — soft-deadline warnings + optional hard timeout) · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) · `responseSigning` (v2.32.0 — HMAC responses + `verifyResponseSignature`) |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` · `providerHealthAggregate` (v2.31.0 — unified provider health score) |
@@ -1148,6 +1148,46 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Cost overrun predictor (new in v2.33.0)
+
+`costOverrunPredictor` tracks spend against a **fixed calendar billing window** (typically end-of-month) and projects end-of-window spend based on the current burn rate. Warns rising-edge when the projected spend would exceed `targetUsd`. Distinct from `costForecast` (v2.1.0) — that projects a *rolling* window; this projects to a *fixed calendar boundary*.
+
+```js
+const { costOverrunPredictor, startOfMonth, endOfMonth } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(costOverrunPredictor({
+  windowStart: () => startOfMonth(new Date()),
+  windowEnd:   () => endOfMonth(new Date()),
+  targetUsd:   1000,
+  costOf:      (ctx, result) => {
+    const inTok  = result.usage?.input_tokens  ?? 0;
+    const outTok = result.usage?.output_tokens ?? 0;
+    return (inTok / 1e6) * 0.15 + (outTok / 1e6) * 0.60;
+  },
+  warnAtRatio: 0.85,
+  onWarn:      (i) => cds.log('llm:cost').warn('overrun-projected', i),
+  onExhausted: (i) => cds.log('llm:cost').error('overrun-imminent', i),
+}));
+```
+
+Fills the cost stack:
+- **`costBudget`** (v1.x) — GLOBAL cap (hard block)
+- **`quotaManager`** (v2.23.0) — PER-USER cap
+- **`costForecast`** (v2.1.0) — ROLLING-window projection
+- **`costOverrunPredictor`** (v2.33.0) — CALENDAR-window projection
+- **`costAwareRouter`** (v2.10.0) — cheap-first with quality escalation
+
+Highlights:
+- **Linear projection** — `projected = (spent / elapsed) × fullWindow`. Simple + effective for steady-state workloads.
+- **Rising-edge warn** at `warnAtRatio × targetUsd` (default 0.85). Separate **rising-edge exhausted** at `targetUsd` so alerting distinguishes "on track to overspend" from "definitely overspending."
+- **Auto window rollover** — when `windowStart()` returns a new timestamp, spend + rising-edge state reset automatically. No cron jobs needed.
+- **`minSampleSize` gate** (default 20) — prevents projection noise during the first minutes of a window.
+- **`projection()`** returns full live state for dashboards + ops UIs.
+- **Six calendar helpers exported**: `startOfMonth`, `endOfMonth`, `startOfDay`, `endOfDay`, `startOfQuarter`, `endOfQuarter`.
+- MCP resource: `config://cost-overrun-predictor`.
+
+Compose with `quotaManager` (v2.23.0) — predictor gives early warning ("you'll blow the monthly budget"); quota gives hard enforcement ("this user hit their cap"). Both signals feed the same alerting pipeline.
 
 ## Response signing (new in v2.32.0)
 

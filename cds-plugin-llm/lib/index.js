@@ -299,6 +299,14 @@ module.exports = {
   responseSigning:         require('./middleware/responseSigning').responseSigning,
   verifyResponseSignature: require('./middleware/responseSigning').verifyResponseSignature,
   RESPONSE_SIGNING_ALGORITHMS: require('./middleware/responseSigning').RESPONSE_SIGNING_ALGORITHMS,
+  // Cost overrun predictor — calendar-window spend projection (new in 2.33.0)
+  costOverrunPredictor:    require('./middleware/costOverrunPredictor').costOverrunPredictor,
+  startOfMonth:            require('./middleware/costOverrunPredictor').startOfMonth,
+  endOfMonth:              require('./middleware/costOverrunPredictor').endOfMonth,
+  startOfDay:              require('./middleware/costOverrunPredictor').startOfDay,
+  endOfDay:                require('./middleware/costOverrunPredictor').endOfDay,
+  startOfQuarter:          require('./middleware/costOverrunPredictor').startOfQuarter,
+  endOfQuarter:            require('./middleware/costOverrunPredictor').endOfQuarter,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

@@ -6625,6 +6625,94 @@ export function verifyResponseSignature(
 /** Supported HMAC algorithms for response signing. Frozen. @since 2.32.0 */
 export const RESPONSE_SIGNING_ALGORITHMS: readonly ResponseSigningAlgorithm[];
 
+// ---- Cost overrun predictor (new in 2.33.0) -------------------------
+
+export interface CostProjection {
+  spentUsd:         number;
+  projectedUsd:     number;
+  targetUsd:        number;
+  elapsedMs:        number;
+  remainingMs:      number;
+  fullWindowMs:     number;
+  utilizationRatio: number;
+  projectedRatio:   number;
+  windowStartMs:    number;
+  windowEndMs:      number;
+}
+
+export interface CostOverrunPredictorOptions {
+  /** Beginning of the calendar window. Default `() => startOfMonth()`. */
+  windowStart?:    () => Date;
+  /** End of the calendar window. Default `() => endOfMonth()`. */
+  windowEnd?:      () => Date;
+  /** Budget target for the window (USD). Required. */
+  targetUsd:       number;
+  /** Compute USD cost of this call. Return non-numeric / <0 to skip tracking. */
+  costOf:          (ctx: unknown, result: unknown) => number | null | undefined;
+  /** Fraction of target where onWarn fires (rising-edge). Default 0.85. Range (0, 1]. */
+  warnAtRatio?:    number;
+  /** Min sample size before onWarn/onExhausted may fire. Default 20. */
+  minSampleSize?:  number;
+  onProjection?: (p: CostProjection) => void;
+  onWarn?:       (p: CostProjection) => void;
+  onExhausted?:  (p: CostProjection) => void;
+  onError?:      (info: { phase: 'costOf'; error: unknown }) => void;
+  now?:          () => number;
+}
+
+export interface CostOverrunPredictorStats {
+  totalCalls:      number;
+  totalSpent:      number;
+  windowStartMs:   number;
+  windowEndMs:     number;
+  warnCount:       number;
+  exhaustedCount:  number;
+  costErrors:      number;
+  lastProjection:  CostProjection | null;
+}
+
+export interface CostOverrunPredictorMiddleware extends Middleware {
+  readonly stats: CostOverrunPredictorStats;
+  reset(): void;
+  projection(): CostProjection;
+  asMcpResource(): {
+    uri: 'config://cost-overrun-predictor';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => CostOverrunPredictorStats & {
+      targetUsd:     number;
+      warnAtRatio:   number;
+      minSampleSize: number;
+      projection:    CostProjection;
+    };
+  };
+}
+
+/**
+ * Projects end-of-calendar-window spend based on the current burn rate
+ * and warns rising-edge when the projection would exceed `targetUsd`.
+ * Distinct from `costForecast` (2.1) — that projects a ROLLING window
+ * forward; this projects to a FIXED CALENDAR BOUNDARY (default: end
+ * of month). Composes with `quotaManager` (2.23) for early warnings
+ * before the hard cap.
+ * @since 2.33.0
+ */
+export function costOverrunPredictor(options: CostOverrunPredictorOptions): CostOverrunPredictorMiddleware;
+
+/** First millisecond of the calendar month for `d`. Default `d = new Date()`. @since 2.33.0 */
+export function startOfMonth(d?: Date): Date;
+/** Last millisecond of the calendar month for `d`. @since 2.33.0 */
+export function endOfMonth(d?: Date): Date;
+/** First millisecond of the calendar day for `d`. @since 2.33.0 */
+export function startOfDay(d?: Date): Date;
+/** Last millisecond of the calendar day for `d`. @since 2.33.0 */
+export function endOfDay(d?: Date): Date;
+/** First millisecond of the calendar quarter for `d`. @since 2.33.0 */
+export function startOfQuarter(d?: Date): Date;
+/** Last millisecond of the calendar quarter for `d`. @since 2.33.0 */
+export function endOfQuarter(d?: Date): Date;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

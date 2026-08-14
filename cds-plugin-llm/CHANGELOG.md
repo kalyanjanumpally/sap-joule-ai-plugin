@@ -4,6 +4,65 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.33.0] — 2026-08-14
+
+### Added
+- **`costOverrunPredictor` middleware** — tracks spend against a fixed
+  calendar billing window (typically end-of-month) and projects
+  end-of-window spend based on the current burn rate. Warns
+  rising-edge when the projected spend would exceed `targetUsd`.
+- Distinct from `costForecast` (2.1): that projects a ROLLING window
+  forward (e.g., "the next hour"); this projects to a FIXED CALENDAR
+  BOUNDARY (end of month). Fills the cost stack:
+  - `costBudget` (1.x) — GLOBAL cap (hard block)
+  - `quotaManager` (2.23) — PER-USER cap
+  - `costForecast` (2.1) — ROLLING-window projection
+  - `costOverrunPredictor` (this) — CALENDAR-window projection
+  - `costAwareRouter` (2.10) — cheap-first with quality escalation
+- **Linear projection** — `projected = (spent / elapsed) × fullWindow`.
+  Simple but effective for steady-state workloads. Users with very
+  bursty patterns can wrap this with their own exponential-smoothing
+  projection.
+- **Rising-edge warn** at `warnAtRatio × targetUsd` (default 0.85):
+  fires once when the projection crosses the threshold upward and
+  doesn't re-fire until the projection drops back below.
+- **Rising-edge exhausted** at `targetUsd`: separate callback so
+  alerting can distinguish "on track to overspend" from "definitely
+  overspending".
+- **Auto window rollover** — when `windowStart()` returns a new
+  timestamp (crossing a month boundary), spend + rising-edge state
+  reset automatically. No cron jobs needed.
+- **`minSampleSize` gate** (default 20) — prevents projection noise
+  during the first minutes of a window.
+- **`projection()`** method returns full live state
+  `{ spentUsd, projectedUsd, targetUsd, elapsedMs, remainingMs,
+  utilizationRatio, projectedRatio, windowStartMs, windowEndMs }`
+  for dashboards + ops UIs.
+- **Six calendar helpers exported**: `startOfMonth`, `endOfMonth`,
+  `startOfDay`, `endOfDay`, `startOfQuarter`, `endOfQuarter`.
+  Convenience for the most common `windowStart` / `windowEnd`
+  arguments.
+- MCP resource `config://cost-overrun-predictor` exposes target +
+  live projection + all counters.
+- TypeScript: `CostOverrunPredictorOptions`,
+  `CostOverrunPredictorStats`, `CostOverrunPredictorMiddleware`,
+  `CostProjection`.
+
+### API contract (frozen)
+- Signature: `costOverrunPredictor({ windowStart, windowEnd, targetUsd, costOf, warnAtRatio=0.85, minSampleSize=20, onProjection, onWarn, onExhausted, onError })`
+- MCP URI: `config://cost-overrun-predictor`
+- Projection shape stable across versions
+
+### Composition
+- Compose with `quotaManager` (2.23) — predictor gives early warning
+  ("you'll blow the monthly budget"); quota gives hard enforcement
+  ("this user hit their cap").
+- Compose with `costForecast` (2.1) as peers — rolling window for
+  short-term burst detection; calendar window for month-end target
+  compliance. Both give complementary views.
+- Compose with `promMetrics` — expose `projectedUsd` / `projectedRatio`
+  as gauges for real-time Grafana dashboards.
+
 ## [2.32.0] — 2026-08-14
 
 ### Added
