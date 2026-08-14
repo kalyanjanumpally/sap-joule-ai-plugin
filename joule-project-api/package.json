@@ -12,7 +12,7 @@
     "@anthropic-ai/sdk": "^0.111.0",
     "@sap/cds": "^9",
     "@saptarishi/cds-plugin-llm": "^2.38.0",
-    "@saptarishi/cds-plugin-vector-hana": "^0.12.0",
+    "@saptarishi/cds-plugin-vector-hana": "^0.13.0",
     "express": "^4"
   },
   "optionalDependencies": {

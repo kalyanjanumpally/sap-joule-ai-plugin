@@ -4,6 +4,16 @@ All notable changes to `@saptarishi/cds-plugin-vector-hana`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-08-14
+
+### Changed
+
+- **Peer dependency widened**: `@saptarishi/cds-plugin-llm` peer range is now `>=1.0.0 <3` (was `^1.0.0`). Consumers pinning the 2.x line — which added 30+ new middleware primitives with a formal API-stability contract — no longer trip `npm ci`'s peer-dep ERESOLVE check. The plugin uses zero 2.x-only APIs internally; the 1.x-only pin was conservative and blocked mixed installs unnecessarily. No code changes on either side; this is a manifest-only bump so downstream projects can freely combine the latest of both plugins.
+
+### Notes
+
+- **Breaking for consumers only if they had pinned `^0.12.0`** exactly — `^0.13.0` semver requires an explicit dependency update. This is a widening (strictly permissive) change; no behavioural difference at runtime.
+
 ## [0.12.0] — 2026-08-06
 
 ### Added
