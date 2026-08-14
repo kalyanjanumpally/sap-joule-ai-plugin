@@ -30,7 +30,7 @@ const { MCPServer } = require('@saptarishi/cds-plugin-llm/lib/mcp/server');
 async function startObservabilityMcp({
   getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
   getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog, getTuner, getProbe,
-  getAdaptiveMaxTokens, getTraceCorrelation,
+  getAdaptiveMaxTokens, getTraceCorrelation, getFuzzyDedup,
 }) {
   if (process.env.MCP_OBS_DISABLE) {
     cds.log('mcp:obs').info('[mcp:obs] disabled via MCP_OBS_DISABLE — skipping startup');
@@ -46,11 +46,11 @@ async function startObservabilityMcp({
   try {
     const server = new MCPServer({
       name:              'joule-procurement-ops',
-      version:           '0.11.0',
+      version:           '0.12.0',
       resources:         buildResources({
         getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
         getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog, getTuner, getProbe,
-  getAdaptiveMaxTokens, getTraceCorrelation,
+        getAdaptiveMaxTokens, getTraceCorrelation, getFuzzyDedup,
       }),
       resourceTemplates: buildResourceTemplates(),
       tools:             buildTools({ getCache, getInjectionGuard }),
@@ -79,7 +79,7 @@ async function startObservabilityMcp({
 function buildResources({
   getCache, getBudget, getGuardrails, getInjectionGuard, getMetering, getRetry,
   getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog, getTuner, getProbe,
-  getAdaptiveMaxTokens, getTraceCorrelation,
+  getAdaptiveMaxTokens, getTraceCorrelation, getFuzzyDedup,
 }) {
   // As of cds-plugin-llm 1.40.1, MCPServer.registerResource() accepts the
   // { handler } shape shipped by middleware.asMcpResource() directly — no
@@ -88,6 +88,13 @@ function buildResources({
 
   const cache = getCache();
   if (cache?.asMcpResource) resources.push(cache.asMcpResource());
+
+  // fuzzyDedup (cds-plugin-llm 2.38.0) — config://fuzzy-dedup.
+  // Character-level near-dedup layer that sits ABOVE responseCache.
+  // MCP clients can watch exactHits/fuzzyHits climb to see typo-tolerance
+  // absorbing rewordings before any embedding call fires.
+  const fd = getFuzzyDedup?.();
+  if (fd?.asMcpResource) resources.push(fd.asMcpResource());
 
   const budget = getBudget();
   if (budget?.asMcpResource) resources.push(budget.asMcpResource());

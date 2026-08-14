@@ -86,6 +86,20 @@ const {
   costForecast,
   regionFailover,
   gitPromptRegistry,
+  // 2.38.0 primitive — character-level near-duplicate detection.
+  //   fuzzyDedup             — Jaccard-trigram / normalized-Levenshtein request
+  //                            dedup. Complements the exact + semantic layers
+  //                            in responseCache: catches TYPOS + REWORDINGS
+  //                            cheaply, WITHOUT an embedding call. Ideal for
+  //                            "summarise PO-4471" / "summarize PO 4471" /
+  //                            "summarize PO4471" collisions from Joule users
+  //                            who retype instead of clicking the same suggested
+  //                            prompt twice.
+  //   inMemoryFuzzyStore     — reference store with LRU eviction + TTL.
+  //                            Production BTP swap: Redis-backed store
+  //                            implementing { get, put, findSimilar }.
+  fuzzyDedup,
+  inMemoryFuzzyStore,
 } = require('@saptarishi/cds-plugin-llm');
 const {
   RAG,
@@ -201,6 +215,8 @@ let _distributedLock;
 let _otelSpans;
 let _retryAfterPropagation;
 let _costForecast;
+// 2.38.0 — fuzzy near-duplicate dedup layer (character-level, no embedder).
+let _fuzzyDedup;
 // Auto-retry-wrapped llm.chat. Instantiated after the LLM connects; used
 // by every action handler so transient failures (BulkheadFull, CircuitOpen)
 // recover automatically without hand-writing retry code per action.
@@ -632,6 +648,51 @@ function getLLM() {
         ),
       });
       llm.use(_costForecast);
+      // fuzzyDedup (cds-plugin-llm 2.38.0) — character-level near-duplicate
+      // dedup. Sits ABOVE responseCache so typo/whitespace variants collapse
+      // to a hit WITHOUT paying the embedding round-trip below. Cheap
+      // Jaccard-trigram similarity, threshold 0.82 tuned for Joule
+      // procurement prompts where users retype supplier/PO numbers with
+      // dashes, spaces, or capitalisation shifts ("PO-4471", "po 4471",
+      // "PO4471", "summarise PO-4471", "summarize PO 4471"). Isolates
+      // per-tenant via keyPrefix so cross-tenant collisions are impossible
+      // (belt-and-suspenders alongside distributedLock's per-tenant serialize).
+      // In-memory reference store; production BTP swap = Redis with a
+      // TRIGRAM-INDEXED table backing findSimilar.
+      _fuzzyDedup = fuzzyDedup({
+        similarityKind: 'jaccard-trigram',
+        threshold:      0.82,
+        store:          inMemoryFuzzyStore({ maxEntries: 5_000, ttlMs: 60 * 60_000 }),
+        // keyPrefix stays empty; extractKey below builds the per-tenant
+        // prefix at request time from cds.context.tenant so multi-tenant
+        // deployments never cross-hit. `findSimilar` scans the whole
+        // in-memory map but only rows whose keys start with the same
+        // tenant prefix can win (the tenant token is 3+ chars so
+        // Jaccard-trigram similarity between two different tenants'
+        // prompts is bounded well below 0.82).
+        extractKey: (ctx) => {
+          const req = ctx?.request ?? {};
+          const tenant = ctx?.raw?.tenant ?? cds.context?.tenant ?? 'default';
+          const tenantPrefix = `t:${tenant}:`;
+          if (typeof req.prompt === 'string') return tenantPrefix + req.prompt;
+          if (Array.isArray(req.messages)) {
+            for (let i = req.messages.length - 1; i >= 0; i--) {
+              const m = req.messages[i];
+              if (m?.role === 'user' && typeof m.content === 'string') {
+                return tenantPrefix + m.content;
+              }
+            }
+          }
+          if (typeof req.input === 'string') return tenantPrefix + req.input;
+          return null;
+        },
+        minKeyLength: 12,          // don't dedupe trivially-short prompts
+        onHit: (info) => cds.log('llm:fuzzy').info(
+          `[fuzzy] ${info.exact ? 'EXACT' : 'NEAR'} hit sim=${info.similarity.toFixed(3)}`,
+        ),
+      });
+      llm.use(_fuzzyDedup);
+
       // Semantic cache — reuses the `llm-embed` alias (Ollama nomic-embed-text
       // by default, or genai-hub embed deployment in prod). Cache hits now
       // fire not only on exact prompt matches but on semantically-similar
@@ -828,6 +889,8 @@ function getOtelSpans() { return _otelSpans; }
 function getRetryAfterPropagation() { return _retryAfterPropagation; }
 /** Exported for /forecast-state dashboard + MCP resource — rolling spend projection. */
 function getCostForecast() { return _costForecast; }
+/** Exported for /fuzzy-dedup-stats + MCP resource — character-level near-duplicate detection (2.38.0). */
+function getFuzzyDedup() { return _fuzzyDedup; }
 
 /**
  * SSE streaming handler — plain Express, not OData. Registered from within
@@ -987,6 +1050,7 @@ module.exports = class AIService extends cds.ApplicationService {
         getCache, getBudget, getBudgetLimits, getGuardrails, getInjectionGuard, getMetering, getRetry,
         getDeadline, getBreaker, getBulkhead, getCostGuard, getJsonLog,
         getTuner, getProbe, getAdaptiveMaxTokens, getTraceCorrelation,
+        getFuzzyDedup,
       });
 
       // Boot-time preflight (cds-plugin-llm 1.66.0) — validate env +
@@ -1113,6 +1177,22 @@ module.exports = class AIService extends cds.ApplicationService {
           hitRate:           cache.hitRate(),
           size:              cache.size(),
           semanticIndexSize: cache.semanticIndex.size,
+        });
+      });
+      // Fuzzy dedup dashboard (cds-plugin-llm 2.38.0) — character-level
+      // near-duplicate detection stats. Distinct from /cache-stats:
+      // fuzzyDedup sits ABOVE responseCache and catches typo/rewording
+      // variants WITHOUT firing an embedding call. `exactHits` +
+      // `fuzzyHits` break out the cheap-path vs typo-tolerance breakdown.
+      // Ops use this to size the tenant's shared prompt-cache Redis: high
+      // `fuzzyHits` + high `hitRate` = users are asking the same thing
+      // many ways and the middleware is absorbing it before the LLM.
+      cds.app.get('/fuzzy-dedup-stats', (_req, res) => {
+        const fd = getFuzzyDedup();
+        if (!fd) return res.status(503).json({ error: 'fuzzy dedup not initialized yet' });
+        res.json({
+          ...fd.stats,
+          hitRate: fd.hitRate(),
         });
       });
       // Guardrails dashboard — block / redact counters (both stages).
@@ -1771,3 +1851,4 @@ module.exports.getDistributedLock = getDistributedLock;
 module.exports.getOtelSpans = getOtelSpans;
 module.exports.getRetryAfterPropagation = getRetryAfterPropagation;
 module.exports.getCostForecast = getCostForecast;
+module.exports.getFuzzyDedup = getFuzzyDedup;

@@ -23,8 +23,9 @@ CAP backend for the **Procurement Copilot** Joule agent. Hosts LLM-backed action
 | `GET  /budget-status` | Lightweight JSON snapshot of budget spend + limits (same data as the OData action; no OData framing). Useful for K8s probes. |
 | `GET  /injection-stats` | **Prompt-injection detection counters** — `scanned / blocked / sanitized / warned` + per-detector breakdown (regex / base64 / unicode / delimiters / roleAttempt / lengthAnomaly). |
 | `GET  /retry-stats` | **Rate-limit retry counters** — `requests / retriedRequests / totalRetries / givenUp / totalWaitMs`. Shows throttling pressure before it becomes user-visible latency. Complements `/budget-status` (pre-flight blocks) with reactive-recovery visibility. |
+| `GET  /fuzzy-dedup-stats` | **Fuzzy near-duplicate dedup counters** (cds-plugin-llm 2.38.0) — `exactHits / fuzzyHits / stores / hitRate / lastSimilarity`. Character-level (Jaccard-trigram, threshold 0.82) dedup that sits ABOVE `responseCache` and catches typo/whitespace/rewording variants WITHOUT an embedding call. Per-tenant `keyPrefix` isolation. |
 | `GET  /metrics` | **Prometheus scrape endpoint (text-exposition 0.0.4)** — same counters as the individual `/*-stats` endpoints, serialized for Grafana / DataDog agent / Kubernetes ServiceMonitor. Cache, budget, guardrails, injection, and usage metering — one endpoint, all metrics. |
-| **MCP** `POST /mcp` on port **3334** | **Observability MCP server (Streamable HTTP transport).** Exposes every middleware's live state (`config://cache`, `config://budget`, `config://prompt-injection-guard`, `config://usage`, `config://guardrails`, `config://rate-limit-retry`), a middleware chain snapshot (`config://chain`), the `LlmBudget` config rows (`finance://llm-budget`), recent `LlmSpend` rows (`finance://llm-spend/recent?limit={n}`), and the shipped JSON Schema registry (`schema://list`, `schema://{name}`). Plus tools: `reload_budget`, `reset_cache`, `reset_injection_stats`. |
+| **MCP** `POST /mcp` on port **3334** | **Observability MCP server (Streamable HTTP transport).** Exposes every middleware's live state (`config://cache`, `config://fuzzy-dedup`, `config://budget`, `config://prompt-injection-guard`, `config://usage`, `config://guardrails`, `config://rate-limit-retry`), a middleware chain snapshot (`config://chain`), the `LlmBudget` config rows (`finance://llm-budget`), recent `LlmSpend` rows (`finance://llm-spend/recent?limit={n}`), and the shipped JSON Schema registry (`schema://list`, `schema://{name}`). Plus tools: `reload_budget`, `reset_cache`, `reset_injection_stats`. |
 
 The `/ai/*` actions delegate to whichever LLM provider is configured under `cds.requires.llm` (see [`../cds-plugin-llm`](../cds-plugin-llm/README.md)). The `/procurement/*` actions are auto-declared by [`@saptarishi/cds-plugin-vector-hana`](../cds-plugin-vector-hana/README.md) from the `@rag` annotation on `SupplierContracts` — **zero handler code lives in this project for them**. The `/finance/LlmSpend` entity is a projection of the shipped `saptarishi.llm.usage.LlmUsage` (from `@saptarishi/cds-plugin-llm@1.22+`); rows are auto-inserted by the `usageMeteringToCap` middleware wired inside `srv/ai-service.js`.
 
@@ -135,6 +136,37 @@ curl -sS "http://localhost:4004/finance/LlmSpend?\$filter=totalCost%20eq%200&\$t
 ```
 
 Multi-instance deployments (CF, Kyma, K8s) get per-replica exact caches by default; swap `responseCache({ store })` for a Redis / HANA cache table adapter to share exact hits across replicas. Semantic hits stay per-replica by design — each pod warms its own vector index without a network round-trip on every miss.
+
+### Fuzzy dedup — catch typos and rewordings without an embedding call
+
+`srv/ai-service.js` attaches `fuzzyDedup` (`cds-plugin-llm@2.38.0`) **above** `responseCache`. It uses Jaccard-trigram similarity (threshold `0.82`, minKeyLength `12`, per-tenant `keyPrefix`) to collapse near-duplicate prompts — supplier IDs retyped with dashes vs spaces, whitespace-only diffs, single-character typos, or extra optional fields — **before** the semantic cache runs an embedding call. Three-layer dedup story:
+
+1. **`idempotency`** (`cds-plugin-llm@1.77`) — byte-identical dedup inside a 60s window (in-memory hash).
+2. **`fuzzyDedup`** (this) — character-level near-dedup (no embedder).
+3. **`responseCache` + semantic layer** — exact hits, and semantic paraphrases via `llm-embed`.
+
+Each layer runs only when the layer above misses, so the cost curve is **free → cheap → embedding-cost → LLM-cost**.
+
+```sh
+# Same PO, three near-duplicate payloads — extra whitespace, dropped/added field
+BODY_A='{"purchaseOrderId":"PO-4471","poJson":"{\"id\":\"PO-4471\",\"supplier\":\"Acme Steel\",\"material\":\"Steel coils\",\"quantity\":200,\"unit\":\"TON\",\"netAmount\":150000,\"currency\":\"USD\",\"requestedDeliveryDate\":\"2026-09-15\"}"}'
+BODY_B='{"purchaseOrderId":"PO-4471","poJson":"{\"id\":\"PO-4471\",\"supplier\":\"Acme Steel\",\"material\":\"Steel coils\",\"quantity\":200,\"unit\":\"TON\",\"netAmount\":150000,\"currency\":\"USD\",\"requestedDeliveryDate\":\"2026-09-15\",\"notes\":\"Rush\"}"}'
+BODY_C='{"purchaseOrderId":"PO-4471","poJson":"{ \"id\":\"PO-4471\", \"supplier\":\"Acme Steel\", \"material\":\"Steel coils\", \"quantity\":200, \"unit\":\"TON\", \"netAmount\":150000, \"currency\":\"USD\", \"requestedDeliveryDate\":\"2026-09-15\" }"}'
+
+curl -sX POST http://localhost:4004/ai/summarizePurchaseOrder -H 'content-type: application/json' -d "$BODY_A" >/dev/null   # miss → LLM
+curl -sX POST http://localhost:4004/ai/summarizePurchaseOrder -H 'content-type: application/json' -d "$BODY_B" >/dev/null   # NEAR (extra field) → fuzzy hit
+curl -sX POST http://localhost:4004/ai/summarizePurchaseOrder -H 'content-type: application/json' -d "$BODY_C" >/dev/null   # NEAR (whitespace)  → fuzzy hit
+
+curl -sS http://localhost:4004/fuzzy-dedup-stats | jq
+# → {
+#     "totalCalls": 3, "hits": 2, "misses": 1,
+#     "exactHits": 0, "fuzzyHits": 2, "stores": 1,
+#     "tooShort": 0, "storeErrors": 0, "keyErrors": 0,
+#     "lastSimilarity": 0.918, "hitRate": 0.667
+#   }
+```
+
+Watch the same counters live via MCP: subscribe to `config://fuzzy-dedup` on port **3334** and every `hits` bump arrives as a `notifications/resources/updated` event.
 
 ### Enforce a cost budget
 
@@ -348,9 +380,9 @@ Configured in `package.json`:
 
 Swap provider without touching handler code — `srv/ai-service.js` only talks to `cds.connect.to('llm')`.
 
-## Middleware chain (as of 0.28.0)
+## Middleware chain (as of 0.29.0)
 
-Reading OUTER → INNER (`otelSpans` first, provider last). Every LLM call flows through **28 layers** before hitting the provider:
+Reading OUTER → INNER (`otelSpans` first, provider last). Every LLM call flows through **29 layers** before hitting the provider:
 
 ```
 otelSpans                                   (1.93) full-lifecycle OTel span w/ cost + correlation + errors
@@ -377,10 +409,11 @@ otelSpans                                   (1.93) full-lifecycle OTel span w/ c
                                           → retryOnRateLimit (1.47) reactive retry on 429/503
                                             → usageMetering  (1.21) per-request cost accounting
                                               → costForecast (2.2)  rolling-window spend + projections
-                                                → responseCache (1.26) exact + semantic (1.32)
-                                                  → structuredOutputValidator (1.76) JSON Schema check
-                                                    → replayBuffer (1.75) in-memory debug window
-                                                      → provider (Anthropic / GenAI Hub / ...)
+                                                → fuzzyDedup (2.38) character-level near-dup (no embedder)
+                                                  → responseCache (1.26) exact + semantic (1.32)
+                                                    → structuredOutputValidator (1.76) JSON Schema check
+                                                      → replayBuffer (1.75) in-memory debug window
+                                                        → provider (Anthropic / GenAI Hub / ...)
 ```
 
 Also imported for future / conditional wiring: `regionFailover` (1.99) for multi-region HA, `gitPromptRegistry` (2.1) for prompt-as-code.
