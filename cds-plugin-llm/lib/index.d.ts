@@ -6305,6 +6305,83 @@ export class GracePeriodExhaustedError extends LLMError {
  */
 export function gracePeriod(options: GracePeriodOptions): GracePeriodMiddleware;
 
+// ---- Response revision loop (new in 2.29.0) -------------------------
+
+export type ResponseRevisionScorerResult =
+  | number
+  | { score: number; feedback?: string; [key: string]: unknown };
+
+export interface ResponseRevisionOptions {
+  /**
+   * Score the response. Return number in [0, 1] or `{ score, feedback? }`.
+   * Feedback (if any) is injected into the revision prompt.
+   */
+  scorer: (result: unknown, ctx: unknown) => ResponseRevisionScorerResult | Promise<ResponseRevisionScorerResult>;
+  /** Below this → revise. Default 0.7. Range (0, 1]. */
+  scoreThreshold?:  number;
+  /** Max revision attempts. Default 2. `0` = no retries. */
+  maxRevisions?:    number;
+  /** Build the revision prompt (user message asking model to revise). */
+  buildRevisionPrompt?: (info: {
+    previousText: string | null;
+    score: number;
+    feedback: string;
+    revisionIndex: number;
+    scoreThreshold: number;
+    originalRequest: unknown;
+  }) => string;
+  /** Apply the revision prompt to the request. Default appends assistant reply + user revision. */
+  applyRevision?:   (originalRequest: unknown, revisionPrompt: string, previousResponse: unknown) => unknown;
+  onRevision?: (info: { revisionIndex: number; score: number; feedback: string; scoreThreshold: number }) => void;
+  onFinalize?: (info: { revisions: number; result: unknown; score: number | null; passed: boolean; unscorable: boolean }) => void;
+  onGiveUp?:   (info: { revisions: number; bestScore: number; scoreThreshold: number; feedback: string }) => void;
+  onError?:    (info: { phase: 'scorer' | 'buildRevisionPrompt' | 'applyRevision'; error: unknown }) => void;
+}
+
+export interface ResponseRevisionStats {
+  totalCalls:          number;
+  passedFirstTry:      number;
+  passedAfterRevision: number;
+  gaveUp:              number;
+  scoreErrors:         number;
+  totalRevisions:      number;
+  revisionsByCount:    Record<string, number>;
+  lastScore:           number | null;
+  lastRevisionCount:   number | null;
+}
+
+export interface ResponseRevisionMiddleware extends Middleware {
+  readonly stats: ResponseRevisionStats;
+  reset(): void;
+  avgRevisions(): number;
+  passRate(): number;
+  asMcpResource(): {
+    uri: 'config://response-revision';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ResponseRevisionStats & {
+      scoreThreshold: number;
+      maxRevisions:   number;
+      avgRevisions:   number;
+      passRate:       number;
+    };
+  };
+}
+
+/**
+ * Response revision loop. When the response scores below threshold,
+ * automatically re-asks the SAME model with the low-scoring response
+ * + rubric feedback inline, up to `maxRevisions` times. Returns the
+ * best-scoring response across all attempts even if none pass the
+ * threshold. Composes with `scoreResponse` (2.4) as the natural scorer.
+ * Distinct from `structuredOutputRepair` (schema-driven) and
+ * `costAwareRouter` (tier escalation) — this iterates on the SAME
+ * model for quality-driven revision loops.
+ * @since 2.29.0
+ */
+export function responseRevision(options: ResponseRevisionOptions): ResponseRevisionMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

@@ -4,6 +4,65 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.29.0] — 2026-08-14
+
+### Added
+- **`responseRevision` middleware** — quality-driven revision loop.
+  When the response scores below threshold, automatically re-asks the
+  **SAME model** with the low-scoring response + rubric feedback
+  inline, up to `maxRevisions` times. Returns the **best-scoring**
+  response across all attempts even if none pass the threshold.
+- Distinct from the other quality primitives:
+  - `structuredOutputRepair` (2.9)  — SCHEMA-driven repair
+  - `costAwareRouter` (2.10)         — escalates to a DIFFERENT model
+  - `consensusVoting` (2.5)          — fans out to N models in parallel
+  - `responseRevision` (this)        — iterates on the SAME model
+    with rubric feedback in the prompt
+- **Flexible scorer** — accepts either a plain number in `[0, 1]` or
+  `{ score, feedback? }` where `feedback` (if present) is injected
+  into the revision prompt. Compose with `scoreResponse` (2.4):
+  ```js
+  scorer: (result) => {
+    const report = scoreResponse(result, { rubric });
+    return {
+      score:    report.score,
+      feedback: report.results.filter((r) => !r.pass).map((r) => '- ' + r.reason).join('\n'),
+    };
+  }
+  ```
+- **Best-effort fallback** — even when all revisions fail the
+  threshold, returns the highest-scoring attempt (not the last).
+  Prevents the "kept re-asking and got progressively worse" tail.
+- **Default `applyRevision`** appends the previous assistant reply
+  + a user message asking for revision — matches the standard multi-
+  turn revision pattern most models understand.
+- **Fail-safe scorer** — exceptions or non-numeric returns are
+  treated as unscorable → return the first result unmodified.
+  Never blocks the request path.
+- **`avgRevisions()`** and **`passRate()`** for real-world tuning of
+  `maxRevisions` and `scoreThreshold`. Instrumented.
+- MCP resource `config://response-revision` exposes threshold +
+  max revisions + full stats.
+- Standalone helpers `defaultBuildRevisionPrompt` +
+  `defaultApplyRevision` exported for custom composition.
+- TypeScript: `ResponseRevisionOptions`, `ResponseRevisionStats`,
+  `ResponseRevisionMiddleware`, `ResponseRevisionScorerResult`.
+
+### API contract (frozen)
+- Signature: `responseRevision({ scorer, scoreThreshold=0.7, maxRevisions=2, buildRevisionPrompt, applyRevision, onRevision, onFinalize, onGiveUp, onError })`
+- MCP URI: `config://response-revision`
+- Scorer return: number OR `{ score, feedback? }`
+
+### Composition
+- Place `responseRevision` OUTSIDE `responseCache` / `semanticCache`
+  — revisions shouldn't be cached mid-loop.
+- Compose with `costAwareRouter` (2.10) UNDERNEATH — revise on the
+  cheap model first; if still low, escalate to premium via the
+  router as the fallback path.
+- Compose with `scoreResponse` (2.4) as the natural scorer;
+  compose with `llmJudge` (1.84) for LLM-as-judge scoring (higher
+  cost, softer semantics).
+
 ## [2.28.0] — 2026-08-14
 
 ### Added

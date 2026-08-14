@@ -288,6 +288,8 @@ module.exports = {
   // Grace period — soft-deadline warnings + optional hard timeout (new in 2.28.0)
   gracePeriod:            require('./middleware/gracePeriod').gracePeriod,
   GracePeriodExhaustedError: require('./middleware/gracePeriod').GracePeriodExhaustedError,
+  // Response revision loop — re-ask same model with feedback when score low (new in 2.29.0)
+  responseRevision:       require('./middleware/responseRevision').responseRevision,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

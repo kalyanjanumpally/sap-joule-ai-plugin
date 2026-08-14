@@ -35,7 +35,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) |
 | **Long-context** | `compactHistory` · `sessionContextStore` (v2.19.0 — per-session history with prune / summarize) · `inMemorySessionStore` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` · `streamAggregator` (v2.24.0 — coalesce per-token chunks for smoother UI) |
-| **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` · `promptExperiment` (v2.20.0 — live A/B testing with 95% CI winner detection) |
+| **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` · `promptExperiment` (v2.20.0 — live A/B testing with 95% CI winner detection) · `responseRevision` (v2.29.0 — quality-driven re-ask loop) |
 | **Bulk workflows** | `runBatch` · `waitForBatch` · `batchAggregator` (v2.27.0 — window-based pooling of concurrent LLM calls) |
 | **Multimodal helpers** | `imageFromFile` / `pdfFromUrl` / `audioFromBase64` / `uploadPdfFromUrl` / etc. |
 | **Agent orchestration** | `runTools` · `streamTools` · `Agent` · `runAgents` · `streamAgents` · `autoToolChain` (v2.22.0 — cascading tool loop with cycle detection) |
@@ -1148,6 +1148,46 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Response revision loop (new in v2.29.0)
+
+`responseRevision` is a quality-driven revision loop. When the response scores below threshold, this middleware automatically re-asks the **same model** with the low-scoring response + rubric feedback inline, up to `maxRevisions` times. Returns the **best-scoring** response across all attempts even if none pass the threshold.
+
+```js
+const { responseRevision, scoreResponse } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(responseRevision({
+  scorer: (result) => {
+    const report = scoreResponse(result, { rubric: myRubric });
+    return {
+      score: report.score,
+      feedback: report.results
+        .filter((r) => !r.pass)
+        .map((r) => `- ${r.check}: ${r.reason}`)
+        .join('\n'),
+    };
+  },
+  scoreThreshold: 0.8,
+  maxRevisions:   2,
+  onRevision: (i) => cds.log('llm:revise').info('revision', i),
+}));
+```
+
+Distinct from the three other quality primitives:
+- **`structuredOutputRepair`** (v2.9.0) — SCHEMA-driven repair
+- **`costAwareRouter`** (v2.10.0) — escalates to a DIFFERENT model
+- **`consensusVoting`** (v2.5.0) — fans out to N models in parallel
+- **`responseRevision`** (v2.29.0) — iterates on the SAME model with rubric feedback
+
+Highlights:
+- **Flexible scorer**: return `number` in `[0, 1]` OR `{ score, feedback }`. Feedback (if present) is injected into the revision prompt.
+- **Best-effort fallback**: even when all revisions fail, returns the highest-scoring attempt (not the last). Prevents the "kept re-asking and got progressively worse" tail.
+- **Fail-safe scorer**: exceptions or non-numeric returns treated as unscorable → return the first result unmodified. Never blocks the request path.
+- **`avgRevisions()`** and **`passRate()`** for real-world tuning of `maxRevisions` / `scoreThreshold`.
+- Default `applyRevision` appends previous assistant reply + user revision request — matches the standard multi-turn revision pattern most models understand.
+- MCP resource: `config://response-revision`.
+
+Composition rule: place `responseRevision` **outside** `responseCache` / `semanticCache` (revisions shouldn't be cached mid-loop). Compose with `costAwareRouter` (v2.10.0) *underneath* — revise on the cheap model first; if still low, escalate to premium as the fallback path.
 
 ## Grace period / soft deadline (new in v2.28.0)
 
