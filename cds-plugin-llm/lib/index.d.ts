@@ -6713,6 +6713,103 @@ export function startOfQuarter(d?: Date): Date;
 /** Last millisecond of the calendar quarter for `d`. @since 2.33.0 */
 export function endOfQuarter(d?: Date): Date;
 
+// ---- User feedback aggregator (new in 2.34.0) -----------------------
+
+export type UserFeedbackRatingKind = 'binary' | 'scale' | 'custom';
+
+export type UserFeedbackDimensions = Record<string, string | number | boolean | null | undefined>;
+
+export interface UserFeedbackAggregatorOptions {
+  /** Extract dimensions (template, model, tenant, etc.) from ctx + result for aggregation grouping. */
+  dimensionsOf?:       (ctx: unknown, result: unknown) => UserFeedbackDimensions | null | undefined;
+  /** `'binary'` (thumbs up/down), `'scale'` (1-5 stars), or `'custom'` (any number). Default `'binary'`. */
+  ratingKind?:         UserFeedbackRatingKind;
+  /** For scale kind — minimum valid rating (inclusive). Default 1. */
+  scaleMin?:           number;
+  /** For scale kind — maximum valid rating (inclusive). Default 5. */
+  scaleMax?:           number;
+  /** For scale kind — rating ≥ this counts as positive. Default 4. */
+  positivityThreshold?: number;
+  /** For custom kind — REQUIRED. Return true if rating is positive. */
+  positivityOf?:       (rating: number) => boolean;
+  /** Retention window for feedback entries. Default 30 days. Min 1000ms. */
+  windowMs?:           number;
+  /** Field on result where feedback ID attaches. Default `'feedbackId'`. */
+  attachIdAs?:         string;
+  onFeedback?: (info: {
+    feedbackId: string; rating: number; meta: unknown;
+    dimensions: UserFeedbackDimensions; positive: boolean;
+  }) => void;
+  onError?:    (info: { phase: 'dimensionsOf'; error: unknown }) => void;
+  now?:        () => number;
+}
+
+export interface UserFeedbackAggregate {
+  totalRatings: number;
+  positive:     number;
+  negative:     number;
+  neutral:      number;
+  positiveRate: number;
+}
+
+export interface UserFeedbackDimensionGroup extends UserFeedbackAggregate {
+  total: number;
+}
+
+export interface UserFeedbackSubmitResult {
+  accepted: boolean;
+  reason:   'unknown-id' | 'invalid-rating' | null;
+}
+
+export interface UserFeedbackAggregatorStats {
+  totalResponses:   number;
+  totalFeedback:    number;
+  positiveFeedback: number;
+  negativeFeedback: number;
+  neutralFeedback:  number;
+  invalidRatings:   number;
+  dimensionErrors:  number;
+  unknownIds:       number;
+  prunedEntries:    number;
+}
+
+export interface UserFeedbackAggregatorMiddleware extends Middleware {
+  readonly stats: UserFeedbackAggregatorStats;
+  reset(): void;
+  pendingCount(): number;
+  submitFeedback(feedbackId: string, rating: unknown, meta?: unknown): UserFeedbackSubmitResult;
+  getAggregate(filter?: Partial<UserFeedbackDimensions>): UserFeedbackAggregate;
+  snapshotByDimension(dimensionName: string): Record<string, UserFeedbackDimensionGroup>;
+  asMcpResource(): {
+    uri: 'config://user-feedback';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => UserFeedbackAggregatorStats & {
+      ratingKind:           UserFeedbackRatingKind;
+      scaleMin?:            number;
+      scaleMax?:            number;
+      positivityThreshold?: number;
+      windowMs:             number;
+      attachIdAs:           string;
+      aggregate:            UserFeedbackAggregate;
+      pendingCount:         number;
+    };
+  };
+}
+
+/**
+ * User feedback aggregator. Two-part primitive: (1) middleware attaches
+ * `feedbackId` to each response for later attribution; (2)
+ * `submitFeedback(id, rating, meta?)` records the human rating. Aggregates
+ * by user-supplied dimensions (template, model, tenant) with per-dimension
+ * pass rates for dashboards. Distinct from mechanical scoring
+ * (`scoreResponse` 2.4) and LLM-as-judge (`llmJudge` 1.84) — this is
+ * HUMAN feedback aggregation.
+ * @since 2.34.0
+ */
+export function userFeedbackAggregator(options?: UserFeedbackAggregatorOptions): UserFeedbackAggregatorMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

@@ -4,6 +4,72 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.34.0] — 2026-08-14
+
+### Added
+- **`userFeedbackAggregator` middleware** — collect human ratings
+  (thumbs up/down or 1-5 stars or custom scores) per response,
+  aggregate by dimensions (prompt template, model, tenant) for
+  real-time dashboards. Distinct from the shipped eval primitives:
+  - `scoreResponse` (2.4)   — MECHANICAL rubric scoring
+  - `llmJudge` (1.84)        — LLM-as-judge scoring
+  - `promptExperiment` (2.20) — A/B test with automatic scoring
+  - `userFeedbackAggregator` (this) — HUMAN feedback aggregation
+- **Two-part primitive**:
+  1. Middleware attaches `feedbackId` to each result for later
+     attribution
+  2. `submitFeedback(id, rating, meta?)` records the human rating
+     once the user actually reacts (thumbs / star click)
+- **Three rating kinds**:
+  - `'binary'` — thumbs up/down (`'up'`, `'down'`, `1`, `-1`, `true`,
+    `false`, `0`, `'neutral'`)
+  - `'scale'` — 1-N stars (configurable `scaleMin` / `scaleMax` /
+    `positivityThreshold`)
+  - `'custom'` — any number with user-supplied `positivityOf(rating)`
+- **Per-dimension aggregation** — `getAggregate(filter?)` returns
+  `{ totalRatings, positive, negative, neutral, positiveRate }` for
+  the filter. `snapshotByDimension('model')` groups by dimension key
+  for pivot-table-style dashboards.
+- **Rolling window** (default 30 days) — old entries pruned lazily on
+  aggregate queries. O(1) memory over long-running deployments.
+- **Validation** — invalid ratings (out-of-range, non-numeric,
+  unrecognized string) rejected with `{ accepted: false, reason:
+  'invalid-rating' }`. Unknown IDs (feedback for a pruned or
+  non-existent response) rejected with `reason: 'unknown-id'`. Never
+  throws — always returns a status object.
+- **Fail-safe dimensions** — a throwing `dimensionsOf` is captured
+  via `onError` and the response still gets a feedback ID (just with
+  empty dimensions).
+- **Multiple ratings per response supported** — some workflows want
+  both a thumbs vote AND a written comment via `meta`; the entry
+  keeps all ratings + timestamps.
+- Standalone `normalizeBinary` + `normalizeScale` helpers exported
+  for custom composition + tests.
+- MCP resource `config://user-feedback` exposes rating config +
+  live aggregate + full stats.
+- TypeScript: `UserFeedbackAggregatorOptions`,
+  `UserFeedbackAggregatorStats`, `UserFeedbackAggregatorMiddleware`,
+  `UserFeedbackRatingKind`, `UserFeedbackDimensions`,
+  `UserFeedbackAggregate`, `UserFeedbackSubmitResult`,
+  `UserFeedbackDimensionGroup`.
+
+### API contract (frozen)
+- Signature: `userFeedbackAggregator({ dimensionsOf, ratingKind='binary', scaleMin=1, scaleMax=5, positivityThreshold=4, positivityOf, windowMs=30d, attachIdAs='feedbackId', onFeedback, onError })`
+- MCP URI: `config://user-feedback`
+- Submit result: `{ accepted: boolean, reason: 'unknown-id' | 'invalid-rating' | null }`
+
+### Composition
+- Compose with `promptVersionPin` (2.30) — the pin annotates
+  `ctx.meta.promptVersion` with `{ name, version, source }`; use
+  those as `dimensionsOf` fields to attribute feedback per version.
+  Roll out v4, see v4's positive rate lagging v3's, roll back via
+  `pinFor`.
+- Compose with `promptExperiment` (2.20) as peers — experiment
+  scores are mechanical; user feedback is qualitative. Both signals
+  inform the winner decision.
+- Compose with `scoreResponse` (2.4) — mechanical eval + human
+  feedback together give a complete quality picture.
+
 ## [2.33.0] — 2026-08-14
 
 ### Added

@@ -307,6 +307,8 @@ module.exports = {
   endOfDay:                require('./middleware/costOverrunPredictor').endOfDay,
   startOfQuarter:          require('./middleware/costOverrunPredictor').startOfQuarter,
   endOfQuarter:            require('./middleware/costOverrunPredictor').endOfQuarter,
+  // User feedback aggregator — human rating collection + per-dimension breakdown (new in 2.34.0)
+  userFeedbackAggregator:  require('./middleware/userFeedbackAggregator').userFeedbackAggregator,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

@@ -35,7 +35,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) · `promptVersionPin` (v2.30.0 — canary/rollback for prompt templates) · `PromptVersionRegistry` |
 | **Long-context** | `compactHistory` · `sessionContextStore` (v2.19.0 — per-session history with prune / summarize) · `inMemorySessionStore` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` · `streamAggregator` (v2.24.0 — coalesce per-token chunks for smoother UI) |
-| **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` · `promptExperiment` (v2.20.0 — live A/B testing with 95% CI winner detection) · `responseRevision` (v2.29.0 — quality-driven re-ask loop) |
+| **RAG + Eval** | `ragChain` · `llmJudge` / `judgeMany` · `promptRegression` / `loadFixtures` / `formatRegressionReport` · `lintPrompt` / `lintPrompts` / `formatLintReport` · `scoreResponse` · `consensusVoting` · `promptExperiment` (v2.20.0 — live A/B testing with 95% CI winner detection) · `responseRevision` (v2.29.0 — quality-driven re-ask loop) · `userFeedbackAggregator` (v2.34.0 — human thumbs/stars aggregation) |
 | **Bulk workflows** | `runBatch` · `waitForBatch` · `batchAggregator` (v2.27.0 — window-based pooling of concurrent LLM calls) |
 | **Multimodal helpers** | `imageFromFile` / `pdfFromUrl` / `audioFromBase64` / `uploadPdfFromUrl` / etc. |
 | **Agent orchestration** | `runTools` · `streamTools` · `Agent` · `runAgents` · `streamAgents` · `autoToolChain` (v2.22.0 — cascading tool loop with cycle detection) |
@@ -1148,6 +1148,48 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## User feedback aggregator (new in v2.34.0)
+
+`userFeedbackAggregator` collects human ratings (thumbs up/down or 1-5 stars) per response and aggregates them by dimensions (prompt template, model, tenant) for real-time dashboards. **Two-part primitive**: middleware attaches `feedbackId` for later attribution; `submitFeedback(id, rating, meta?)` records the human rating once the user actually reacts.
+
+```js
+const { userFeedbackAggregator } = require('@saptarishi/cds-plugin-llm');
+
+const feedback = userFeedbackAggregator({
+  dimensionsOf: (ctx, result) => ({
+    template: ctx.meta?.promptVersion?.name,
+    model:    result?.model,
+    tenant:   ctx.request.tenantId,
+  }),
+  ratingKind:   'binary',      // 'binary' | 'scale' | 'custom'
+  windowMs:     7 * 24 * 3600_000,
+});
+llm.use(feedback);
+
+// Later, when the user clicks 👍:
+feedback.submitFeedback(response.feedbackId, 'up');
+
+// Dashboard query:
+feedback.getAggregate({ template: 'summarize' });
+// → { totalRatings: 145, positive: 123, positiveRate: 0.848, ... }
+```
+
+Distinct from the mechanical eval primitives:
+- **`scoreResponse`** (v2.4.0) — mechanical rubric scoring
+- **`llmJudge`** (v1.84.0) — LLM-as-judge scoring
+- **`promptExperiment`** (v2.20.0) — A/B test with automatic scoring
+- **`userFeedbackAggregator`** (v2.34.0) — HUMAN feedback
+
+Highlights:
+- **Three rating kinds**: `'binary'` (thumbs), `'scale'` (1-N stars), `'custom'` (any number + user-supplied `positivityOf`).
+- **Per-dimension aggregation** — `getAggregate(filter?)` for filtered stats; `snapshotByDimension('model')` for pivot-table dashboards.
+- **Rolling window** (default 30 days) with lazy pruning. O(1) memory over long-running deployments.
+- **Validation** — invalid ratings + unknown IDs rejected with `{ accepted: false, reason }` status object; never throws.
+- **Multiple ratings per response** supported (thumbs vote + written comment via `meta`).
+- MCP resource: `config://user-feedback`.
+
+Compose with `promptVersionPin` (v2.30.0) — the pin annotates `ctx.meta.promptVersion` with `{ name, version, source }`; use those as `dimensionsOf` fields to attribute feedback per version. Roll out v4, see v4's positive rate lagging v3's, roll back via `pinFor`.
 
 ## Cost overrun predictor (new in v2.33.0)
 
