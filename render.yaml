@@ -1,0 +1,46 @@
+# Render blueprint — https://render.com/docs/blueprint-spec
+#
+# Deploys the joule-project-api CAP backend so a customer can hit
+# /ai/summarizePurchaseOrder + /fuzzy-dedup-stats live over the internet.
+# One-click sync from GitHub: New → Blueprint → point at this repo.
+#
+# Free-tier notes:
+#   * Sleeps after ~15 min inactivity; first request after a nap is ~30s
+#     cold-start (CAP init + in-memory sqlite seed + LLM probe).
+#   * Ollama isn't available in the container — `llm-embed` calls throw and
+#     `responseCache` reports embedderErrors in /cache-stats. Fuzzy-dedup
+#     (character-level, no embedder) still works. Semantic-cache path
+#     degrades to no-op cleanly.
+#   * MCP observability port (3334) is not exposed externally — Render
+#     services expose exactly one HTTP port. MCP_OBS_DISABLE=1 keeps the
+#     boot log quiet. If you want MCP too, run `mcp` on the same port with
+#     a path prefix or deploy a second service.
+#
+# Required secrets (set in the Render UI OR via `render env set`):
+#   GROQ_API_KEY — get one at https://console.groq.com/keys (free tier is
+#                  fine for the demo; Llama 3.3 70B is the default model).
+
+services:
+  - type: web
+    name: joule-procurement-copilot
+    runtime: node
+    plan: free
+    region: oregon                 # closest to most demo audiences; change if EU
+    rootDir: joule-project-api
+    buildCommand: npm ci --omit=optional
+    startCommand: npm start
+    healthCheckPath: /live         # cds-plugin-llm's healthHandler bundle
+    autoDeploy: true               # every push to main redeploys
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: MCP_OBS_DISABLE       # single-port constraint on free plan
+        value: "1"
+      - key: PREFLIGHT_DISABLE     # skip boot probes (no external LLM ping at start)
+        value: "1"
+      - key: PROBE_DISABLE         # skip periodic health-probe (no billing on idle)
+        value: "1"
+      - key: GROQ_API_KEY          # set in Render UI — do NOT hardcode
+        sync: false

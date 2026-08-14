@@ -459,6 +459,27 @@ curl -X POST http://localhost:4004/ai/summarizePurchaseOrder \
   }'
 ```
 
+## Deploy to Render (public demo URL)
+
+For customer demos where you need a clickable URL rather than a laptop screen-share, a Render blueprint sits at the repo root ([`../render.yaml`](../render.yaml)) that provisions this backend on Render's free tier.
+
+**One-time setup (~5 minutes):**
+
+1. Sign in at https://dashboard.render.com and click **New → Blueprint**.
+2. Connect the `sap-joule-ai-plugin` GitHub repo. Render auto-discovers `render.yaml` at the root.
+3. Add the required secret in the service's **Environment** tab:
+   - `GROQ_API_KEY` — grab a free key at https://console.groq.com/keys (the default `llama-3.3-70b-versatile` model is free-tier).
+4. Click **Apply**. First build ~2 min; subsequent deploys ~40s.
+
+Once live at `https://joule-procurement-copilot.onrender.com` (or your custom domain), the client demo script from [Fuzzy dedup — catch typos and rewordings without an embedding call](#fuzzy-dedup--catch-typos-and-rewordings-without-an-embedding-call) works verbatim — just swap `http://localhost:4004` for the Render URL.
+
+**Free-tier caveats to mention on the call:**
+
+- **Cold-start**: after ~15 min idle the service sleeps; the first request wakes it (~30s). Warm it up 1 min before the demo with a `curl -s https://.../live`.
+- **No Ollama** → embedding calls fail gracefully; `/cache-stats` shows `embedderErrors` climbing but `fuzzyDedup` (character-level, no embedder) works unchanged. That's the point.
+- **MCP port disabled** — Render exposes one HTTP port per service; the observability MCP server on 3334 is off in this deployment. For MCP too, deploy a second service or upgrade to a paid plan and expose both ports.
+- **In-memory DB** — every restart re-seeds SupplierContracts from `db/data/`. Fine for demos, not for anything else.
+
 ## Deploy to BTP
 
 Add to your MTA descriptor as a Node.js module bound to:
