@@ -322,6 +322,13 @@ module.exports = {
   EmptyResponseError:      require('./middleware/emptyResponseDetector').EmptyResponseError,
   DEFAULT_REFUSAL_PATTERNS: require('./middleware/emptyResponseDetector').DEFAULT_REFUSAL_PATTERNS,
   EMPTY_RESPONSE_POLICIES: require('./middleware/emptyResponseDetector').ON_EMPTY_POLICIES,
+  // Fuzzy dedup — near-duplicate detection via Jaccard/Levenshtein (new in 2.38.0)
+  fuzzyDedup:              require('./middleware/fuzzyDedup').fuzzyDedup,
+  inMemoryFuzzyStore:      require('./middleware/fuzzyDedup').inMemoryFuzzyStore,
+  jaccardTrigram:          require('./middleware/fuzzyDedup').jaccardTrigram,
+  normalizedLevenshtein:   require('./middleware/fuzzyDedup').normalizedLevenshtein,
+  levenshteinDistance:     require('./middleware/fuzzyDedup').levenshteinDistance,
+  FUZZY_SIMILARITY_KINDS:  require('./middleware/fuzzyDedup').SIMILARITY_KINDS,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

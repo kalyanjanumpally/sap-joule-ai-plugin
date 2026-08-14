@@ -7064,6 +7064,120 @@ export const DEFAULT_REFUSAL_PATTERNS: readonly RegExp[];
 /** Frozen list of accepted onEmpty policies. @since 2.37.0 */
 export const EMPTY_RESPONSE_POLICIES: readonly EmptyResponsePolicy[];
 
+// ---- Fuzzy dedup (new in 2.38.0) ----------------------------------
+
+export type FuzzySimilarityKind = 'jaccard-trigram' | 'levenshtein';
+
+export interface FuzzyStoreEntry {
+  value: unknown;
+  ts:    number;
+}
+
+export interface FuzzyStoreMatch {
+  key:        string;
+  similarity: number;
+  value:      unknown;
+}
+
+export interface FuzzyStore {
+  get(key: string): Promise<FuzzyStoreEntry | null>;
+  findSimilar(
+    text: string,
+    threshold: number,
+    similarityFn: (a: string, b: string) => number,
+    options?: { keyPrefix?: string },
+  ): Promise<FuzzyStoreMatch | null>;
+  put(key: string, value: unknown): Promise<void>;
+  size?(): Promise<number>;
+  clear?(): Promise<void>;
+}
+
+export interface InMemoryFuzzyStoreOptions {
+  /** Max entries before LRU-evicting the oldest. Default 1000. */
+  maxEntries?: number;
+  /** Optional TTL. Default null (no expiry). */
+  ttlMs?:      number | null;
+  /** Injectable clock for testing. */
+  now?:        () => number;
+}
+
+export function inMemoryFuzzyStore(options?: InMemoryFuzzyStoreOptions): FuzzyStore;
+
+/** Jaccard similarity over character trigrams. Returns [0, 1]. @since 2.38.0 */
+export function jaccardTrigram(a: string, b: string): number;
+
+/** 1 - (Levenshtein distance / max length). Returns [0, 1]. @since 2.38.0 */
+export function normalizedLevenshtein(a: string, b: string): number;
+
+/** Raw iterative Levenshtein edit distance. @since 2.38.0 */
+export function levenshteinDistance(a: string, b: string): number;
+
+/** Frozen list of accepted similarityKind values. @since 2.38.0 */
+export const FUZZY_SIMILARITY_KINDS: readonly FuzzySimilarityKind[];
+
+export interface FuzzyDedupOptions {
+  extractKey?:     (ctx: unknown) => string | null | undefined;
+  /** 'jaccard-trigram' (default, no lib deps) or 'levenshtein' (O(n*m) — cap key length). */
+  similarityKind?: FuzzySimilarityKind;
+  /** Similarity threshold in (0, 1]. Default 0.85. */
+  threshold?:      number;
+  store:           FuzzyStore;
+  /** Namespace so multiple dedup instances share one store. Default ''. */
+  keyPrefix?:      string;
+  /** Skip dedup for prompts shorter than this. Default 8. */
+  minKeyLength?:   number;
+  /** Return false to skip caching a specific response. */
+  shouldCache?:    (ctx: unknown, result: unknown) => boolean | undefined;
+  onHit?:          (info: { key: string; similarity: number; exact: boolean; value: unknown }) => void;
+  onMiss?:         (info: { key: string }) => void;
+  onStore?:        (info: { key: string; value: unknown }) => void;
+  onError?:        (info: { phase: 'extractKey' | 'store' | 'shouldCache'; error: Error }) => void;
+}
+
+export interface FuzzyDedupStats {
+  totalCalls:      number;
+  hits:            number;
+  misses:          number;
+  exactHits:       number;
+  fuzzyHits:       number;
+  stores:          number;
+  tooShort:        number;
+  storeErrors:     number;
+  keyErrors:       number;
+  lastSimilarity:  number | null;
+  lastKey:         string | null;
+}
+
+export interface FuzzyDedupMiddleware {
+  (ctx: unknown, next: () => Promise<unknown>): Promise<unknown>;
+  readonly stats: FuzzyDedupStats;
+  reset(): void;
+  hitRate(): number;
+  asMcpResource(): {
+    uri: 'config://fuzzy-dedup';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => {
+      similarityKind:  FuzzySimilarityKind;
+      threshold:       number;
+      keyPrefix:       string;
+      minKeyLength:    number;
+      hitRate:         number;
+    } & FuzzyDedupStats;
+  };
+}
+
+/**
+ * Near-duplicate request detection using cheap character-level similarity
+ * (Jaccard trigrams or normalized Levenshtein). Fills the gap between
+ * byte-identical caches (`requestCoalescer`, `responseCache`) and
+ * embedding-based `semanticCache` — no embedder needed. Ideal for
+ * dedup'ing support-ticket typos or slightly reworded questions.
+ * @since 2.38.0
+ */
+export function fuzzyDedup(options: FuzzyDedupOptions): FuzzyDedupMiddleware;
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

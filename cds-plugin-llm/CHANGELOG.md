@@ -4,6 +4,68 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.38.0] — 2026-08-14
+
+### Added
+- **`fuzzyDedup` middleware** — near-duplicate request detection using
+  cheap character-level similarity. Cache-like semantics: on match,
+  returns the prior response without calling the provider. Fills the
+  third slot in the dedup story:
+  - `requestCoalescer` (2.8)   — BYTE-IDENTICAL, IN-FLIGHT
+  - `responseCache` (0.9)      — BYTE-IDENTICAL, AT-REST
+  - `semanticCache` (2.7)      — EMBEDDING-SIMILAR (requires embedder)
+  - `fuzzyDedup` (this)        — CHARACTER-SIMILAR (no embedder)
+- **Two algorithms** — `'jaccard-trigram'` (default, O(n+m), no library
+  deps, ideal for prompts up to a few thousand chars) or `'levenshtein'`
+  (normalized edit distance, O(n*m), catches char-level typos even
+  more precisely — cap prompt length in practice).
+- **Two-phase matching** — first checks exact-key hit via `store.get`
+  (fast), then falls back to fuzzy scan via `store.findSimilar` (only
+  as needed). `stats.exactHits` and `stats.fuzzyHits` broken out
+  separately so operators can see how much lift comes from typo-level
+  matching vs plain repeats.
+- **`inMemoryFuzzyStore`** — production-ready reference store with
+  LRU eviction (`maxEntries`, default 1000) and optional TTL. Same
+  `{ get, put, findSimilar }` contract used by every fuzzy store.
+- **Multi-tenant safe** via `keyPrefix` — namespace store entries so
+  a shared store can back multiple dedup instances without cross-talk.
+  Post-filter enforces prefix isolation even if store ignored the hint.
+- **`minKeyLength: 8`** default — skips dedup for trivially-short
+  prompts (`"hi"`, `"ok"`) where every prompt would match every
+  other. `stats.tooShort` tracks skips.
+- **`shouldCache(ctx, result)`** hook — return `false` to skip caching
+  specific responses (e.g., errors, tool-only intermediate results).
+- **Fail-open on store errors** — increments `storeErrors` counter,
+  passes through to downstream provider. Cache degrades to no-op
+  rather than blocking the request path.
+- Standalone `jaccardTrigram(a, b)`, `normalizedLevenshtein(a, b)`,
+  `levenshteinDistance(a, b)`, `trigrams(text)`, `SIMILARITY_KINDS`
+  exported for custom similarity strategies.
+- MCP resource `config://fuzzy-dedup` exposes config + hit rate +
+  exact/fuzzy breakdown + full stats.
+- TypeScript: `FuzzyDedupOptions`, `FuzzyDedupStats`,
+  `FuzzyDedupMiddleware`, `FuzzyStore`, `FuzzyStoreEntry`,
+  `FuzzyStoreMatch`, `InMemoryFuzzyStoreOptions`, `FuzzySimilarityKind`.
+
+### API contract (frozen)
+- Signature: `fuzzyDedup({ extractKey?, similarityKind='jaccard-trigram', threshold=0.85, store, keyPrefix='', minKeyLength=8, shouldCache?, onHit?, onMiss?, onStore?, onError? })`
+- Store contract: `{ get(key), findSimilar(text, threshold, similarityFn, { keyPrefix }), put(key, value), size?(), clear?() }`
+- MCP URI: `config://fuzzy-dedup`
+- Similarity kinds: `'jaccard-trigram'`, `'levenshtein'`
+
+### Composition
+- Compose OUTSIDE `requestCoalescer` (2.8) — coalesce byte-identical
+  concurrent requests first, then fuzzy-dedup lands cross-request
+  near-duplicates over time.
+- Compose OUTSIDE `responseCache` (0.9) — exact repeats short-circuit
+  before the fuzzy scan runs at all.
+- Compose with `semanticCache` (2.7) when both are available —
+  fuzzyDedup catches typos + trivial rewordings cheaply; the semantic
+  layer catches genuine paraphrases (higher recall, embedder cost).
+- Compose with `quotaManager` (2.23) or `costOverrunPredictor` (2.33)
+  — fuzzy hits count as zero-cost calls for those primitives (call
+  order: dedup → quota so cost never accrues on a hit).
+
 ## [2.37.0] — 2026-08-14
 
 ### Added

@@ -30,7 +30,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` · `providerHealthAggregate` (v2.31.0 — unified provider health score) · `latencyHistogram` (v2.35.0 — per-dimension p50/p95/p99 with Prometheus export) |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) · `multimodalRouter` (v2.25.0 — capability-aware routing by attachment type) |
-| **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
+| **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) · `fuzzyDedup` (v2.38.0 — near-duplicate detection via Jaccard-trigram / Levenshtein, no embedder required) · `inMemoryFuzzyStore` |
 | **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `functionCallArbitrator` (v2.18.0 — tool-call allowlist + validation) · `normalizeToolShape` · `normalizeToolList` · `contentLengthGate` (v2.36.0 — pre-flight size validation) · `defaultTokenEstimator` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) · `promptVersionPin` (v2.30.0 — canary/rollback for prompt templates) · `PromptVersionRegistry` |
 | **Long-context** | `compactHistory` · `sessionContextStore` (v2.19.0 — per-session history with prune / summarize) · `inMemorySessionStore` |
@@ -1148,6 +1148,40 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Fuzzy dedup (new in v2.38.0)
+
+`fuzzyDedup` is **near-duplicate request detection** using cheap character-level similarity — Jaccard on character trigrams (default, no library deps) or normalized Levenshtein. Cache-like semantics: on match, returns the prior response without calling the provider. No embedder required, so it complements (rather than competes with) `semanticCache` (v2.7.0). Ideal for support-ticket dedup + spam prevention where users retype the same question with typos or slight rewording.
+
+```js
+const { fuzzyDedup, inMemoryFuzzyStore } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(fuzzyDedup({
+  similarityKind: 'jaccard-trigram',   // or 'levenshtein'
+  threshold:      0.85,
+  store:          inMemoryFuzzyStore({ maxEntries: 5000, ttlMs: 24 * 3600_000 }),
+  minKeyLength:   8,
+  onHit:          (i) => cds.log('llm:fuzzy').info('near-dup', i),
+}));
+```
+
+Fills the third slot in the dedup story alongside existing primitives:
+- **`requestCoalescer`** (v2.8.0) — BYTE-IDENTICAL, IN-FLIGHT
+- **`responseCache`** (v0.9.0) — BYTE-IDENTICAL, AT-REST
+- **`semanticCache`** (v2.7.0) — EMBEDDING-SIMILAR (requires embedder)
+- **`fuzzyDedup`** (v2.38.0, this) — CHARACTER-SIMILAR (no embedder)
+
+Highlights:
+- **Two-phase matching** — exact-key hit via `store.get` first (fast), then `store.findSimilar` fuzzy scan only as needed. `stats.exactHits` and `stats.fuzzyHits` are broken out separately so operators can see how much lift comes from typo-level matching vs plain repeats.
+- **Two algorithms** — `jaccard-trigram` (O(n+m), scales to a few thousand chars) or `levenshtein` (O(n*m), catches char-level typos more precisely — cap prompt length in practice).
+- **In-memory reference store** ships with LRU eviction (`maxEntries`) and optional TTL — same `{ get, put, findSimilar }` contract used by any custom store (Redis, PostgreSQL, etc.).
+- **Multi-tenant safe** via `keyPrefix` — namespace one shared store across many dedup instances; post-filter enforces isolation even if the store ignored the hint.
+- **`minKeyLength: 8`** default skips trivially-short prompts (`"hi"`, `"ok"`) where every prompt would collide.
+- **Fail-open on store errors** — increments `storeErrors`, passes through; cache degrades to no-op rather than blocking.
+- Standalone `jaccardTrigram(a, b)`, `normalizedLevenshtein(a, b)`, `levenshteinDistance(a, b)`, `trigrams(text)` exported for custom similarity strategies.
+- MCP resource: `config://fuzzy-dedup`.
+
+Composition rules: compose OUTSIDE `requestCoalescer` (v2.8.0) so byte-identical concurrent requests coalesce first, and OUTSIDE `responseCache` (v0.9.0) so exact repeats short-circuit before the fuzzy scan runs at all. Compose with `semanticCache` (v2.7.0) when both are available — fuzzyDedup catches typos + trivial rewordings cheaply; the semantic layer catches genuine paraphrases (higher recall, embedder cost). Order dedup → quota/cost primitives so fuzzy hits never accrue cost against `quotaManager` (v2.23.0) or `costOverrunPredictor` (v2.33.0).
 
 ## Empty-response detector (new in v2.37.0)
 
