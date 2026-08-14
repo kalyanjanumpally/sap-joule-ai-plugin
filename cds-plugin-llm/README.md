@@ -25,7 +25,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | Group | Primitives |
 | --- | --- |
 | **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `quotaManager` (v2.23.0 — per-user USD quota with warnings) · `inMemoryQuotaStore` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
-| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
+| **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `clientSideRateLimit` (v2.26.0 — proactive N-per-window throttle) · `deadline` · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
 | **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
@@ -1148,6 +1148,40 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Client-side rate limiter (new in v2.26.0)
+
+`clientSideRateLimit` is a proactive N-per-window throttler. Blocks/queues LLM calls to stay under a configured rate rather than letting the provider 429 you and relying on after-the-fact recovery. Closes the reactive-vs-proactive rate-limit story:
+
+- **`retryOnRateLimit`** (v1.x) — REACTS to 429 by waiting + retrying
+- **`adaptiveRateLimit`** (v2.6.0) — REACTS to headers by shrinking bulkhead
+- **`clientSideRateLimit`** (v2.26.0) — PROACTIVELY shapes traffic to never hit the cap
+
+```js
+const { clientSideRateLimit } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(clientSideRateLimit({
+  strategy:       'token-bucket',
+  rate:           10,          // requests per second
+  burst:          20,          // bucket capacity
+  keyOf:          (ctx) => ctx.request.userId ?? 'global',
+  queueTimeoutMs: 30_000,
+  onTimeout:      (i) => cds.log('llm:rate').warn('timeout', i),
+}));
+```
+
+Two strategies:
+- **`'token-bucket'`** — classic Nginx-style: refill at `rate` per second up to `burst` capacity; consume 1 token per call. Best for bursty traffic where short spikes are OK.
+- **`'sliding-window'`** — strict N-per-`windowMs` count. Best when you have a documented provider quota like "100 requests/min" and want exact enforcement.
+
+Highlights:
+- **Per-key limits** via `keyOf(ctx)` — separate token buckets/windows per tenant, per model, per user. Null/empty key falls to the `'global'` bucket.
+- **FIFO queue with timeout** — over-limit calls wait up to `queueTimeoutMs`; then reject with `RateLimitTimeoutError` (code `RATE_LIMIT_QUEUE_TIMEOUT`) carrying `.rateLimitKey`, `.waitedMs`, `.queueTimeoutMs`.
+- **Per-key drain scheduler** ticks only when there are waiters — idle keys consume zero CPU.
+- **`snapshotKeys()`** returns per-key state (tokens or timestamp count, queue depth) for real-time dashboards. `avgWaitMs()` for tuning burst/window/timeout.
+- MCP resource: `config://client-rate-limit`.
+
+Composition rule: put `clientSideRateLimit` **outside** providers so throttling happens before any network work. Compose with `retryOnRateLimit` (inside) as defense in depth — client-side shapes traffic; retry recovers if the provider's actual quota drifted lower than expected.
 
 ## Multimodal attachment router (new in v2.25.0)
 

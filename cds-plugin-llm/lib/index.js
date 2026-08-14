@@ -278,6 +278,10 @@ module.exports = {
   // Multimodal attachment router — pick model by attachment type (new in 2.25.0)
   multimodalRouter:       require('./middleware/multimodalRouter').multimodalRouter,
   MULTIMODAL_ROUTE_TYPES: require('./middleware/multimodalRouter').KNOWN_TYPES,
+  // Client-side rate limiter — proactive N-per-window throttler (new in 2.26.0)
+  clientSideRateLimit:    require('./middleware/clientSideRateLimit').clientSideRateLimit,
+  RateLimitTimeoutError:  require('./middleware/clientSideRateLimit').RateLimitTimeoutError,
+  CLIENT_RATE_LIMIT_STRATEGIES: require('./middleware/clientSideRateLimit').CLIENT_RATE_LIMIT_STRATEGIES,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

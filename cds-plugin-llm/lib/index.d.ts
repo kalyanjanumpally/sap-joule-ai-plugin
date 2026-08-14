@@ -6060,6 +6060,93 @@ export function multimodalRouter(options: MultimodalRouterOptions): MultimodalRo
 /** Known route type names. Frozen. @since 2.25.0 */
 export const MULTIMODAL_ROUTE_TYPES: readonly MultimodalRouteType[];
 
+// ---- Client-side rate limiter (new in 2.26.0) ----------------------
+
+export type ClientSideRateLimitStrategy = 'token-bucket' | 'sliding-window';
+
+export interface ClientSideRateLimitOptions {
+  /** `'token-bucket'` (default) or `'sliding-window'`. */
+  strategy?: ClientSideRateLimitStrategy;
+  /** Token-bucket only: tokens per second refill rate. Default 10. */
+  rate?: number;
+  /** Token-bucket only: bucket capacity. Default = ceil(rate). */
+  burst?: number | null;
+  /** Sliding-window only: requests per window. Default 100. */
+  limit?: number;
+  /** Sliding-window only: window size in ms. Default 60000. Min 100. */
+  windowMs?: number;
+  /** Extract rate-limit key from ctx (per-key limits). Default: `() => 'global'`. */
+  keyOf?: (ctx: unknown) => string | null | undefined;
+  /** Max time to wait in queue before rejecting. Default 30000. */
+  queueTimeoutMs?: number;
+  onQueue?:  (info: { key: string; queueDepth: number }) => void;
+  onAdmit?:  (info: { key: string; immediate: boolean; waitedMs: number }) => void;
+  onTimeout?: (info: { key: string; waitedMs: number; queueTimeoutMs: number }) => void;
+  onError?:  (info: { phase: 'keyOf'; error: unknown }) => void;
+  now?:      () => number;
+  sleep?:    (ms: number) => Promise<void>;
+}
+
+export interface ClientSideRateLimitStats {
+  totalCalls:           number;
+  admittedImmediately:  number;
+  queuedThenAdmitted:   number;
+  timedOut:             number;
+  keyErrors:            number;
+  totalWaitMs:          number;
+  peakQueueDepth:       number;
+  lastKey:              string | null;
+}
+
+export interface ClientSideRateLimitMiddleware extends Middleware {
+  readonly stats: ClientSideRateLimitStats;
+  reset(): void;
+  avgWaitMs(): number;
+  snapshotKeys(): Record<string, { tokens?: number; count?: number; queued: number }>;
+  asMcpResource(): {
+    uri: 'config://client-rate-limit';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ClientSideRateLimitStats & {
+      strategy:       ClientSideRateLimitStrategy;
+      queueTimeoutMs: number;
+      avgWaitMs:      number;
+      keyCount:       number;
+      keys:           Record<string, unknown>;
+      rate?:          number;
+      burst?:         number;
+      limit?:         number;
+      windowMs?:      number;
+    };
+  };
+}
+
+/**
+ * Thrown when a call waited in the queue longer than `queueTimeoutMs`.
+ * `.code === 'RATE_LIMIT_QUEUE_TIMEOUT'`.
+ * @since 2.26.0
+ */
+export class RateLimitTimeoutError extends LLMError {
+  readonly rateLimitKey:   string;
+  readonly waitedMs:       number;
+  readonly queueTimeoutMs: number;
+}
+
+/**
+ * Proactive N-per-window client-side rate limiter. Blocks/queues calls
+ * to stay under a configured rate rather than letting the provider 429
+ * you. Two strategies: `token-bucket` (bursty-friendly) or
+ * `sliding-window` (strict N-per-windowMs count). Distinct from
+ * `adaptiveRateLimit` (which reacts to response headers) — this one
+ * shapes traffic proactively.
+ * @since 2.26.0
+ */
+export function clientSideRateLimit(options?: ClientSideRateLimitOptions): ClientSideRateLimitMiddleware;
+
+/** Strategy names accepted by `clientSideRateLimit`. Frozen. @since 2.26.0 */
+export const CLIENT_RATE_LIMIT_STRATEGIES: readonly ClientSideRateLimitStrategy[];
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

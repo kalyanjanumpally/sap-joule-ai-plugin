@@ -4,6 +4,60 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.26.0] — 2026-08-14
+
+### Added
+- **`clientSideRateLimit` middleware** — proactive N-per-window
+  throttler. Blocks or queues LLM calls to stay under a configured
+  rate rather than letting the provider 429 you and relying on
+  after-the-fact recovery. Closes the reactive-vs-proactive
+  rate-limit story:
+  - `retryOnRateLimit` (1.x) — REACTS to 429 by waiting + retrying
+  - `adaptiveRateLimit` (2.6) — REACTS to headers by shrinking bulkhead
+  - `clientSideRateLimit` (2.26) — PROACTIVELY shapes traffic
+- **Two strategies** (frozen list `CLIENT_RATE_LIMIT_STRATEGIES`):
+  - `'token-bucket'` — classic Nginx-style: refill at `rate` per
+    second up to `burst` capacity; consume 1 token per call. Best
+    for bursty traffic where short spikes are OK.
+  - `'sliding-window'` — strict N-per-`windowMs` count. Best when
+    you have a documented provider quota like "100 requests/min"
+    and want exact enforcement.
+- **Per-key limits** via `keyOf(ctx)` — separate token buckets /
+  windows per tenant, per model, per user. Non-string/empty key
+  falls into the `'global'` bucket.
+- **Queue with timeout** — when the rate is exceeded, calls FIFO-queue
+  up to `queueTimeoutMs`; then rejected with
+  `RateLimitTimeoutError` (`code: 'RATE_LIMIT_QUEUE_TIMEOUT'`) which
+  carries `.rateLimitKey`, `.waitedMs`, `.queueTimeoutMs`.
+- **Per-key snapshot** — `snapshotKeys()` returns per-key state
+  (tokens for bucket, count for window, queue depth) for real-time
+  dashboards. `avgWaitMs()` for tuning `burst` / `windowMs` /
+  `queueTimeoutMs`.
+- **Drain scheduler** ticks per-key so exhausted quotas naturally
+  yield to fresh ones without polling. Idle keys consume zero CPU.
+- MCP resource `config://client-rate-limit` exposes strategy-specific
+  config + all counters + per-key snapshot.
+- TypeScript: `ClientSideRateLimitOptions`,
+  `ClientSideRateLimitStrategy`, `ClientSideRateLimitStats`,
+  `ClientSideRateLimitMiddleware`, `RateLimitTimeoutError` class.
+
+### API contract (frozen)
+- Signature: `clientSideRateLimit({ strategy='token-bucket', rate=10, burst, limit=100, windowMs=60_000, keyOf, queueTimeoutMs=30_000, onQueue, onAdmit, onTimeout, onError })`
+- MCP URI: `config://client-rate-limit`
+- Error code: `RATE_LIMIT_QUEUE_TIMEOUT`
+- Strategy names: `'token-bucket'`, `'sliding-window'`
+- Anonymous bucket key: `'global'`
+
+### Composition
+- Place `clientSideRateLimit` OUTSIDE providers so throttling happens
+  before any network work.
+- Compose with `retryOnRateLimit` (INSIDE this middleware) as a
+  defense-in-depth pair: client-side shapes traffic; retry recovers
+  if the provider's actual quota is lower than expected.
+- Compose with `adaptiveRateLimit` (2.6) — client-side is the
+  proactive floor; adaptive is the reactive adjustment when provider
+  headers tell you the real quota drifted.
+
 ## [2.25.0] — 2026-08-14
 
 ### Added
