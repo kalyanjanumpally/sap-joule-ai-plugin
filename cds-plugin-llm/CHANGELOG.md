@@ -4,6 +4,61 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.36.0] — 2026-08-14
+
+### Added
+- **`contentLengthGate` middleware** — pre-flight size validation.
+  Rejects (or truncates) prompts that exceed a per-model token budget
+  BEFORE they hit the provider. Prevents 400 errors on over-limit
+  contexts + saves tokens on obviously-too-large inputs.
+- Distinct from time-based limiters:
+  - `deadline` (1.x) — hard TIME timeout
+  - `gracePeriod` (2.28) — soft TIME warning + optional hard
+  - `contentLengthGate` (this) — SIZE-based pre-flight
+- Complements `compactHistory` (1.91) which summarizes rolling
+  conversations: gate catches too-large single requests; compact
+  history keeps long conversations bounded via LLM summarization.
+- **Three-way overage policy**:
+  - `'throw'` (default) — raises `ContentLengthExceededError`
+    (`code: 'CONTENT_LENGTH_EXCEEDED'`) with `.tokens`, `.chars`,
+    `.limitTokens`, `.model`
+  - `'truncate-oldest'` — drops oldest messages until under limit,
+    preserving system + latest user by default
+    (`preserveSystem` / `preserveLatestUser` opt-out)
+  - `'log'` — pass through unmodified with `onOverage` observability;
+    let the provider decide
+- **Per-model limits** — `modelLimits: { 'gpt-4o': 128_000, 'claude-opus-4-7': 200_000, default: 64_000 }`.
+  Falls back to `default` for unknown models; if no default, passes
+  through unchecked with `unknownModelCount` counter.
+- **GPT-family token heuristic** by default (`char / 4`). Users with
+  real tokenizers pass `tokenEstimator(text) → tokens`.
+- **Original request restored** after truncation-mode calls so caller
+  state is unmodified — only the downstream provider saw the trimmed
+  version.
+- **`overageRate()`** returns `overageCount / totalCalls` for tuning.
+- Standalone `defaultTokenEstimator` + `defaultExtractText` +
+  `CONTENT_LENGTH_OVERAGE_MODES` frozen list exported.
+- MCP resource `config://content-length-gate` exposes limits + policy
+  + full stats.
+- TypeScript: `ContentLengthGateOptions`, `ContentLengthGateStats`,
+  `ContentLengthGateMiddleware`, `ContentLengthOverageMode`,
+  `ContentLengthExceededError` class.
+
+### API contract (frozen)
+- Signature: `contentLengthGate({ modelLimits, modelOf, tokenEstimator, extractText, overageMode='throw', preserveSystem=true, preserveLatestUser=true, onOverage, onTruncate, onError })`
+- MCP URI: `config://content-length-gate`
+- Error code: `CONTENT_LENGTH_EXCEEDED`
+- Overage mode strings: `'throw'`, `'truncate-oldest'`, `'log'` — stable
+
+### Composition
+- Place OUTSIDE providers so the check runs before any network work
+  — the point is to save tokens on obviously-too-large inputs.
+- Compose with `compactHistory` (1.91) as complementary primitives:
+  compact keeps conversations bounded over multi-turn use; gate
+  catches single-turn over-limit requests as a hard backstop.
+- Compose with `sessionContextStore` (2.19) — gate is the final
+  fail-safe after session-context expansion has appended prior turns.
+
 ## [2.35.0] — 2026-08-14
 
 ### Added

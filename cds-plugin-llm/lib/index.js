@@ -312,6 +312,11 @@ module.exports = {
   // Latency histogram — per-dimension bucketed distribution + p50/p95/p99 (new in 2.35.0)
   latencyHistogram:        require('./middleware/latencyHistogram').latencyHistogram,
   DEFAULT_LATENCY_BUCKETS_MS: require('./middleware/latencyHistogram').DEFAULT_BUCKETS_MS,
+  // Content-length gate — pre-flight size validation, three-way policy (new in 2.36.0)
+  contentLengthGate:       require('./middleware/contentLengthGate').contentLengthGate,
+  ContentLengthExceededError: require('./middleware/contentLengthGate').ContentLengthExceededError,
+  CONTENT_LENGTH_OVERAGE_MODES: require('./middleware/contentLengthGate').OVERAGE_MODES,
+  defaultTokenEstimator:   require('./middleware/contentLengthGate').defaultTokenEstimator,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

@@ -31,7 +31,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) · `multimodalRouter` (v2.25.0 — capability-aware routing by attachment type) |
 | **Caching** | `responseCache` (exact + semantic) · `semanticCache` (pluggable vector store) · `cosineSimilarity` · `embeddingDedup` · `requestCoalescer` (in-flight dedup) |
-| **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `functionCallArbitrator` (v2.18.0 — tool-call allowlist + validation) · `normalizeToolShape` · `normalizeToolList` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
+| **Contract / GitOps** | `structuredOutputValidator` · `structuredOutputRepair` (v2.9.0 — multi-strategy repair) · `jsonAutoFix` · `functionCallArbitrator` (v2.18.0 — tool-call allowlist + validation) · `normalizeToolShape` · `normalizeToolList` · `contentLengthGate` (v2.36.0 — pre-flight size validation) · `defaultTokenEstimator` · `schemas` (Invoice, PurchaseOrder, SupplierRisk, ContractSummary, ExpenseReport, EmailDraft) · `validateMiddlewareOrder` · `chainSnapshot` · `chainDiff` · `preflight` · `capabilities` (+ `PROVIDER_CAPABILITY_MATRIX`, `MODEL_CAPABILITY_OVERRIDES`) |
 | **Prompts** | `PromptRegistry` · `builtInPrompts` · `gitPromptRegistry` (v2.1.0 — Git-backed prompt-as-code) · `promptVersionPin` (v2.30.0 — canary/rollback for prompt templates) · `PromptVersionRegistry` |
 | **Long-context** | `compactHistory` · `sessionContextStore` (v2.19.0 — per-session history with prune / summarize) · `inMemorySessionStore` |
 | **Streaming** | `wrapStreamCompletion` · `hasStreamCompletion` · `streamThrottle` · `streamAggregator` (v2.24.0 — coalesce per-token chunks for smoother UI) |
@@ -1148,6 +1148,39 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Content-length gate (new in v2.36.0)
+
+`contentLengthGate` is **pre-flight size validation**: reject (or truncate) prompts that exceed a per-model token budget BEFORE they hit the provider. Prevents 400 errors on over-limit contexts + saves tokens on obviously-too-large inputs. Distinct from time-based limiters (`deadline`, `gracePeriod`) — this is *size-based*.
+
+```js
+const { contentLengthGate } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(contentLengthGate({
+  modelLimits: {
+    'gpt-4o':          128_000,
+    'gpt-4o-mini':     128_000,
+    'claude-opus-4-7': 200_000,
+    default:            64_000,
+  },
+  overageMode: 'truncate-oldest',   // 'throw' | 'truncate-oldest' | 'log'
+  onOverage:   (i) => cds.log('llm:size').warn('over-limit', i),
+}));
+```
+
+Three-way overage policy:
+- **`'throw'`** (default) — raises `ContentLengthExceededError` (code `CONTENT_LENGTH_EXCEEDED`) with `.tokens`, `.chars`, `.limitTokens`, `.model`. Fail-fast.
+- **`'truncate-oldest'`** — drops oldest messages until under limit, preserving `system` + latest user message by default (`preserveSystem` / `preserveLatestUser` opt-out).
+- **`'log'`** — pass through unmodified with `onOverage` observability; let the provider decide (useful for shadow deployments before enforcing).
+
+Highlights:
+- **GPT-family token heuristic** by default (`char / 4`); users with real tokenizers pass `tokenEstimator(text) → tokens`.
+- **Per-model limits** with `default` fallback; unknown models pass through unchecked with `unknownModelCount` counter for observability.
+- **Original request restored** after truncation-mode calls — caller state unmodified, only the downstream provider saw the trimmed version.
+- **`overageRate()`** returns `overageCount / totalCalls` for real-time tuning.
+- MCP resource: `config://content-length-gate`.
+
+Composition rule: put `contentLengthGate` **outside** providers so the check runs before any network work. Compose with `compactHistory` (v1.91.0) as complementary primitives — compact keeps multi-turn conversations bounded via LLM summarization; gate catches single-turn over-limit as the hard backstop.
 
 ## Latency histogram (new in v2.35.0)
 

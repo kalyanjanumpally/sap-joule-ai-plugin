@@ -6894,6 +6894,94 @@ export function latencyHistogram(options?: LatencyHistogramOptions): LatencyHist
 /** Prometheus-canonical latency bucket layout in ms. Frozen. @since 2.35.0 */
 export const DEFAULT_LATENCY_BUCKETS_MS: readonly number[];
 
+// ---- Content-length gate (new in 2.36.0) ---------------------------
+
+export type ContentLengthOverageMode = 'throw' | 'truncate-oldest' | 'log';
+
+export interface ContentLengthGateOptions {
+  /** Per-model max-token limit lookup. Falls back to `modelLimits.default`. */
+  modelLimits?:        Record<string, number>;
+  /** Extract model name from ctx. Default: `ctx.request.model`. */
+  modelOf?:            (ctx: unknown) => string | null | undefined;
+  /** Token estimator. Default: char count / 4 (GPT-family heuristic). */
+  tokenEstimator?:     (text: string) => number;
+  /** Extract text-bearing fields. Same shape as reversibleTokenization. Default handles prompt/system/messages[]. */
+  extractText?:        (request: unknown) => Array<{ path: string; text: string; role?: string }>;
+  /** Policy on overage. Default `'throw'`. */
+  overageMode?:        ContentLengthOverageMode;
+  /** When truncating, never drop system messages. Default true. */
+  preserveSystem?:     boolean;
+  /** When truncating, never drop the latest user message. Default true. */
+  preserveLatestUser?: boolean;
+  onOverage?:  (info: { chars: number; tokens: number; limitTokens: number; model: string | null; mode: ContentLengthOverageMode }) => void;
+  onTruncate?: (info: { chars: number; tokens: number; limitTokens: number; model: string | null; messagesDropped: number; finalTokens: number }) => void;
+  onError?:    (info: { phase: 'modelOf' | 'extractText'; error: unknown }) => void;
+}
+
+export interface ContentLengthGateStats {
+  totalCalls:        number;
+  underLimit:        number;
+  overageCount:      number;
+  thrownCount:       number;
+  truncatedCount:    number;
+  loggedCount:       number;
+  unknownModelCount: number;
+  messagesDropped:   number;
+  lastModel:         string | null;
+  lastTokens:        number | null;
+  lastLimit:         number | null;
+}
+
+export interface ContentLengthGateMiddleware extends Middleware {
+  readonly stats: ContentLengthGateStats;
+  reset(): void;
+  overageRate(): number;
+  asMcpResource(): {
+    uri: 'config://content-length-gate';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ContentLengthGateStats & {
+      modelLimits:        Record<string, number>;
+      overageMode:        ContentLengthOverageMode;
+      preserveSystem:     boolean;
+      preserveLatestUser: boolean;
+      overageRate:        number;
+    };
+  };
+}
+
+/**
+ * Thrown by `contentLengthGate` with `overageMode: 'throw'` when
+ * request exceeds the per-model token budget.
+ * `.code === 'CONTENT_LENGTH_EXCEEDED'`.
+ * @since 2.36.0
+ */
+export class ContentLengthExceededError extends LLMError {
+  readonly tokens:      number;
+  readonly chars:       number;
+  readonly limitTokens: number;
+  readonly model:       string | null;
+}
+
+/**
+ * Pre-flight content-length validation. Rejects (or truncates) prompts
+ * exceeding a per-model token budget BEFORE they hit the provider.
+ * Prevents 400 errors on over-limit contexts + saves tokens on
+ * obviously-too-large inputs. Three-way policy:
+ * `'throw'` (default) — hard reject; `'truncate-oldest'` — drop oldest
+ * messages preserving system + latest user; `'log'` — pass through
+ * unmodified with observability only.
+ * @since 2.36.0
+ */
+export function contentLengthGate(options?: ContentLengthGateOptions): ContentLengthGateMiddleware;
+
+/** GPT-family char / 4 token heuristic. @since 2.36.0 */
+export function defaultTokenEstimator(text: string): number;
+
+/** Frozen list of accepted overage modes. @since 2.36.0 */
+export const CONTENT_LENGTH_OVERAGE_MODES: readonly ContentLengthOverageMode[];
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {
