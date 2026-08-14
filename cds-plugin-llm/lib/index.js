@@ -295,6 +295,10 @@ module.exports = {
   PromptVersionRegistry:  require('./middleware/promptVersionPin').PromptVersionRegistry,
   // Provider health aggregate — unified health score per provider (new in 2.31.0)
   providerHealthAggregate: require('./middleware/providerHealthAggregate').providerHealthAggregate,
+  // Response signing — HMAC-sign responses for downstream verification (new in 2.32.0)
+  responseSigning:         require('./middleware/responseSigning').responseSigning,
+  verifyResponseSignature: require('./middleware/responseSigning').verifyResponseSignature,
+  RESPONSE_SIGNING_ALGORITHMS: require('./middleware/responseSigning').RESPONSE_SIGNING_ALGORITHMS,
   // Pre-built dashboards + Prometheus alert rules (new in 1.87.0)
   grafanaDashboard:      require('./dashboards').grafanaDashboard,
   prometheusAlertRules:  require('./dashboards').prometheusAlertRules,

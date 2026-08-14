@@ -6541,6 +6541,90 @@ export interface ProviderHealthAggregateMiddleware extends Middleware {
  */
 export function providerHealthAggregate(options: ProviderHealthAggregateOptions): ProviderHealthAggregateMiddleware;
 
+// ---- Response signing (new in 2.32.0) ---------------------------
+
+export type ResponseSigningAlgorithm = 'sha256' | 'sha384' | 'sha512';
+
+export interface ResponseSigningOptions {
+  /** HMAC key. Buffer or string. */
+  secret:                Buffer | string;
+  /** HMAC algorithm. Default 'sha256'. */
+  algorithm?:            ResponseSigningAlgorithm;
+  /** Canonical serialization for signing. Default: text + data + toolCalls + stopReason + model + usage. */
+  canonicalizeResponse?: (result: unknown) => string;
+  /** Field name on result where signature envelope attaches. Default `'signature'`. */
+  attachTo?:             string;
+  onSigned?:             (info: { hash: string; algorithm: ResponseSigningAlgorithm; ts: number }) => void;
+  onError?:              (info: { phase: 'sign'; error: unknown }) => void;
+  now?:                  () => number;
+}
+
+export interface ResponseSignatureEnvelope {
+  hash:      string;
+  sig:       string;
+  algorithm: ResponseSigningAlgorithm;
+  ts:        number;
+}
+
+export interface ResponseSigningStats {
+  totalCalls:       number;
+  signedResponses:  number;
+  skippedNonObject: number;
+  signatureErrors:  number;
+}
+
+export interface ResponseSigningMiddleware extends Middleware {
+  readonly stats: ResponseSigningStats;
+  reset(): void;
+  asMcpResource(): {
+    uri: 'config://response-signing';
+    name: string;
+    description: string;
+    mimeType: 'application/json';
+    handler: () => ResponseSigningStats & {
+      algorithm: ResponseSigningAlgorithm;
+      attachTo:  string;
+    };
+  };
+}
+
+export interface VerifyResponseSignatureOptions {
+  attachTo?:             string;
+  canonicalizeResponse?: (result: unknown) => string;
+}
+
+export interface VerifyResponseSignatureResult {
+  valid:  boolean;
+  reason: 'not-an-object' | 'missing-signature' | 'algorithm-mismatch' | 'hash-mismatch' | 'sig-mismatch' | null;
+}
+
+/**
+ * HMAC-signs the response before delivering to the caller — downstream
+ * consumers (Event Mesh, message queues, service mesh hops) can verify
+ * authenticity + integrity offline with the shared secret. Complements
+ * `requestSigning` (2.21) which signs OUTBOUND requests + produces
+ * receipts; this signs the RETURNED response so it can be verified
+ * wherever it later travels.
+ * @since 2.32.0
+ */
+export function responseSigning(options: ResponseSigningOptions): ResponseSigningMiddleware;
+
+/**
+ * Standalone verifier for a response signed by `responseSigning`.
+ * Returns `{ valid, reason }` — reasons: `'not-an-object'`,
+ * `'missing-signature'`, `'algorithm-mismatch'`, `'hash-mismatch'`,
+ * `'sig-mismatch'`.
+ * @since 2.32.0
+ */
+export function verifyResponseSignature(
+  result: unknown,
+  secret: Buffer | string,
+  options?: VerifyResponseSignatureOptions,
+): VerifyResponseSignatureResult;
+
+/** Supported HMAC algorithms for response signing. Frozen. @since 2.32.0 */
+export const RESPONSE_SIGNING_ALGORITHMS: readonly ResponseSigningAlgorithm[];
+
 // ---- Provider health probe (new in 1.62.0) ----------------------------
 
 export interface HealthProbeEntry {

@@ -1,6 +1,6 @@
 {
   "name": "@saptarishi/cds-plugin-llm",
-  "version": "2.31.0",
+  "version": "2.32.0",
   "description": "LLM-agnostic AI platform for SAP CAP. 11 providers behind one API (Anthropic, Google Gemini, AWS Bedrock, Azure OpenAI, Ollama, Groq, Fireworks, DeepSeek, Mistral, OpenAI-compatible, SAP Generative AI Hub) with 30+ middleware primitives spanning cost/resilience/security/observability/compliance/RAG/CI-eval. Formal API stability contract for the 2.x line.",
   "repository": {
     "type": "git",

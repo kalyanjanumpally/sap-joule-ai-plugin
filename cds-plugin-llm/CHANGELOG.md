@@ -4,6 +4,60 @@ All notable changes to `@saptarishi/cds-plugin-llm`.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.32.0] — 2026-08-14
+
+### Added
+- **`responseSigning` middleware** — HMAC-signs the LLM response
+  before delivering to the caller. Downstream consumers (SAP Event
+  Mesh, message queues, service mesh hops) can verify authenticity +
+  integrity offline with the shared secret. Complements the shipped
+  `requestSigning` (2.21) which signs OUTBOUND requests + emits
+  receipts; this signs the RETURNED response so it can be verified
+  wherever it later travels.
+- **Signature envelope** attached to `result[attachTo]` (default
+  `'signature'`) as `{ hash, sig, algorithm, ts }`. Consumers who
+  don't care about signing just ignore the field; it doesn't
+  interfere with `result.text` / `result.data` / `result.toolCalls`.
+- **Deterministic signing** — canonical serialization uses a
+  stable-key-order JSON stringifier so identical results always
+  produce identical hashes across restarts + processes.
+- **Standalone `verifyResponseSignature(result, secret, options?)`
+  verifier** — usable in any downstream service without needing the
+  middleware runtime. Returns `{ valid, reason }` with reasons:
+  `'not-an-object'`, `'missing-signature'`, `'algorithm-mismatch'`,
+  `'hash-mismatch'`, `'sig-mismatch'`.
+- Three HMAC algorithms supported (frozen list
+  `RESPONSE_SIGNING_ALGORITHMS`): `sha256`, `sha384`, `sha512`.
+- **Fail-safe** — signing errors are captured via `onError`, the
+  underlying response is still returned unsigned. Non-object results
+  (plain strings from tool-runner style calls) skip signing without
+  error.
+- **Zero cost** for consumers who don't verify — attaching a small
+  envelope object doesn't affect the response payload otherwise.
+- MCP resource `config://response-signing` exposes algorithm +
+  attach field + stats.
+- TypeScript: `ResponseSigningOptions`, `ResponseSigningStats`,
+  `ResponseSigningMiddleware`, `ResponseSignatureEnvelope`,
+  `VerifyResponseSignatureResult`, `ResponseSigningAlgorithm`.
+
+### API contract (frozen)
+- Signature: `responseSigning({ secret, algorithm='sha256', canonicalizeResponse, attachTo='signature', onSigned, onError })`
+- MCP URI: `config://response-signing`
+- Envelope shape: `{ hash, sig, algorithm, ts }`
+- Verifier reasons: `'not-an-object'`, `'missing-signature'`, `'algorithm-mismatch'`, `'hash-mismatch'`, `'sig-mismatch'`
+
+### Composition
+- Place `responseSigning` at the OUTERMOST layer so the signed result
+  is what actually returns to the caller (post any repair, cache,
+  hedge). Any middleware wrapping around it would either re-sign or
+  invalidate the signature.
+- Compose with `requestSigning` (2.21) for the full non-repudiation
+  story: request receipts prove what was asked; response signatures
+  prove what came back — both cryptographically verifiable offline.
+- Compose with `sensitiveDataAudit` (1.96) — audit logs record what
+  happened; response signatures let downstream verify the recorded
+  responses weren't tampered with.
+
 ## [2.31.0] — 2026-08-14
 
 ### Added

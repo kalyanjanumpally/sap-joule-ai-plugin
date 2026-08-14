@@ -26,7 +26,7 @@ Every primitive below is a shipping middleware (or top-level helper) with dedica
 | --- | --- |
 | **Cost** | `usageMetering` · `usageMeteringToCap` · `costBudget` · `costGuard` · `costForecast` · `quotaManager` (v2.23.0 — per-user USD quota with warnings) · `inMemoryQuotaStore` · `adaptiveMaxTokens` · `estimateCost` · `promptCacheStats` |
 | **Resilience** | `retryOnRateLimit` · `circuitBreaker` · `bulkhead` · `adaptiveBulkhead` · `adaptiveRateLimit` · `clientSideRateLimit` (v2.26.0 — proactive N-per-window throttle) · `deadline` · `gracePeriod` (v2.28.0 — soft-deadline warnings + optional hard timeout) · `chatWithFallback` · `regionFailover` · `autoRetry` · `providerHealthProbe` · `autoContinue` · `idempotency` · `distributedLock` · `speculativeHedge` (v2.12.0 — staggered parallel hedges for tail latency) · `retryBudget` (v2.15.0 — SRE-style global retry cap) |
-| **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) |
+| **Security** | `guardrails` · `promptInjectionGuard` · `piiRedact` · `reversibleTokenization` (v2.13.0 — round-trip PII replacement) · `tokenizePII` / `detokenizePII` · `PII_PATTERNS` · `safetyClassifier` · `sensitiveDataAudit` · `requestSigning` (v2.21.0 — HMAC receipts + `verifyReceiptChain`) · `responseSigning` (v2.32.0 — HMAC responses + `verifyResponseSignature`) |
 | **Observability** | `jsonLog` · `otel` · `otelSpans` · `promMetrics` · `prometheusHandler` · `traceCorrelation` · `healthHandler` · `replayBuffer` · `retryAfterPropagation` · `providerHealthAggregate` (v2.31.0 — unified provider health score) |
 | **Testing** | `chaosInjector` (v2.11.0 — deterministic seeded fault injection; test-only, refuses to construct without opt-in) |
 | **Routing** | `modelRouter` · `tenantIsolate` · `costAwareRouter` (v2.10.0 — cheap-first with quality escalation) · `fairShareScheduler` (v2.14.0 — per-tenant WRR admission control) · `semanticRouter` (v2.16.0 — embedding-based route selection) · `providerLoadBalancer` (v2.17.0 — rotate across N credentials of same kind) · `multimodalRouter` (v2.25.0 — capability-aware routing by attachment type) |
@@ -1148,6 +1148,36 @@ Highlights:
 - **MCP resource** at `config://semantic-cache` exposes `hitRate`, hit/miss/store counts, threshold, and last similarity for live dashboards.
 
 Composition rule: wrap `semanticCache` **outside** `bulkhead`/`retry` (cache hits shouldn't burn concurrency slots or retry budget) and **inside** `guardrails`/`promptInjectionGuard` (don't cache answers whose inputs were rejected).
+
+## Response signing (new in v2.32.0)
+
+`responseSigning` HMAC-signs the LLM response before delivering to the caller. Downstream consumers (SAP Event Mesh, message queues, service mesh hops) can verify authenticity + integrity offline with the shared secret. Complements `requestSigning` (v2.21.0):
+- **`requestSigning`** — signs OUTBOUND requests + emits per-call receipts (audit trail)
+- **`responseSigning`** — signs the RETURNED response so it can be verified wherever it later travels
+
+```js
+const { responseSigning, verifyResponseSignature } = require('@saptarishi/cds-plugin-llm');
+
+llm.use(responseSigning({
+  secret:    process.env.LLM_RESPONSE_HMAC_KEY,
+  algorithm: 'sha256',
+}));
+
+// Downstream (possibly in a different process/service):
+const { valid, reason } = verifyResponseSignature(result, secret);
+// { valid: true, reason: null }   or   { valid: false, reason: 'hash-mismatch' }
+```
+
+The signature envelope attaches as `result.signature = { hash, sig, algorithm, ts }`. Consumers who don't care about signing just ignore the field; it doesn't interfere with `result.text` / `result.data` / `result.toolCalls`.
+
+Highlights:
+- **Deterministic** — canonical serialization uses a stable-key-order JSON stringifier so identical results always produce identical hashes across restarts + processes.
+- **Standalone verifier** — `verifyResponseSignature(result, secret, options?)` usable in any downstream service without the middleware runtime.
+- **Fail-safe** — signing errors are captured via `onError`; the underlying response is still returned unsigned. Non-object results (plain strings) skip signing without error.
+- **Three algorithms**: `sha256` / `sha384` / `sha512`. Frozen list: `RESPONSE_SIGNING_ALGORITHMS`.
+- MCP resource: `config://response-signing`.
+
+Composition rule: place `responseSigning` at the **outermost layer** so the signed result is what actually returns to the caller (post any repair, cache, hedge). Any middleware wrapping around it would either re-sign or invalidate the signature.
 
 ## Provider health aggregate (new in v2.31.0)
 
