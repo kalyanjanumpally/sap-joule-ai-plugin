@@ -47,8 +47,24 @@ jobs:
       - name: Unit tests
         working-directory: cds-plugin-llm
         # explicit file glob rather than `test/` — Node 22 changed directory
-        # resolution and treats a bare directory name as a require() target
-        run: node --test test/*.js
+        # resolution and treats a bare directory name as a require() target.
+        # Capture TAP output; on failure, surface each `not ok` + accompanying
+        # file:line as GH annotations so the actual failing test is visible
+        # in the check UI without downloading the raw log.
+        run: |
+          set +e
+          node --test test/*.js 2>&1 | tee /tmp/tap.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::Failing tests"
+            awk '
+              /^not ok/ { name=$0; getline; next }
+              /^  location:/ && name { gsub(/^  location: /, ""); print "::error file=cds-plugin-llm/" $0 "::" name; name="" }
+            ' /tmp/tap.log || true
+            grep -E "^not ok" /tmp/tap.log || true
+            echo "::endgroup::"
+          fi
+          exit $rc
 
       - name: TypeScript type-check (lib/index.d.ts + test/types.test-d.ts)
         working-directory: cds-plugin-llm
